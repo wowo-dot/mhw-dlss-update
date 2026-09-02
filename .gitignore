@@ -1,0 +1,48 @@
+# Build output
+/build/
+/out/
+/.vs/
+/.vscode/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Runtime binaries and diagnostics
+*.dll
+*.exe
+*.log
+*.dmp
+*.mdmp
+*.etl
+
+# Graphics captures and extracted shaders
+*.rdc
+*.pix3
+*.wpix
+/captures/
+/shaders/extracted/
+
+# IDA databases and analysis artifacts
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.idb
+
+# Local-only configuration and proprietary SDK material
+/.env
+/.env.*
+/local/
+/sdk/
+/third_party/nvidia/
+
+# Common archives and game packages
+*.zip
+*.7z
+*.rar
+*.pak
+*.arc
