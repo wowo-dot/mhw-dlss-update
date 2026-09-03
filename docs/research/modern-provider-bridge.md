@@ -189,11 +189,26 @@ nor retains their resources. Any protected getter fault stops all later
 queries.
 
 The pinned provider handshake additionally requires application ID
-`0x0B9D2F5C` and SDK version `0x0001010D`. Once synthetic Init or a one-Evaluate
-token has been returned, the exact base-Shutdown caller and exact-token Release
-remain cleanup-success paths even if a later capture fault has made the policy
-inert. This prevents bridge-owned state from being stranded in the current
-core; it does not resume rendering.
+`0x0B9D2F5C` and NGX API version `0x12`. The API value is Init's fourth
+argument; it is not feature snippet metadata. The shipped 1.1.13 feature
+reports snippet `0x1010D`, while cached 1.2.110 reports snippet `0x1026E`.
+Once synthetic Init or a one-Evaluate token has been returned, the exact
+base-Shutdown caller and exact-token Release remain cleanup-success paths even
+if a later capture fault has made the policy inert. This prevents bridge-owned
+state from being stranded in the current core; it does not resume rendering.
+
+The first controlled `0.5.0` run on 2026-09-04 proved the full Init-first
+14-lookup route, but failed closed before device verification because the
+bridge incorrectly compared Init's observed `0x12` against shipped-feature
+snippet `0x1010D`. Static disassembly confirms the selected base-Init branch at
+`_nvngx.dll+0x67694` loads the fourth argument from its API-version field into
+`r9d` and returns at the pinned `+0x6769A` boundary. The separate Init-Ext
+branches have a fifth argument; this base export does not. Version `0.5.1`
+corrects the API invariant and logs a seven-bit Init validation mask; `0x7F`
+means caller, lifecycle, application ID, application path, API version, route
+table, and D3D12 device all passed.
+The ignored local run artifact is `bridge-45488.run001.v0.5.0.log`, SHA-256
+`C237A932008879C7C0AFC61CF756290EA7BA48383AB4F92FCDC5432429EFE02D`.
 
 The first controlled procedure is in
 [`../runtime/modern-bridge-probe-test.md`](../runtime/modern-bridge-probe-test.md).

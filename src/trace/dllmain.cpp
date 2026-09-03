@@ -96,9 +96,7 @@ constexpr std::uint32_t kResultPlatformError = 0xBAD00002U;
 constexpr std::uint32_t kResultInvalidParameter = 0xBAD00005U;
 constexpr std::uint32_t kResultNotInitialized = 0xBAD00007U;
 constexpr std::uint32_t kResultNotImplemented = 0xBAD00012U;
-constexpr std::uint64_t kExpectedApplicationId = 0x0B9D2F5CULL;
 constexpr std::uint64_t kOneEvaluateToken = 0x000000010000B12DULL;
-constexpr std::uint32_t kExpectedBridgeSdkVersion = 0x0001010DU;
 constexpr std::size_t kExpectedScratchBufferSize = 0x00300000U;
 constexpr std::size_t kMaximumDriverStoreDirectories = 16'384U;
 constexpr std::size_t kResolverPathCapacity = 1'024U;
@@ -345,6 +343,7 @@ struct BridgeEventPayload {
   std::uint64_t token{};
   std::uint64_t argument0{};
   std::uint64_t argument1{};
+  std::uint32_t init_validation_mask{};
   bool capture_committed{};
   bool d3d12_object_verified{};
   bool observation_only{};
@@ -2043,7 +2042,8 @@ void publish_bridge_event(const bridge::ExportId export_id,
                               create_snapshot = nullptr,
                           const bridge::EvaluateContractSnapshot *const
                               evaluate_snapshot = nullptr,
-                          const bool observation_only = false) noexcept {
+                          const bool observation_only = false,
+                          const std::uint32_t init_validation_mask = 0U) noexcept {
   const std::uint32_t reserved =
       g_bridge_events_reserved.fetch_add(1U, std::memory_order_relaxed);
   if (reserved >= g_bridge_events.size()) {
@@ -2072,6 +2072,7 @@ void publish_bridge_event(const bridge::ExportId export_id,
   event.payload.token = transition.issued_token;
   event.payload.argument0 = argument0;
   event.payload.argument1 = argument1;
+  event.payload.init_validation_mask = init_validation_mask;
   event.payload.capture_committed = transition.capture_committed;
   event.payload.d3d12_object_verified = d3d12_verified;
   event.payload.observation_only = observation_only;
@@ -2467,7 +2468,7 @@ extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
 bridge_d3d12_init_wrapper(const std::uint64_t application_id,
                           const wchar_t *const application_data_path,
                           ID3D12Device *const device,
-                          const std::uint32_t sdk_version) noexcept {
+                          const std::uint32_t api_version) noexcept {
   const DWORD incoming_last_error = GetLastError();
   const void *const caller = _ReturnAddress();
   g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
@@ -2491,15 +2492,24 @@ bridge_d3d12_init_wrapper(const std::uint64_t application_id,
     g_bridge_route_state.store(-1, std::memory_order_release);
     poison_bridge_boundary();
   }
+  bridge::InitValidationEvidence validation{
+      caller_verified,
+      lifecycle_ready,
+      application_id,
+      readable_nonempty_path(application_data_path),
+      api_version,
+      route_table_complete,
+      false};
+  const std::uint32_t preliminary_validation_mask =
+      bridge::init_validation_mask(validation);
   const bool preliminary_arguments_valid =
-      caller_verified && lifecycle_ready &&
-      application_id == kExpectedApplicationId &&
-      readable_nonempty_path(application_data_path) &&
-      sdk_version == kExpectedBridgeSdkVersion && route_table_complete;
+      preliminary_validation_mask == bridge::kInitValidationMaskWithoutDevice;
   const bool device_verified =
       preliminary_arguments_valid && verify_d3d12_device(device);
-  const bool arguments_valid =
-      preliminary_arguments_valid && device_verified;
+  validation.d3d12_device_verified = device_verified;
+  const std::uint32_t validation_mask =
+      bridge::init_validation_mask(validation);
+  const bool arguments_valid = bridge::init_validation_is_complete(validation);
   const bridge::TransitionResult transition = bridge_apply(
       arguments_valid ? bridge::LifecycleOperation::initialize
                       : bridge::LifecycleOperation::abort,
@@ -2519,14 +2529,16 @@ bridge_d3d12_init_wrapper(const std::uint64_t application_id,
     result = kResultNotInitialized;
   }
   publish_bridge_event(bridge::ExportId::d3d12_init, caller, transition,
-                       result, application_id, sdk_version, device_verified);
+                       result, application_id, api_version, device_verified,
+                       nullptr, nullptr, false, validation_mask);
   if (!boundary_clean && transition.after != bridge::LifecycleState::inert) {
     const bridge::TransitionResult abort_transition = bridge_apply(
         bridge::LifecycleOperation::abort, bridge::ExportId::d3d12_init,
         caller);
     publish_bridge_event(bridge::ExportId::d3d12_init, caller,
                          abort_transition, kResultNotInitialized,
-                         application_id, sdk_version, device_verified);
+                         application_id, api_version, device_verified, nullptr,
+                         nullptr, false, validation_mask);
   }
   g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
   SetLastError(incoming_last_error);
@@ -4351,6 +4363,35 @@ void drain_bridge_events() {
     const BridgeEventPayload payload = event.payload;
     const std::string_view export_view =
         bridge::export_name(payload.export_id);
+    const std::string init_validation =
+        payload.export_id == bridge::ExportId::d3d12_init
+            ? " init-validation-mask=" +
+                  hexadecimal(payload.init_validation_mask) +
+                  " init-validation-complete=" +
+                  boolean_text(payload.init_validation_mask ==
+                               bridge::kInitValidationMaskComplete) +
+                  " init-caller-verified=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateCallerVerified) != 0U) +
+                  " init-lifecycle-ready=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateLifecycleReady) != 0U) +
+                  " init-application-id-valid=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateApplicationId) != 0U) +
+                  " init-application-path-readable=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateApplicationPath) != 0U) +
+                  " init-api-version-valid=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateApiVersion) != 0U) +
+                  " init-route-table-complete=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateRouteTable) != 0U) +
+                  " init-device-verified=" +
+                  boolean_text((payload.init_validation_mask &
+                                bridge::kInitGateD3d12Device) != 0U)
+            : std::string{};
     write_log(
         "bridge.call sequence=" + std::to_string(payload.sequence) +
         " export=" +
@@ -4376,7 +4417,7 @@ void drain_bridge_events() {
         " d3d12-object-verified=" +
         boolean_text(payload.d3d12_object_verified) +
         " lifecycle-observation-only=" +
-        boolean_text(payload.observation_only));
+        boolean_text(payload.observation_only) + init_validation);
 
     if (payload.has_create_snapshot) {
       for (const auto &capture : payload.create_snapshot.unsigned_values) {
@@ -5014,7 +5055,7 @@ DWORD WINAPI trace_worker(void *) noexcept {
     const bridge::Mode configured_mode =
         g_bridge_mode.load(std::memory_order_acquire);
     write_log(
-        "trace.start version=0.5.0 mode=modern-provider-bridge-probe "
+        "trace.start version=0.5.1 mode=modern-provider-bridge-probe "
         "bridge-mode=" +
         std::string(bridge_mode_text(configured_mode)) +
         " mode-recognized=" + (mode_recognized ? "true" : "false") +

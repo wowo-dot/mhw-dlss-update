@@ -109,6 +109,9 @@ following:
   change the masks or introduce a rejection);
 - Init came from `_nvngx.dll+0x6769A`; wrapped Populate invocation came only
   from `+0x67ACE` or `+0x67BC2`; and Create, if reached, came from `+0x67DE6`;
+- Init reported application ID `0x0B9D2F5C`, API version `0x12`,
+  `init-validation-mask=0x7F`, `init-validation-complete=true`, and
+  `d3d12-object-verified=true`;
 - the one Create snapshot either completed within its fixed query budget or
   stopped with an explicit getter-fault reason;
 - Create returned without a feature handle and no Evaluate capture occurred;

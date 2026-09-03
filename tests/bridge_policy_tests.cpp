@@ -83,6 +83,7 @@ bool advance_to_populated(OneShotLifecycle &lifecycle) noexcept {
 } // namespace
 
 int main() {
+  using mhw::bridge_probe::InitValidationEvidence;
   using mhw::bridge_probe::LifecycleEvent;
   using mhw::bridge_probe::ModeParseResult;
   using mhw::bridge_probe::caller_is_verified_for;
@@ -90,11 +91,19 @@ int main() {
   using mhw::bridge_probe::export_name;
   using mhw::bridge_probe::expected_provider_lookup;
   using mhw::bridge_probe::identity_is_verified;
+  using mhw::bridge_probe::init_validation_is_complete;
+  using mhw::bridge_probe::init_validation_mask;
   using mhw::bridge_probe::is_bridge_lifecycle_export;
   using mhw::bridge_probe::is_provider_guard_export;
   using mhw::bridge_probe::kCaptureCreateMode;
   using mhw::bridge_probe::kCaptureOneEvaluateMode;
   using mhw::bridge_probe::kDisabledMode;
+  using mhw::bridge_probe::kExpectedInitApiVersion;
+  using mhw::bridge_probe::kExpectedInitApplicationId;
+  using mhw::bridge_probe::kInitGateApiVersion;
+  using mhw::bridge_probe::kInitGateD3d12Device;
+  using mhw::bridge_probe::kInitValidationMaskComplete;
+  using mhw::bridge_probe::kInitValidationMaskWithoutDevice;
   using mhw::bridge_probe::kLifecycleEventCapacity;
   using mhw::bridge_probe::kProviderRouteMaskComplete;
   using mhw::bridge_probe::kProviderLookupMaskComplete;
@@ -105,10 +114,37 @@ int main() {
   using mhw::bridge_probe::provider_lookup_bit;
 
   static_assert(std::is_trivially_copyable_v<IdentityEvidence>);
+  static_assert(std::is_trivially_copyable_v<InitValidationEvidence>);
   static_assert(std::is_trivially_copyable_v<CallerEvidence>);
   static_assert(std::is_trivially_copyable_v<TransitionInput>);
   static_assert(std::is_trivially_copyable_v<TransitionResult>);
   static_assert(std::is_trivially_copyable_v<LifecycleEvent>);
+
+  InitValidationEvidence valid_init{true,
+                                    true,
+                                    kExpectedInitApplicationId,
+                                    true,
+                                    kExpectedInitApiVersion,
+                                    true,
+                                    true};
+  if (!init_validation_is_complete(valid_init) ||
+      init_validation_mask(valid_init) != kInitValidationMaskComplete) {
+    return fail("valid Init evidence did not pass every gate");
+  }
+  InitValidationEvidence no_device = valid_init;
+  no_device.d3d12_device_verified = false;
+  if (init_validation_is_complete(no_device) ||
+      init_validation_mask(no_device) !=
+          kInitValidationMaskWithoutDevice ||
+      (init_validation_mask(no_device) & kInitGateD3d12Device) != 0U) {
+    return fail("missing D3D12 device evidence did not fail closed");
+  }
+  InitValidationEvidence snippet_as_api = valid_init;
+  snippet_as_api.api_version = 0x0001010DU;
+  if (init_validation_is_complete(snippet_as_api) ||
+      (init_validation_mask(snippet_as_api) & kInitGateApiVersion) != 0U) {
+    return fail("feature snippet version was accepted as Init API version");
+  }
 
   struct ExportCase {
     std::string_view name;

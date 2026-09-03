@@ -257,6 +257,38 @@ bool identity_is_verified(const IdentityEvidence &evidence) noexcept {
          evidence.bridge_binary_verified && evidence.d3d12_path_verified;
 }
 
+std::uint32_t
+init_validation_mask(const InitValidationEvidence &evidence) noexcept {
+  std::uint32_t mask{};
+  if (evidence.caller_verified) {
+    mask |= kInitGateCallerVerified;
+  }
+  if (evidence.lifecycle_ready) {
+    mask |= kInitGateLifecycleReady;
+  }
+  if (evidence.application_id == kExpectedInitApplicationId) {
+    mask |= kInitGateApplicationId;
+  }
+  if (evidence.application_path_readable) {
+    mask |= kInitGateApplicationPath;
+  }
+  if (evidence.api_version == kExpectedInitApiVersion) {
+    mask |= kInitGateApiVersion;
+  }
+  if (evidence.route_table_complete) {
+    mask |= kInitGateRouteTable;
+  }
+  if (evidence.d3d12_device_verified) {
+    mask |= kInitGateD3d12Device;
+  }
+  return mask;
+}
+
+bool init_validation_is_complete(
+    const InitValidationEvidence &evidence) noexcept {
+  return init_validation_mask(evidence) == kInitValidationMaskComplete;
+}
+
 bool caller_is_verified_for(const CallerEvidence &evidence,
                             const ExportId expected_export) noexcept {
   if (expected_export == ExportId::unknown ||

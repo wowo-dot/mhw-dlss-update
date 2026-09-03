@@ -104,6 +104,36 @@ struct IdentityEvidence {
 
 bool identity_is_verified(const IdentityEvidence &evidence) noexcept;
 
+// The D3D12 Init export receives the NGX API version in its fourth argument.
+// Feature snippet versions are separate metadata and must never be accepted at
+// this boundary. Keep every gate independently visible for fail-closed runtime
+// telemetry and unit tests.
+inline constexpr std::uint64_t kExpectedInitApplicationId = 0x0B9D2F5CULL;
+inline constexpr std::uint32_t kExpectedInitApiVersion = 0x12U;
+inline constexpr std::uint32_t kInitGateCallerVerified = 1U << 0U;
+inline constexpr std::uint32_t kInitGateLifecycleReady = 1U << 1U;
+inline constexpr std::uint32_t kInitGateApplicationId = 1U << 2U;
+inline constexpr std::uint32_t kInitGateApplicationPath = 1U << 3U;
+inline constexpr std::uint32_t kInitGateApiVersion = 1U << 4U;
+inline constexpr std::uint32_t kInitGateRouteTable = 1U << 5U;
+inline constexpr std::uint32_t kInitGateD3d12Device = 1U << 6U;
+inline constexpr std::uint32_t kInitValidationMaskWithoutDevice = 0x3FU;
+inline constexpr std::uint32_t kInitValidationMaskComplete = 0x7FU;
+
+struct InitValidationEvidence {
+  bool caller_verified{};
+  bool lifecycle_ready{};
+  std::uint64_t application_id{};
+  bool application_path_readable{};
+  std::uint32_t api_version{};
+  bool route_table_complete{};
+  bool d3d12_device_verified{};
+};
+
+std::uint32_t
+init_validation_mask(const InitValidationEvidence &evidence) noexcept;
+bool init_validation_is_complete(const InitValidationEvidence &evidence) noexcept;
+
 // Addresses and RVAs are scalar evidence only; this policy never reads them.
 // The runtime must establish the memory predicates without passing pointers to
 // untrusted storage through this layer.
