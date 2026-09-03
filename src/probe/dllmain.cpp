@@ -4,7 +4,7 @@
 #include <Windows.h>
 #include <bcrypt.h>
 #include <d3d12.h>
-#include <dxgiformat.h>
+#include <dxgi1_4.h>
 
 #include <array>
 #include <atomic>
@@ -26,7 +26,10 @@ constexpr std::uint32_t kExpectedApplicationId = 0x0B9D2F5CU;
 constexpr std::uint32_t kDefaultEvaluationLimit = 16U;
 constexpr std::uint32_t kMaximumEvaluationLimit = 64U;
 constexpr std::size_t kMaximumEvents = 192U;
+constexpr std::size_t kMaximumSwapChainCandidates = 8U;
 constexpr DWORD kHashBufferSize = 1U << 20U;
+constexpr std::size_t kCreateSwapChainVtableIndex = 10U;
+constexpr std::size_t kCreateSwapChainForHwndVtableIndex = 15U;
 
 constexpr std::array<unsigned char, 32> kExpectedHostSha256{
     0xC2, 0xEB, 0xBB, 0xD2, 0xC4, 0x9F, 0x21, 0x6D, 0x48, 0x4E, 0x31,
@@ -73,9 +76,35 @@ constexpr std::array<const char *, 3> kCreationIntNames{"PerfQualityValue",
                                                         "RTXValue", "Hint.HDR"};
 
 enum class EventKind : std::uint32_t {
+  swap_chain,
   create,
   evaluate,
   release,
+};
+
+enum class SwapChainCreationKind : std::uint32_t {
+  none,
+  legacy,
+  hwnd,
+};
+
+struct AdapterSnapshot {
+  bool available{};
+  LUID luid{};
+};
+
+struct SwapChainSnapshot {
+  SwapChainCreationKind creation_kind{};
+  bool description_available{};
+  bool window_owned_by_process{};
+  std::uintptr_t pointer{};
+  std::uintptr_t window{};
+  UINT width{};
+  UINT height{};
+  DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
+  UINT buffer_count{};
+  DXGI_SWAP_EFFECT swap_effect{};
+  UINT flags{};
 };
 
 struct ResourceSnapshot {
@@ -101,6 +130,8 @@ struct CaptureEvent {
   bool d3d12_verified{};
   bool parameter_query_attempted{};
   bool getter_exception{};
+  AdapterSnapshot adapter{};
+  SwapChainSnapshot swap_chain{};
   ngx::Result call_result{};
   ngx::Feature feature{};
   std::uintptr_t command_list{};
@@ -118,8 +149,10 @@ HMODULE g_probe_module{};
 std::atomic_int g_probe_state{};
 std::atomic_uint32_t g_reserved_events{};
 std::atomic_uint32_t g_evaluation_calls{};
-std::atomic_int g_d3d12_command_state{};
 std::atomic_bool g_getter_exception{};
+std::atomic_bool g_hook_engine_initialized{};
+std::atomic_bool g_observer_enabled{};
+std::array<unsigned char, 32> g_observed_host_sha256{};
 std::uint32_t g_evaluation_limit = kDefaultEvaluationLimit;
 bool g_query_parameters{};
 std::array<CaptureEvent, kMaximumEvents> g_events{};
@@ -132,6 +165,53 @@ ngx::GetUIntFn g_get_uint{};
 ngx::CreateFeatureFn g_create_feature{};
 ngx::EvaluateFeatureFn g_evaluate_feature{};
 ngx::ReleaseFeatureFn g_release_feature{};
+
+using CreateSwapChainFn = HRESULT(STDMETHODCALLTYPE *)(IDXGIFactory *,
+                                                       IUnknown *,
+                                                       DXGI_SWAP_CHAIN_DESC *,
+                                                       IDXGISwapChain **);
+using CreateSwapChainForHwndFn = HRESULT(STDMETHODCALLTYPE *)(
+    IDXGIFactory2 *, IUnknown *, HWND, const DXGI_SWAP_CHAIN_DESC1 *,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *, IDXGIOutput *, IDXGISwapChain1 **);
+
+CreateSwapChainFn g_create_swap_chain{};
+CreateSwapChainForHwndFn g_create_swap_chain_for_hwnd{};
+HMODULE g_dxgi_module{};
+
+struct SwapChainCandidate {
+  bool occupied{};
+  AdapterSnapshot adapter{};
+  SwapChainSnapshot swap_chain{};
+};
+
+enum class IdentityReportState : std::uint32_t {
+  none,
+  awaiting_adapter,
+  adapter_unresolved,
+  awaiting_swap_chain,
+  ambiguous,
+  complete,
+};
+
+struct WriterIdentity {
+  bool ngx_adapter_available{};
+  LUID ngx_adapter{};
+  bool ngx_adapter_description_available{};
+  std::array<SwapChainCandidate, kMaximumSwapChainCandidates> candidates{};
+  bool candidate_overflow{};
+  IdentityReportState last_report_state{};
+  std::uintptr_t last_complete_swap_chain{};
+  UINT last_complete_width{};
+  UINT last_complete_height{};
+  DXGI_FORMAT last_complete_format{DXGI_FORMAT_UNKNOWN};
+  std::uint64_t revision{};
+};
+
+WriterIdentity g_writer_identity{};
+
+void safe_release(IUnknown *object) noexcept;
+AdapterSnapshot
+capture_adapter_from_device_child(ID3D12DeviceChild *device_child) noexcept;
 
 std::filesystem::path get_log_path() {
   wchar_t configured[32'768]{};
@@ -287,7 +367,8 @@ bool test_override_enabled() noexcept {
 
 bool verify_module_hash(HMODULE module,
                         const std::array<unsigned char, 32> &expected,
-                        std::string_view label, bool allow_override) {
+                        std::string_view label, bool allow_override,
+                        std::array<unsigned char, 32> *observed = nullptr) {
   const auto path = module_path(module);
   if (path.empty()) {
     write_control_log(std::string("probe.abort reason=") + std::string(label) +
@@ -300,6 +381,9 @@ bool verify_module_hash(HMODULE module,
     write_control_log(std::string("probe.abort reason=") + std::string(label) +
                       "-hash-failed");
     return false;
+  }
+  if (observed != nullptr) {
+    *observed = actual;
   }
 
   write_control_log(std::string("binary.sha256 name=") + std::string(label) +
@@ -438,11 +522,10 @@ ngx::Handle *safe_load_handle(ngx::Handle **output_handle) noexcept {
   }
 }
 
-bool validate_d3d12_command_list(
-    ID3D12GraphicsCommandList *command_list) noexcept {
-  const int cached = g_d3d12_command_state.load(std::memory_order_acquire);
-  if (cached != 0) {
-    return cached > 0;
+bool validate_d3d12_command_list(ID3D12GraphicsCommandList *command_list,
+                                 AdapterSnapshot *adapter) noexcept {
+  if (adapter != nullptr) {
+    *adapter = {};
   }
   if (command_list == nullptr) {
     return false;
@@ -454,18 +537,133 @@ bool validate_d3d12_command_list(
     result = command_list->QueryInterface(__uuidof(ID3D12GraphicsCommandList),
                                           reinterpret_cast<void **>(&verified));
     if (SUCCEEDED(result) && verified != nullptr) {
-      verified->Release();
+      if (adapter != nullptr) {
+        *adapter = capture_adapter_from_device_child(verified);
+      }
     }
   } __except (observation_exception_filter(GetExceptionCode())) {
     result = E_FAIL;
-    verified = nullptr;
+  }
+  const bool valid = SUCCEEDED(result) && verified != nullptr;
+  safe_release(verified);
+  return valid;
+}
+
+void safe_release(IUnknown *object) noexcept {
+  if (object == nullptr) {
+    return;
+  }
+  __try {
+    object->Release();
+  } __except (observation_exception_filter(GetExceptionCode())) {
+  }
+}
+
+AdapterSnapshot
+capture_adapter_from_device_child(ID3D12DeviceChild *device_child) noexcept {
+  AdapterSnapshot snapshot{};
+  if (device_child == nullptr) {
+    return snapshot;
   }
 
-  const int observed = SUCCEEDED(result) && verified != nullptr ? 1 : -1;
-  int expected = 0;
-  g_d3d12_command_state.compare_exchange_strong(
-      expected, observed, std::memory_order_release, std::memory_order_relaxed);
-  return g_d3d12_command_state.load(std::memory_order_acquire) > 0;
+  ID3D12Device *device{};
+  HRESULT result = E_FAIL;
+  __try {
+    result = device_child->GetDevice(__uuidof(ID3D12Device),
+                                     reinterpret_cast<void **>(&device));
+    if (SUCCEEDED(result) && device != nullptr) {
+      snapshot.luid = device->GetAdapterLuid();
+      snapshot.available = true;
+    }
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    snapshot = {};
+  }
+  safe_release(device);
+  return snapshot;
+}
+
+AdapterSnapshot
+capture_adapter_from_unknown(IUnknown *device_or_queue) noexcept {
+  AdapterSnapshot snapshot{};
+  if (device_or_queue == nullptr) {
+    return snapshot;
+  }
+
+  ID3D12CommandQueue *queue{};
+  HRESULT result = E_FAIL;
+  __try {
+    result = device_or_queue->QueryInterface(__uuidof(ID3D12CommandQueue),
+                                             reinterpret_cast<void **>(&queue));
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    result = E_FAIL;
+  }
+  if (SUCCEEDED(result) && queue != nullptr) {
+    snapshot = capture_adapter_from_device_child(queue);
+  }
+  safe_release(queue);
+  return snapshot;
+}
+
+bool capture_legacy_swap_chain_description(
+    IDXGISwapChain *swap_chain, SwapChainSnapshot *snapshot) noexcept {
+  if (swap_chain == nullptr || snapshot == nullptr) {
+    return false;
+  }
+  __try {
+    DXGI_SWAP_CHAIN_DESC description{};
+    if (FAILED(swap_chain->GetDesc(&description))) {
+      return false;
+    }
+    snapshot->creation_kind = SwapChainCreationKind::legacy;
+    snapshot->description_available = true;
+    snapshot->pointer = reinterpret_cast<std::uintptr_t>(swap_chain);
+    snapshot->window =
+        reinterpret_cast<std::uintptr_t>(description.OutputWindow);
+    DWORD window_process_id{};
+    GetWindowThreadProcessId(description.OutputWindow, &window_process_id);
+    snapshot->window_owned_by_process =
+        window_process_id == GetCurrentProcessId();
+    snapshot->width = description.BufferDesc.Width;
+    snapshot->height = description.BufferDesc.Height;
+    snapshot->format = description.BufferDesc.Format;
+    snapshot->buffer_count = description.BufferCount;
+    snapshot->swap_effect = description.SwapEffect;
+    snapshot->flags = description.Flags;
+    return true;
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    return false;
+  }
+}
+
+bool capture_hwnd_swap_chain_description(IDXGISwapChain1 *swap_chain,
+                                         HWND window,
+                                         SwapChainSnapshot *snapshot) noexcept {
+  if (swap_chain == nullptr || snapshot == nullptr) {
+    return false;
+  }
+  __try {
+    DXGI_SWAP_CHAIN_DESC1 description{};
+    if (FAILED(swap_chain->GetDesc1(&description))) {
+      return false;
+    }
+    snapshot->creation_kind = SwapChainCreationKind::hwnd;
+    snapshot->description_available = true;
+    snapshot->pointer = reinterpret_cast<std::uintptr_t>(swap_chain);
+    snapshot->window = reinterpret_cast<std::uintptr_t>(window);
+    DWORD window_process_id{};
+    GetWindowThreadProcessId(window, &window_process_id);
+    snapshot->window_owned_by_process =
+        window_process_id == GetCurrentProcessId();
+    snapshot->width = description.Width;
+    snapshot->height = description.Height;
+    snapshot->format = description.Format;
+    snapshot->buffer_count = description.BufferCount;
+    snapshot->swap_effect = description.SwapEffect;
+    snapshot->flags = description.Flags;
+    return true;
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    return false;
+  }
 }
 
 CaptureEvent *reserve_event(EventKind kind) noexcept {
@@ -529,8 +727,8 @@ void capture_create_event(ngx::Result result,
                           ID3D12GraphicsCommandList *command_list,
                           ngx::Feature feature,
                           const ngx::Parameter *parameters,
-                          ngx::Handle *feature_handle,
-                          bool d3d12_verified) noexcept {
+                          ngx::Handle *feature_handle, bool d3d12_verified,
+                          AdapterSnapshot adapter) noexcept {
   CaptureEvent *event = reserve_event(EventKind::create);
   if (event == nullptr) {
     return;
@@ -538,6 +736,7 @@ void capture_create_event(ngx::Result result,
 
   event->call_result = result;
   event->d3d12_verified = d3d12_verified;
+  event->adapter = adapter;
   event->feature = feature;
   event->command_list = reinterpret_cast<std::uintptr_t>(command_list);
   event->parameters = reinterpret_cast<std::uintptr_t>(parameters);
@@ -561,13 +760,8 @@ void capture_evaluate_event(ngx::Result result,
                             ID3D12GraphicsCommandList *command_list,
                             const ngx::Handle *feature_handle,
                             const ngx::Parameter *parameters,
-                            bool d3d12_verified) noexcept {
-  const std::uint32_t evaluation =
-      g_evaluation_calls.fetch_add(1, std::memory_order_relaxed) + 1U;
-  if (evaluation > g_evaluation_limit) {
-    return;
-  }
-
+                            bool d3d12_verified,
+                            AdapterSnapshot adapter) noexcept {
   CaptureEvent *event = reserve_event(EventKind::evaluate);
   if (event == nullptr) {
     return;
@@ -575,6 +769,7 @@ void capture_evaluate_event(ngx::Result result,
 
   event->call_result = result;
   event->d3d12_verified = d3d12_verified;
+  event->adapter = adapter;
   event->command_list = reinterpret_cast<std::uintptr_t>(command_list);
   event->parameters = reinterpret_cast<std::uintptr_t>(parameters);
   event->feature_handle = reinterpret_cast<std::uintptr_t>(feature_handle);
@@ -610,6 +805,77 @@ void capture_release_event(ngx::Result result,
   publish_event(event);
 }
 
+void capture_swap_chain_event(HRESULT result, IUnknown *device_or_queue,
+                              SwapChainSnapshot snapshot) noexcept {
+  CaptureEvent *event = reserve_event(EventKind::swap_chain);
+  if (event == nullptr) {
+    return;
+  }
+  event->call_result = static_cast<ngx::Result>(result);
+  event->adapter = capture_adapter_from_unknown(device_or_queue);
+  event->swap_chain = snapshot;
+  publish_event(event);
+}
+
+HRESULT STDMETHODCALLTYPE hook_create_swap_chain(
+    IDXGIFactory *factory, IUnknown *device_or_queue,
+    DXGI_SWAP_CHAIN_DESC *description, IDXGISwapChain **output_swap_chain) {
+  const HRESULT result = g_create_swap_chain(factory, device_or_queue,
+                                             description, output_swap_chain);
+  const DWORD original_last_error = GetLastError();
+  if (!g_observer_enabled.load(std::memory_order_acquire)) {
+    SetLastError(original_last_error);
+    return result;
+  }
+  SwapChainSnapshot snapshot{};
+  snapshot.creation_kind = SwapChainCreationKind::legacy;
+  IDXGISwapChain *swap_chain{};
+  if (SUCCEEDED(result) && output_swap_chain != nullptr) {
+    __try {
+      swap_chain = *output_swap_chain;
+    } __except (observation_exception_filter(GetExceptionCode())) {
+      swap_chain = nullptr;
+    }
+  }
+  capture_legacy_swap_chain_description(swap_chain, &snapshot);
+  if (SUCCEEDED(result)) {
+    capture_swap_chain_event(result, device_or_queue, snapshot);
+  }
+  SetLastError(original_last_error);
+  return result;
+}
+
+HRESULT STDMETHODCALLTYPE hook_create_swap_chain_for_hwnd(
+    IDXGIFactory2 *factory, IUnknown *device_or_queue, HWND window,
+    const DXGI_SWAP_CHAIN_DESC1 *description,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *fullscreen_description,
+    IDXGIOutput *restrict_to_output, IDXGISwapChain1 **output_swap_chain) {
+  const HRESULT result = g_create_swap_chain_for_hwnd(
+      factory, device_or_queue, window, description, fullscreen_description,
+      restrict_to_output, output_swap_chain);
+  const DWORD original_last_error = GetLastError();
+  if (!g_observer_enabled.load(std::memory_order_acquire)) {
+    SetLastError(original_last_error);
+    return result;
+  }
+  SwapChainSnapshot snapshot{};
+  snapshot.creation_kind = SwapChainCreationKind::hwnd;
+  IDXGISwapChain1 *swap_chain{};
+  if (SUCCEEDED(result) && output_swap_chain != nullptr) {
+    __try {
+      swap_chain = *output_swap_chain;
+    } __except (observation_exception_filter(GetExceptionCode())) {
+      swap_chain = nullptr;
+    }
+  }
+  capture_hwnd_swap_chain_description(swap_chain, window, &snapshot);
+  if (SUCCEEDED(result)) {
+    capture_swap_chain_event(result, device_or_queue, snapshot);
+  }
+  SetLastError(original_last_error);
+  return result;
+}
+
 ngx::Result __cdecl hook_create_feature(ID3D12GraphicsCommandList *command_list,
                                         ngx::Feature feature,
                                         const ngx::Parameter *parameters,
@@ -617,13 +883,19 @@ ngx::Result __cdecl hook_create_feature(ID3D12GraphicsCommandList *command_list,
   const ngx::Result result =
       g_create_feature(command_list, feature, parameters, output_handle);
   const DWORD original_last_error = GetLastError();
-  const bool d3d12_verified = validate_d3d12_command_list(command_list);
+  if (!g_observer_enabled.load(std::memory_order_acquire)) {
+    SetLastError(original_last_error);
+    return result;
+  }
+  AdapterSnapshot adapter{};
+  const bool d3d12_verified =
+      validate_d3d12_command_list(command_list, &adapter);
   ngx::Handle *feature_handle = nullptr;
   if (result == ngx::result_success) {
     feature_handle = safe_load_handle(output_handle);
   }
   capture_create_event(result, command_list, feature, parameters,
-                       feature_handle, d3d12_verified);
+                       feature_handle, d3d12_verified, adapter);
   SetLastError(original_last_error);
   return result;
 }
@@ -634,9 +906,19 @@ ngx::Result __cdecl hook_evaluate_feature(
   const ngx::Result result =
       g_evaluate_feature(command_list, feature_handle, parameters, callback);
   const DWORD original_last_error = GetLastError();
-  const bool d3d12_verified = validate_d3d12_command_list(command_list);
-  capture_evaluate_event(result, command_list, feature_handle, parameters,
-                         d3d12_verified);
+  if (!g_observer_enabled.load(std::memory_order_acquire)) {
+    SetLastError(original_last_error);
+    return result;
+  }
+  const std::uint32_t evaluation =
+      g_evaluation_calls.fetch_add(1, std::memory_order_relaxed) + 1U;
+  if (evaluation <= g_evaluation_limit) {
+    AdapterSnapshot adapter{};
+    const bool d3d12_verified =
+        validate_d3d12_command_list(command_list, &adapter);
+    capture_evaluate_event(result, command_list, feature_handle, parameters,
+                           d3d12_verified, adapter);
+  }
   SetLastError(original_last_error);
   return result;
 }
@@ -644,6 +926,10 @@ ngx::Result __cdecl hook_evaluate_feature(
 ngx::Result __cdecl hook_release_feature(ngx::Handle *feature_handle) {
   const ngx::Result result = g_release_feature(feature_handle);
   const DWORD original_last_error = GetLastError();
+  if (!g_observer_enabled.load(std::memory_order_acquire)) {
+    SetLastError(original_last_error);
+    return result;
+  }
   capture_release_event(result, feature_handle);
   SetLastError(original_last_error);
   return result;
@@ -651,6 +937,8 @@ ngx::Result __cdecl hook_release_feature(ngx::Handle *feature_handle) {
 
 const char *event_kind_name(EventKind kind) noexcept {
   switch (kind) {
+  case EventKind::swap_chain:
+    return "swap-chain";
   case EventKind::create:
     return "create";
   case EventKind::evaluate:
@@ -660,6 +948,198 @@ const char *event_kind_name(EventKind kind) noexcept {
   default:
     return "unknown";
   }
+}
+
+bool luid_equal(const LUID &left, const LUID &right) noexcept {
+  return left.LowPart == right.LowPart && left.HighPart == right.HighPart;
+}
+
+void write_luid(const LUID &luid) {
+  g_log_file << std::hex << std::setfill('0') << std::setw(8)
+             << static_cast<std::uint32_t>(luid.HighPart) << ':' << std::setw(8)
+             << luid.LowPart << std::setfill(' ') << std::dec;
+}
+
+std::string adapter_description_to_utf8(const wchar_t *description) {
+  if (description == nullptr || *description == L'\0') {
+    return {};
+  }
+  const int required =
+      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, description, -1,
+                          nullptr, 0, nullptr, nullptr);
+  if (required <= 1) {
+    return {};
+  }
+  std::string result(static_cast<std::size_t>(required), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, description, -1,
+                          result.data(), required, nullptr, nullptr) == 0) {
+    return {};
+  }
+  result.pop_back();
+  for (char &character : result) {
+    if (character == '\t' || character == '\r' || character == '\n') {
+      character = ' ';
+    }
+  }
+  return result;
+}
+
+bool resolve_adapter_description(const LUID &luid,
+                                 DXGI_ADAPTER_DESC1 *description) noexcept {
+  if (description == nullptr) {
+    return false;
+  }
+  IDXGIFactory4 *factory{};
+  IDXGIAdapter1 *adapter{};
+  const HRESULT factory_result = CreateDXGIFactory2(
+      0, __uuidof(IDXGIFactory4), reinterpret_cast<void **>(&factory));
+  HRESULT adapter_result = E_FAIL;
+  HRESULT description_result = E_FAIL;
+  if (SUCCEEDED(factory_result) && factory != nullptr) {
+    adapter_result = factory->EnumAdapterByLuid(
+        luid, __uuidof(IDXGIAdapter1), reinterpret_cast<void **>(&adapter));
+  }
+  if (SUCCEEDED(adapter_result) && adapter != nullptr) {
+    description_result = adapter->GetDesc1(description);
+  }
+  safe_release(adapter);
+  safe_release(factory);
+  return SUCCEEDED(description_result);
+}
+
+bool record_adapter_identity(std::string_view source,
+                             const AdapterSnapshot &adapter) {
+  if (!adapter.available) {
+    return false;
+  }
+
+  DXGI_ADAPTER_DESC1 description{};
+  const bool resolved = resolve_adapter_description(adapter.luid, &description);
+  g_log_file << '\t' << "adapter.identity source=" << source << " luid=";
+  write_luid(adapter.luid);
+  g_log_file << " resolved=" << (resolved ? "true" : "false");
+  if (resolved) {
+    g_log_file << " description=\""
+               << adapter_description_to_utf8(description.Description) << '"'
+               << " vendor=0x" << std::hex << description.VendorId
+               << " device=0x" << description.DeviceId << " subsys=0x"
+               << description.SubSysId << " revision=0x" << description.Revision
+               << std::dec << " dedicated_video_memory="
+               << description.DedicatedVideoMemory;
+  }
+  g_log_file << '\n';
+  return resolved;
+}
+
+void remember_swap_chain_candidate(const CaptureEvent &event) noexcept {
+  const SwapChainSnapshot &swap_chain = event.swap_chain;
+  if (!event.adapter.available || !swap_chain.description_available ||
+      !swap_chain.window_owned_by_process || swap_chain.pointer == 0 ||
+      swap_chain.width == 0 || swap_chain.height == 0 ||
+      swap_chain.format == DXGI_FORMAT_UNKNOWN) {
+    return;
+  }
+
+  for (SwapChainCandidate &candidate : g_writer_identity.candidates) {
+    if (candidate.occupied &&
+        candidate.swap_chain.pointer == swap_chain.pointer) {
+      candidate.adapter = event.adapter;
+      candidate.swap_chain = swap_chain;
+      return;
+    }
+  }
+  for (SwapChainCandidate &candidate : g_writer_identity.candidates) {
+    if (!candidate.occupied) {
+      candidate.occupied = true;
+      candidate.adapter = event.adapter;
+      candidate.swap_chain = swap_chain;
+      return;
+    }
+  }
+  g_writer_identity.candidate_overflow = true;
+}
+
+const char *identity_state_reason(IdentityReportState state) noexcept {
+  switch (state) {
+  case IdentityReportState::awaiting_adapter:
+    return "awaiting-ngx-adapter";
+  case IdentityReportState::adapter_unresolved:
+    return "adapter-description-unresolved";
+  case IdentityReportState::awaiting_swap_chain:
+    return "awaiting-unambiguous-swap-chain";
+  case IdentityReportState::ambiguous:
+    return "multiple-swap-chain-candidates";
+  default:
+    return "unknown";
+  }
+}
+
+void maybe_write_runtime_identity() {
+  IdentityReportState state = IdentityReportState::awaiting_adapter;
+  const SwapChainCandidate *selected{};
+  std::size_t matching_candidates{};
+  if (g_writer_identity.ngx_adapter_available) {
+    state = g_writer_identity.ngx_adapter_description_available
+                ? IdentityReportState::awaiting_swap_chain
+                : IdentityReportState::adapter_unresolved;
+    if (g_writer_identity.ngx_adapter_description_available) {
+      for (const SwapChainCandidate &candidate : g_writer_identity.candidates) {
+        if (candidate.occupied && candidate.adapter.available &&
+            luid_equal(candidate.adapter.luid, g_writer_identity.ngx_adapter)) {
+          ++matching_candidates;
+          selected = &candidate;
+        }
+      }
+      if (g_writer_identity.candidate_overflow || matching_candidates > 1U) {
+        state = IdentityReportState::ambiguous;
+        selected = nullptr;
+      } else if (matching_candidates == 1U) {
+        state = IdentityReportState::complete;
+      }
+    }
+  }
+
+  const bool complete_changed =
+      state == IdentityReportState::complete && selected != nullptr &&
+      (g_writer_identity.last_complete_swap_chain !=
+           selected->swap_chain.pointer ||
+       g_writer_identity.last_complete_width != selected->swap_chain.width ||
+       g_writer_identity.last_complete_height != selected->swap_chain.height ||
+       g_writer_identity.last_complete_format != selected->swap_chain.format);
+  if (state == g_writer_identity.last_report_state && !complete_changed) {
+    return;
+  }
+
+  ++g_writer_identity.revision;
+  if (state != IdentityReportState::complete || selected == nullptr) {
+    g_log_file << "runtime.identity complete=false revision="
+               << g_writer_identity.revision
+               << " reason=" << identity_state_reason(state) << " experiment="
+               << (g_query_parameters ? "legacy-parameter-capture"
+                                      : "legacy-lifecycle")
+               << '\n';
+  } else {
+    g_log_file << "runtime.identity complete=true executable_sha256="
+               << hash_to_hex(g_observed_host_sha256)
+               << " revision=" << g_writer_identity.revision
+               << " api=d3d12 adapter_luid=";
+    write_luid(g_writer_identity.ngx_adapter);
+    g_log_file << " swap_chain=0x" << std::hex << selected->swap_chain.pointer
+               << " hwnd=0x" << selected->swap_chain.window << std::dec
+               << " swap_chain_width=" << selected->swap_chain.width
+               << " swap_chain_height=" << selected->swap_chain.height
+               << " swap_chain_format="
+               << static_cast<unsigned int>(selected->swap_chain.format)
+               << " observation=creation experiment="
+               << (g_query_parameters ? "legacy-parameter-capture"
+                                      : "legacy-lifecycle")
+               << '\n';
+    g_writer_identity.last_complete_swap_chain = selected->swap_chain.pointer;
+    g_writer_identity.last_complete_width = selected->swap_chain.width;
+    g_writer_identity.last_complete_height = selected->swap_chain.height;
+    g_writer_identity.last_complete_format = selected->swap_chain.format;
+  }
+  g_writer_identity.last_report_state = state;
 }
 
 void write_scalar(const ScalarSnapshot<float> &value) {
@@ -713,6 +1193,41 @@ void write_resource(const ResourceSnapshot &resource) {
 }
 
 void write_event(const CaptureEvent &event) {
+  if (event.kind == EventKind::swap_chain) {
+    g_log_file << event.tick << "\ttid=" << event.thread_id
+               << "\tevent=swap-chain sequence=" << event.sequence
+               << " result=0x" << std::hex << event.call_result << std::dec
+               << " creation="
+               << (event.swap_chain.creation_kind ==
+                           SwapChainCreationKind::legacy
+                       ? "legacy"
+                       : "hwnd")
+               << " api=" << (event.adapter.available ? "d3d12" : "unverified")
+               << " desc="
+               << (event.swap_chain.description_available ? "available"
+                                                          : "unavailable");
+    if (event.swap_chain.description_available) {
+      g_log_file << " width=" << event.swap_chain.width
+                 << " height=" << event.swap_chain.height << " format="
+                 << static_cast<unsigned int>(event.swap_chain.format)
+                 << " buffers=" << event.swap_chain.buffer_count
+                 << " swap_chain=0x" << std::hex << event.swap_chain.pointer
+                 << " hwnd=0x" << event.swap_chain.window << std::dec
+                 << " window_process="
+                 << (event.swap_chain.window_owned_by_process ? "self"
+                                                              : "other")
+                 << " swap_effect="
+                 << static_cast<unsigned int>(event.swap_chain.swap_effect)
+                 << " flags=0x" << std::hex << event.swap_chain.flags
+                 << std::dec;
+    }
+    g_log_file << '\n';
+    record_adapter_identity("swap-chain", event.adapter);
+    remember_swap_chain_candidate(event);
+    maybe_write_runtime_identity();
+    return;
+  }
+
   g_log_file << event.tick << "\ttid=" << event.thread_id
              << "\tevent=" << event_kind_name(event.kind)
              << " sequence=" << event.sequence << " result=0x" << std::hex
@@ -756,6 +1271,23 @@ void write_event(const CaptureEvent &event) {
       write_scalar(value);
     }
   }
+
+  if (event.adapter.available) {
+    const bool adapter_changed =
+        !g_writer_identity.ngx_adapter_available ||
+        !luid_equal(g_writer_identity.ngx_adapter, event.adapter.luid);
+    if (adapter_changed) {
+      g_writer_identity.ngx_adapter_available = true;
+      g_writer_identity.ngx_adapter = event.adapter.luid;
+      g_writer_identity.ngx_adapter_description_available = false;
+    }
+    if (adapter_changed ||
+        !g_writer_identity.ngx_adapter_description_available) {
+      g_writer_identity.ngx_adapter_description_available =
+          record_adapter_identity("ngx-command-list", event.adapter);
+    }
+  }
+  maybe_write_runtime_identity();
 }
 
 void drain_events() {
@@ -872,11 +1404,6 @@ bool create_and_queue_hook(HMODULE feature_module, const char *export_name,
 }
 
 bool install_feature_hooks(HMODULE feature_module, bool allow_test_override) {
-  if (MH_Initialize() != MH_OK) {
-    write_control_log("probe.abort reason=minhook-initialize-failed");
-    return false;
-  }
-
   bool success = create_and_queue_hook(
       feature_module, "NVSDK_NGX_D3D12_CreateFeature",
       kExpectedCreatePrologue.data(), kExpectedCreatePrologue.size(),
@@ -897,13 +1424,181 @@ bool install_feature_hooks(HMODULE feature_module, bool allow_test_override) {
                            reinterpret_cast<void **>(&g_release_feature));
 
   if (!success || MH_ApplyQueued() != MH_OK) {
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_RemoveHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
-    write_control_log("probe.abort reason=hook-install-transaction-failed");
+    write_control_log("probe.abort reason=feature-hook-install-failed");
     return false;
   }
   return true;
+}
+
+bool is_executable_protection(DWORD protection) noexcept {
+  switch (protection & 0xFFU) {
+  case PAGE_EXECUTE:
+  case PAGE_EXECUTE_READ:
+  case PAGE_EXECUTE_READWRITE:
+  case PAGE_EXECUTE_WRITECOPY:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool looks_like_existing_detour(void *target) noexcept {
+  if (target == nullptr) {
+    return true;
+  }
+  __try {
+    const auto *bytes = static_cast<const unsigned char *>(target);
+    return bytes[0] == 0xE9U || bytes[0] == 0xEBU ||
+           (bytes[0] == 0xFFU && bytes[1] == 0x25U) ||
+           (bytes[0] == 0x48U && bytes[1] == 0xB8U && bytes[10] == 0xFFU &&
+            bytes[11] == 0xE0U) ||
+           (bytes[0] == 0x49U && bytes[1] == 0xBBU && bytes[10] == 0x41U &&
+            bytes[11] == 0xFFU && bytes[12] == 0xE3U);
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    return true;
+  }
+}
+
+bool is_system_dxgi_target(void *target) {
+  if (target == nullptr) {
+    return false;
+  }
+
+  MEMORY_BASIC_INFORMATION memory{};
+  if (VirtualQuery(target, &memory, sizeof(memory)) != sizeof(memory) ||
+      memory.Type != MEM_IMAGE || !is_executable_protection(memory.Protect) ||
+      looks_like_existing_detour(target)) {
+    return false;
+  }
+
+  HMODULE owner{};
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                          reinterpret_cast<LPCWSTR>(target), &owner)) {
+    return false;
+  }
+
+  wchar_t system_directory[32'768]{};
+  const UINT system_directory_size = GetSystemDirectoryW(
+      system_directory, static_cast<UINT>(_countof(system_directory)));
+  const auto owner_path = module_path(owner);
+  const auto expected_path =
+      system_directory_size > 0 &&
+              system_directory_size < _countof(system_directory)
+          ? std::filesystem::path(system_directory) / L"dxgi.dll"
+          : std::filesystem::path{};
+  const bool valid = memory.AllocationBase == owner && !owner_path.empty() &&
+                     !expected_path.empty() &&
+                     _wcsicmp(owner_path.c_str(), expected_path.c_str()) == 0;
+  if (!valid) {
+    FreeLibrary(owner);
+    return false;
+  }
+
+  if (g_dxgi_module == nullptr) {
+    g_dxgi_module = owner;
+  } else {
+    const bool same_module = g_dxgi_module == owner;
+    FreeLibrary(owner);
+    if (!same_module) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool create_and_queue_dxgi_hook(void *target, const char *name, void *detour,
+                                void **original) {
+  if (!is_system_dxgi_target(target)) {
+    write_control_log(
+        std::string("probe.abort reason=dxgi-target-rejected name=") + name);
+    return false;
+  }
+  const MH_STATUS create_status = MH_CreateHook(target, detour, original);
+  if (create_status != MH_OK) {
+    write_control_log(
+        std::string("probe.abort reason=dxgi-hook-create-failed name=") + name +
+        " status=" + MH_StatusToString(create_status));
+    return false;
+  }
+  const MH_STATUS queue_status = MH_QueueEnableHook(target);
+  if (queue_status != MH_OK) {
+    write_control_log(
+        std::string("probe.abort reason=dxgi-hook-queue-failed name=") + name +
+        " status=" + MH_StatusToString(queue_status));
+    return false;
+  }
+  return true;
+}
+
+bool install_dxgi_hooks() {
+  IDXGIFactory2 *factory{};
+  const HRESULT result = CreateDXGIFactory2(
+      0, __uuidof(IDXGIFactory2), reinterpret_cast<void **>(&factory));
+  if (FAILED(result) || factory == nullptr) {
+    write_control_log("probe.abort reason=private-dxgi-factory-unavailable");
+    return false;
+  }
+
+  void *create_swap_chain_target{};
+  void *create_swap_chain_for_hwnd_target{};
+  __try {
+    void **vtable = *reinterpret_cast<void ***>(factory);
+    create_swap_chain_target = vtable[kCreateSwapChainVtableIndex];
+    create_swap_chain_for_hwnd_target =
+        vtable[kCreateSwapChainForHwndVtableIndex];
+  } __except (observation_exception_filter(GetExceptionCode())) {
+    create_swap_chain_target = nullptr;
+    create_swap_chain_for_hwnd_target = nullptr;
+  }
+  safe_release(factory);
+
+  const bool success =
+      create_and_queue_dxgi_hook(
+          create_swap_chain_target, "CreateSwapChain",
+          reinterpret_cast<void *>(&hook_create_swap_chain),
+          reinterpret_cast<void **>(&g_create_swap_chain)) &&
+      create_and_queue_dxgi_hook(
+          create_swap_chain_for_hwnd_target, "CreateSwapChainForHwnd",
+          reinterpret_cast<void *>(&hook_create_swap_chain_for_hwnd),
+          reinterpret_cast<void **>(&g_create_swap_chain_for_hwnd));
+  if (!success) {
+    write_control_log("probe.abort reason=dxgi-hook-install-failed");
+    return false;
+  }
+  g_observer_enabled.store(true, std::memory_order_release);
+  if (MH_ApplyQueued() != MH_OK) {
+    write_control_log("probe.abort reason=dxgi-hook-apply-failed");
+    return false;
+  }
+  write_control_log(
+      "dxgi.observer ready=true hooks=CreateSwapChain,CreateSwapChainForHwnd "
+      "target=system-dxgi");
+  return true;
+}
+
+[[noreturn]] void remain_loaded_after_hook_failure() noexcept {
+  g_observer_enabled.store(false, std::memory_order_release);
+  g_probe_state.store(-1, std::memory_order_release);
+  const MH_STATUS disable_status = MH_DisableHook(MH_ALL_HOOKS);
+  try {
+    g_log_file << GetTickCount64() << "\ttid=" << GetCurrentThreadId()
+               << "\tprobe.failure hooks-disabled-status="
+               << MH_StatusToString(disable_status)
+               << " lifetime=process-retained\n";
+    g_log_file.flush();
+  } catch (...) {
+  }
+  for (;;) {
+    if (g_writer_wakeup != nullptr) {
+      WaitForSingleObject(g_writer_wakeup, 1'000U);
+    } else {
+      Sleep(1'000U);
+    }
+    try {
+      drain_events();
+    } catch (...) {
+    }
+  }
 }
 
 DWORD initialize_probe_impl() {
@@ -922,7 +1617,7 @@ DWORD initialize_probe_impl() {
     return 1;
   }
 
-  write_control_log("probe.start version=0.2.0 mode=feature-boundary-observer");
+  write_control_log("probe.start version=0.3.0 mode=feature-boundary-observer");
   g_evaluation_limit = read_evaluation_limit();
   g_query_parameters = read_parameter_query_setting();
 
@@ -939,31 +1634,53 @@ DWORD initialize_probe_impl() {
   HMODULE host = GetModuleHandleW(nullptr);
   const bool override_enabled = test_override_enabled();
   if (host == nullptr ||
-      !verify_module_hash(host, kExpectedHostSha256, "host",
-                          override_enabled) ||
+      !verify_module_hash(host, kExpectedHostSha256, "host", override_enabled,
+                          &g_observed_host_sha256) ||
       !resolve_host_getters(host)) {
     write_control_log("probe.abort reason=unsupported-host-or-getters");
     g_probe_state.store(-1, std::memory_order_release);
     return 3;
   }
 
+  g_writer_wakeup = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  if (g_writer_wakeup == nullptr) {
+    write_control_log("probe.abort reason=writer-event-unavailable");
+    g_probe_state.store(-1, std::memory_order_release);
+    return 4;
+  }
+  if (MH_Initialize() != MH_OK) {
+    CloseHandle(g_writer_wakeup);
+    g_writer_wakeup = nullptr;
+    write_control_log("probe.abort reason=minhook-initialize-failed");
+    g_probe_state.store(-1, std::memory_order_release);
+    return 4;
+  }
+  g_hook_engine_initialized.store(true, std::memory_order_release);
+  if (!install_dxgi_hooks()) {
+    write_control_log(
+        "probe.abort reason=dxgi-observer-unavailable action=remain-loaded");
+    remain_loaded_after_hook_failure();
+  }
+
   HMODULE feature_module{};
   while (feature_module == nullptr) {
     feature_module = GetModuleHandleW(L"nvngx_dlss.dll");
     if (feature_module == nullptr) {
-      Sleep(100);
+      WaitForSingleObject(g_writer_wakeup, 100U);
+      drain_events();
     }
   }
 
   HMODULE retained_feature{};
-  if (!GetModuleHandleExW(0, L"nvngx_dlss.dll", &retained_feature) ||
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                          reinterpret_cast<LPCWSTR>(feature_module),
+                          &retained_feature) ||
       retained_feature != feature_module) {
     if (retained_feature != nullptr) {
       FreeLibrary(retained_feature);
     }
     write_control_log("probe.abort reason=feature-module-retain-failed");
-    g_probe_state.store(-1, std::memory_order_release);
-    return 5;
+    remain_loaded_after_hook_failure();
   }
 
   if (!verify_module_hash(feature_module, kExpectedFeatureSha256, "feature",
@@ -971,33 +1688,36 @@ DWORD initialize_probe_impl() {
       !verify_feature_metadata(feature_module)) {
     FreeLibrary(retained_feature);
     write_control_log("probe.abort reason=unsupported-feature-module");
-    g_probe_state.store(-1, std::memory_order_release);
-    return 5;
+    remain_loaded_after_hook_failure();
+  }
+
+  if (!install_feature_hooks(feature_module, override_enabled)) {
+    write_control_log(
+        "probe.abort reason=feature-hooks-unavailable action=remain-loaded");
+    remain_loaded_after_hook_failure();
   }
 
   HMODULE pinned_feature{};
-  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"nvngx_dlss.dll",
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_PIN,
+                          reinterpret_cast<LPCWSTR>(feature_module),
                           &pinned_feature) ||
       pinned_feature != feature_module) {
-    FreeLibrary(retained_feature);
-    write_control_log("probe.abort reason=feature-module-pin-failed");
-    g_probe_state.store(-1, std::memory_order_release);
-    return 5;
+    write_control_log(
+        "probe.abort reason=feature-module-pin-failed action=remain-loaded");
+    remain_loaded_after_hook_failure();
   }
   FreeLibrary(retained_feature);
-
-  g_writer_wakeup = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-  if (g_writer_wakeup == nullptr ||
-      !install_feature_hooks(feature_module, override_enabled)) {
-    write_control_log("probe.abort reason=writer-or-hooks-unavailable");
-    g_probe_state.store(-1, std::memory_order_release);
-    return 6;
-  }
 
   write_control_log("probe.ready hooks=feature-create,evaluate,release "
                     "host-code-patched=false capture-limit=" +
                     std::to_string(g_evaluation_limit) + " parameter-query=" +
                     (g_query_parameters ? "enabled" : "disabled"));
+  write_control_log(
+      std::string(
+          "runtime.identity complete=false status=awaiting-observations ") +
+      "experiment=" +
+      (g_query_parameters ? "legacy-parameter-capture" : "legacy-lifecycle"));
   g_probe_state.store(1, std::memory_order_release);
 
   for (;;) {
@@ -1010,7 +1730,14 @@ DWORD WINAPI initialize_probe(void *) noexcept {
   try {
     return initialize_probe_impl();
   } catch (...) {
-    write_control_log("probe.abort reason=unhandled-initialization-exception");
+    try {
+      write_control_log(
+          "probe.abort reason=unhandled-initialization-exception");
+    } catch (...) {
+    }
+    if (g_hook_engine_initialized.load(std::memory_order_acquire)) {
+      remain_loaded_after_hook_failure();
+    }
     g_probe_state.store(-1, std::memory_order_release);
     return 99;
   }

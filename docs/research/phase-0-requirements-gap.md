@@ -136,6 +136,44 @@ the opt-in second stage stops all further queries on its first getter or
 resource-description exception. No GPU resource is mapped, copied,
 transitioned, retained, or released.
 
+The probe also observes two system-DXGI COM methods so a run can identify its
+actual presentation target without deriving a swap-chain pointer from protected
+game code:
+
+| Interface method | Vtable slot | Calling convention |
+| --- | ---: | --- |
+| `IDXGIFactory::CreateSwapChain` | 10 | `STDMETHODCALLTYPE` |
+| `IDXGIFactory2::CreateSwapChainForHwnd` | 15 | `STDMETHODCALLTYPE` |
+
+Targets are resolved from a private `IDXGIFactory2` instance. Each must be an
+executable `MEM_IMAGE` address owned by the loaded system `dxgi.dll`; otherwise
+the probe aborts. The hooks are armed after the exact host hash is accepted and
+before waiting for `nvngx_dlss.dll`, because DXGI cannot enumerate an already
+created swap chain. Both detours call the original first, preserve `LastError`,
+and inspect only a successful, non-null output. They accept a D3D12 creation as
+such only when the supplied object supports `ID3D12CommandQueue`.
+
+The NGX command list and swap-chain queue each yield an `ID3D12Device` adapter
+LUID. The writer thread resolves that LUID to `DXGI_ADAPTER_DESC1` and reports a
+complete runtime identity only when the LUIDs match, adapter lookup succeeds,
+the owning window belongs to the current process, dimensions are nonzero, and
+the format is not `DXGI_FORMAT_UNKNOWN`. COM references acquired for inspection
+are released immediately. Only fixed-size snapshots cross the detours; string
+conversion, adapter enumeration, and file output remain on the writer thread.
+Multiple same-process candidates make identity explicitly ambiguous rather than
+selecting one by guess. Swap-chain pointers and HWNDs are logged only as
+process-local correlation values. Swap-chain resize observation is deliberately
+deferred; an identity record therefore labels its descriptor as a creation-time
+observation.
+
+The DLL and its hook trampolines have process lifetime. The loader must retain
+its initial module reference until the worker self-pins the probe; hot-unload is
+unsupported. After any possibly-live hook transaction fails, observation is
+atomically disabled and MinHook is asked to disable all targets, but code,
+trampolines, module references, and the writer event deliberately remain valid
+until process exit so an already-entered detour cannot return through freed
+memory.
+
 ## Modern native NGX contract to preserve
 
 Creation must supply the queried input and output dimensions and quality mode.
@@ -179,10 +217,12 @@ remains the smallest visual proof of concept.
 
 ## Next gate
 
-1. Reproduce against a Steam-verified installation, then load
-   `mhw_dlss_probe.dll` through a documented, reversible loader.
-2. Enable the game's shipped DLSS in DX12 and run a short offline lifecycle-only
-   smoke test; confirm `api=d3d12` and unchanged behavior.
+1. Stage `mhw_dlss_probe.dll` as a distinct, disabled MO2 mod through the
+   documented CMake install target.
+2. Reproduce against a Steam-verified installation, disable or explicitly
+   record unrelated forced-library injections, then run a short offline
+   lifecycle-only smoke test with the game's shipped DLSS in DX12. Require
+   `runtime.identity complete=true` and unchanged behavior.
 3. In a separate run, opt into parameter queries and record the actual creation
    values and per-frame resource descriptions.
 4. Correlate the known command list with queue submission and `Present`, then

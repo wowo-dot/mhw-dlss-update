@@ -44,6 +44,13 @@ set_target_properties(mhw_dlss_probe PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# `cmake --install --prefix <MO2 mod directory>` creates the exact virtual
+# layout consumed by Stracker's Loader without touching the game installation.
+install(TARGETS mhw_dlss_probe
+    RUNTIME DESTINATION "nativePC/plugins"
+    COMPONENT probe
+)
+
 include(CTest)
 if(BUILD_TESTING)
     add_library(probe_mock_feature SHARED
@@ -63,7 +70,7 @@ if(BUILD_TESTING)
     add_executable(probe_mock_host tests/probe_mock_host.cpp src/probe/ngx_abi.hpp)
     target_compile_features(probe_mock_host PRIVATE cxx_std_20)
     target_compile_definitions(probe_mock_host PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-    target_link_libraries(probe_mock_host PRIVATE d3d12)
+    target_link_libraries(probe_mock_host PRIVATE d3d12 dxgi user32)
     if(MSVC)
         target_compile_options(probe_mock_host PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     endif()
@@ -109,5 +116,13 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:mhw_dlss_probe>"
             "${CMAKE_BINARY_DIR}/probe-getter-fault.log"
             getter-fault
+    )
+    add_test(
+        NAME probe_rejects_ambiguous_swap_chain_identity
+        COMMAND probe_mock_host
+            "$<TARGET_FILE:probe_mock_feature>"
+            "$<TARGET_FILE:mhw_dlss_probe>"
+            "${CMAKE_BINARY_DIR}/probe-identity-ambiguous.log"
+            identity-ambiguous
     )
 endif()
