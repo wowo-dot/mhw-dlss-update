@@ -33,12 +33,15 @@ questions are tracked in
 [`docs/research/phase-0-requirements-gap.md`](docs/research/phase-0-requirements-gap.md).
 
 `mhw_dlss_unlock` is currently an exact-build, observation-only tracer for the
-legacy NGX startup boundary. It is loaded before game code through MO2 Force
-Load and wraps only six verified `GetProcAddressForCaller` results spanning the
-game, NVIDIA's legacy/modern driver cores, and the two installed DLSS feature
-images. Every wrapper calls the original once and returns its result unchanged.
-The preceding v0.3.3 cache-classifier bridge was retired after a clean runtime
-test recorded zero calls at both patched decision points. See
+legacy NGX startup boundary. Version 0.4.1 is loaded before game code through
+MO2 Force Load, retains the six verified resolver wrappers from v0.4.0, records
+all base D3D12 Init lookups while returning their original pointers untouched,
+and observes the pinned modern driver's per-feature D3D12 status recorder. The
+new boundary is restricted to DLSS feature index 1, API 2, and exact caller RVA
+`_nvngx.dll+0x67704`; it reports the raw status without replaying Init or
+changing availability. The preceding v0.3.3 cache-classifier bridge was retired
+after a clean runtime test recorded zero calls at both patched decision points.
+See
 [`docs/research/legacy-rtx50-classifier.md`](docs/research/legacy-rtx50-classifier.md)
 and the isolated
 [`docs/runtime/rtx50-unlock-test.md`](docs/runtime/rtx50-unlock-test.md)
@@ -62,6 +65,6 @@ MinHook 1.3.4 is fetched at configure time from its pinned upstream commit; see
 - Supported research target: DirectX 12
 - Implemented: dependency-free binary string scanner, requirements/gap report,
   hash-gated observational NGX/DXGI probe with runtime identity correlation,
-  exact-build NGX resolver/export tracer, and isolated MO2 packaging
+  exact-build NGX resolver/export/status tracer, and isolated MO2 packaging
 - Not implemented: modern DLSS evaluation or frame generation
 - Game files are never committed or patched

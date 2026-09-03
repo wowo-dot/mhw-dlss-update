@@ -138,7 +138,73 @@ addresses. Recording closes after 30 seconds, waits for in-flight resolver and
 wrapper calls, drains fixed telemetry, and leaves the retained hook and issued
 wrappers pass-through.
 
-The remaining runtime question is now precise: which legacy/modern/feature
-exports are resolved and called, in what order, and what untouched result does
-the selected Populate return? The v0.4 procedure and acceptance gates are in
+The v0.4 runtime question was precise: which legacy/modern/feature exports are
+resolved and called, in what order, and what untouched result does the selected
+Populate return? The procedure and acceptance gates are in
+[`../runtime/rtx50-unlock-test.md`](../runtime/rtx50-unlock-test.md).
+
+## v0.4 runtime result
+
+The accepted v0.4.0 run produced
+`%LOCALAPPDATA%\MhwDlssUnlock\unlock-30940.log` (6,854 bytes, SHA-256
+`DBEAAAE8EF0421B01C50545F8AED9E5E386DB94530297733F910B74B711526CB`).
+It recorded:
+
+- exact identities for legacy `nvngx.dll` 30.0.14.9516 and modern
+  `_nvngx.dll` 32.0.16.1047;
+- selection and mapping of both the game-local 1.1.13 image and cached 1.2.110
+  image;
+- one verified `cache-populate` resolution from `_nvngx.dll+0x43351`, but zero
+  Populate calls;
+- successful legacy and modern GetParameters calls; and
+- one resolver target/caller rejection that v0.4.0 counted but could not
+  identify.
+
+The zero Populate count is not a menu-layer explanation. In the exact modern
+core, the feature loader resolves cached base Init before its generic Populate
+fallback. Observing the cached Populate resolution proves discovery returned a
+non-fail status. The cached image exports base D3D12 Init but none of the Ext
+variants, so the D3D12 loop calls base Init at `_nvngx.dll+0x67694`, stores EAX
+at `+0x6769A`, and later suppresses generic Populate when that final status is
+fail-class. The remaining unknown is therefore the exact cached Init return.
+
+## v0.4.1 D3D12 status boundary
+
+A direct feature-Init wrapper is not behavior-neutral. Both installed feature
+images call `GetModuleHandleExA` with `FROM_ADDRESS | UNCHANGED_REFCOUNT` on
+their immediate return address, resolve that module's path with
+`GetModuleFileNameW`, and require the wide substring `nvngx.dll`. A wrapper in
+`mhw_dlss_unlock.dll` would change the immediate caller and manufacture
+`0xBAD00002`. Version 0.4.1 therefore records base Init lookups but always
+returns the original pointer unchanged.
+
+The safe observation point is the exact modern-core internal recorder at RVA
+`0x264E0`. The pinned build has SHA-256
+`B3C82638C60F29AEFF68052FFE7147246A73C80CBEA5883B35A9B0D1ED57DDE7`,
+timestamp `0x6A0CB15E`, and image size `0x173000`. Its 28-byte entry prologue is:
+
+```text
+40 55 53 56 57 41 54 41 55 41 56 41 57
+48 8D AC 24 18 FA FF FF 48 81 EC E8 06 00 00
+```
+
+The relevant call is `_nvngx.dll+0x676FF`, returning to `+0x67704`. Its opaque
+seven-argument ABI carries feature index in argument 4, API in argument 6, and
+final status in argument 7. The detour forwards every call exactly once and
+publishes telemetry only for caller `+0x67704`, feature index 1, and API 2.
+It preserves `LastError`, never dereferences an argument, and logs the raw
+status without changing it.
+
+The resolver worker is woken as soon as a relevant slot binds, then verifies
+the complete mapped and on-disk modern-core identity before installing the
+recorder hook. This remains timing-bounded rather than a process-start proof.
+The v0.4 trace provides a measured margin: modern-core resolver binding occurred
+at tick 78196718, its full identity completed at 78196734, and cached Populate
+was not resolved until tick 78197156. Version 0.4.1 records its post-apply ready
+tick, the first feature-DLL base Init lookup tick, and an atomic readiness
+snapshot taken at that lookup. Ordering does not rely on millisecond-tick
+equality, and a missed boundary is reported as inconclusive rather than treated
+as a zero-call result.
+
+The implementation and acceptance schema are documented in
 [`../runtime/rtx50-unlock-test.md`](../runtime/rtx50-unlock-test.md).

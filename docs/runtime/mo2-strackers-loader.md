@@ -2,7 +2,7 @@
 
 Status: the bounded Stracker timing diagnostic proved that Stracker's native
 plugin pass occurs after NVIDIA's MHW cache feature is loaded. The current
-v0.4 NGX resolver-boundary observer therefore uses MO2 Force Load instead.
+v0.4.1 NGX resolver/status observer therefore uses MO2 Force Load instead.
 
 ## Layout
 
@@ -59,10 +59,11 @@ Staging ends after verifying that the expected DLL is present in the disabled
 `dlssTEST` mod. Do not enable the mod or launch the game as part of staging.
 
 Both diagnostic DLLs pin themselves until process exit; do not hot-unload or
-hot-reload them. The v0.4 resolver observer stops binding and recording after
-its bounded window, while its retained resolver hook and any issued wrappers
-continue as pass-through calls. Disabling the MO2 mod takes effect on the next
-launch, after MHW has exited completely.
+hot-reload them. The v0.4.1 observer stops binding and recording after its
+bounded window, while its retained resolver/status hooks and any issued
+wrappers continue as pass-through calls. It never substitutes a feature Init
+pointer. Disabling the MO2 mod takes effect on the next launch, after MHW has
+exited completely.
 
 The separate RTX 50-series resolver experiment is documented in
 [`rtx50-unlock-test.md`](rtx50-unlock-test.md). Do not run the Stracker

@@ -28,6 +28,12 @@ using NgxResult = std::uint32_t;
 using NgxParameter = void;
 using PopulateParametersFn = NgxResult(__cdecl *)(NgxParameter *);
 using GetParametersFn = NgxResult(__cdecl *)(NgxParameter **);
+// Exact internal ABI at _nvngx.dll+0x264E0 on the pinned modern-core build.
+// All pointer arguments remain opaque; the observer records only nullness and
+// never dereferences them.
+using FeatureStatusRecorderFn = void(__cdecl *)(
+    void *, const void *, void *, std::int32_t, void *, std::uint32_t,
+    NgxResult);
 using GetProcAddressForCallerFn = FARPROC(WINAPI *)(HMODULE, LPCSTR, void *);
 
 constexpr std::size_t kHashBufferSize = 1U << 20U;
@@ -37,11 +43,13 @@ constexpr DWORD kTracePollMilliseconds = 25U;
 constexpr DWORD kCensusIntervalMilliseconds = 250U;
 constexpr DWORD kQuiesceTimeoutMilliseconds = 5'000U;
 constexpr std::size_t kEventCapacity = 4U;
-constexpr std::size_t kSlotCount = 6U;
+constexpr std::size_t kResolverEventCapacity = 32U;
+constexpr std::size_t kSlotCount = 7U;
 constexpr std::uint32_t kMaximumSnapshotEntries = 2'048U;
 constexpr std::size_t kMaximumCensusModules = 16U;
 constexpr std::uint32_t kResultSuccess = 0x00000001U;
 constexpr std::uint32_t kResultFail = 0xBAD00000U;
+constexpr std::uint32_t kResultFeatureNotSupported = 0xBAD00001U;
 constexpr std::uint32_t kResultPlatformError = 0xBAD00002U;
 constexpr std::uint32_t kExpectedHostTimestamp = 0x66D13CB6U;
 constexpr std::uint64_t kExpectedHostPreferredImageBase = 0x140000000ULL;
@@ -100,6 +108,10 @@ constexpr std::array<unsigned char, 21> kModernCapabilityPrologue{
 constexpr std::array<unsigned char, 21> kModernParametersPrologue{
     0x40, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0x05, 0xEB, 0x4E,
     0x07, 0x00, 0x48, 0x8B, 0xF9, 0x48, 0x85, 0xC0, 0x75, 0x46};
+constexpr std::array<unsigned char, 28> kModernFeatureStatusPrologue{
+    0x40, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
+    0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x18, 0xFA, 0xFF,
+    0xFF, 0x48, 0x81, 0xEC, 0xE8, 0x06, 0x00, 0x00};
 
 enum class Slot : std::uint32_t {
   local_populate,
@@ -108,12 +120,42 @@ enum class Slot : std::uint32_t {
   legacy_parameters,
   modern_capability,
   modern_parameters,
+  modern_d3d12_feature_status,
 };
 
 constexpr std::array<Slot, kSlotCount> kAllSlots{
-    Slot::local_populate,     Slot::cache_populate,
-    Slot::legacy_capability,  Slot::legacy_parameters,
-    Slot::modern_capability,  Slot::modern_parameters};
+    Slot::local_populate,
+    Slot::cache_populate,
+    Slot::legacy_capability,
+    Slot::legacy_parameters,
+    Slot::modern_capability,
+    Slot::modern_parameters,
+    Slot::modern_d3d12_feature_status};
+
+// The modern core exposes the downstream status boundary. Verify it first so
+// the worker can arm that hook before feature DLL initialization begins.
+constexpr std::array<Slot, kSlotCount> kIdentityVerificationOrder{
+    Slot::modern_capability,
+    Slot::modern_parameters,
+    Slot::legacy_capability,
+    Slot::legacy_parameters,
+    Slot::local_populate,
+    Slot::cache_populate,
+    Slot::modern_d3d12_feature_status};
+
+enum class TargetName : std::uint32_t {
+  unknown,
+  populate,
+  d3d12_init,
+  capability_parameters,
+  parameters,
+};
+
+enum class ResolverDisposition : std::uint32_t {
+  passthrough,
+  rejected,
+  null_result,
+};
 
 enum class IdentityState : std::uint32_t {
   empty,
@@ -145,6 +187,8 @@ struct TraceEventPayload {
   std::uintptr_t caller{};
   std::uintptr_t argument{};
   NgxResult result{};
+  std::int32_t feature_index{-1};
+  std::uint32_t api{};
   bool argument_nonnull{};
 };
 
@@ -163,6 +207,7 @@ struct SlotRuntime {
   std::atomic<std::uint64_t> calls{};
   std::atomic<std::uint64_t> success{};
   std::atomic<std::uint64_t> bad00000{};
+  std::atomic<std::uint64_t> bad00001{};
   std::atomic<std::uint64_t> bad00002{};
   std::atomic<std::uint64_t> other{};
   std::atomic<std::uint64_t> recursion{};
@@ -172,15 +217,46 @@ struct SlotRuntime {
   std::array<TraceEvent, kEventCapacity> events{};
 };
 
+struct ResolverEventPayload {
+  std::uint64_t sequence{};
+  ULONGLONG tick{};
+  DWORD thread_id{};
+  TargetName name{TargetName::unknown};
+  ResolverDisposition disposition{ResolverDisposition::rejected};
+  std::uintptr_t module{};
+  std::uintptr_t target{};
+  std::uintptr_t target_rva{};
+  std::uintptr_t caller{};
+  std::uint32_t mapped_timestamp{};
+  std::uint32_t mapped_image_size{};
+  bool target_rva_valid{};
+  bool mapped_identity_available{};
+};
+
+struct ResolverEvent {
+  std::atomic<EventState> state{EventState::empty};
+  ResolverEventPayload payload{};
+};
+
 static_assert(std::atomic<std::uintptr_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<EventState>::is_always_lock_free);
+static_assert(std::atomic<bool>::is_always_lock_free);
+static_assert(kSlotCount <= 32U);
 
 std::array<SlotRuntime, kSlotCount> g_slots{};
+std::array<ResolverEvent, kResolverEventCapacity> g_resolver_events{};
 std::atomic<std::uint64_t> g_event_sequence{};
 std::atomic<std::uint64_t> g_resolver_calls{};
 std::atomic<std::uint64_t> g_name_rejects{};
 std::atomic<std::uint64_t> g_target_rejects{};
+std::atomic<std::uint64_t> g_resolver_events_reserved{};
+std::atomic<std::uint64_t> g_resolver_events_dropped{};
+std::atomic<std::uint64_t> g_d3d12_init_passthroughs{};
+std::atomic<std::uint64_t> g_feature_d3d12_init_lookups{};
+std::atomic<std::uint64_t> g_first_feature_d3d12_init_lookup_tick{};
+// 0=no feature lookup, 1=hook not ready at first lookup, 2=hook ready.
+std::atomic<int> g_hook_readiness_at_first_feature_init_lookup{};
 std::atomic<std::uint64_t> g_target_nulls{};
 std::atomic<std::uint64_t> g_resolver_before_ready{};
 std::atomic<std::uint64_t> g_active_resolver_detours{};
@@ -190,6 +266,14 @@ std::atomic<int> g_trace_state{};
 std::atomic<std::uintptr_t> g_host_base{};
 std::atomic<std::uint32_t> g_host_image_size{};
 std::atomic<std::uintptr_t> g_original_resolver{};
+std::atomic<std::uintptr_t> g_original_feature_status_recorder{};
+// 0=waiting for verified modern core, 1=preparing, 2=enabled, -1=unavailable.
+std::atomic<int> g_feature_status_hook_state{};
+std::atomic<std::uint64_t> g_feature_status_hook_tick{};
+std::atomic<bool> g_feature_status_hook_ready{};
+std::atomic<std::uint64_t> g_feature_status_detours{};
+std::atomic<std::uint64_t> g_feature_status_gate_rejects{};
+std::atomic<std::uintptr_t> g_slot_ready_event{};
 HMODULE g_self{};
 ULONGLONG g_attach_tick{};
 thread_local std::uint32_t g_active_slots{};
@@ -217,6 +301,41 @@ const char *slot_name(const Slot slot) noexcept {
     return "modern-core-capability";
   case Slot::modern_parameters:
     return "modern-core-parameters";
+  case Slot::modern_d3d12_feature_status:
+    return "modern-d3d12-feature-status";
+  }
+  return "unknown";
+}
+
+bool is_feature_status_slot(const Slot slot) noexcept {
+  return slot == Slot::modern_d3d12_feature_status;
+}
+
+const char *target_name_text(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::populate:
+    return "NVSDK_NGX_PopulateParameters";
+  case TargetName::d3d12_init:
+    return "NVSDK_NGX_D3D12_Init";
+  case TargetName::capability_parameters:
+    return "NVSDK_NGX_D3D12_GetCapabilityParameters";
+  case TargetName::parameters:
+    return "NVSDK_NGX_D3D12_GetParameters";
+  case TargetName::unknown:
+    break;
+  }
+  return "unknown";
+}
+
+const char *resolver_disposition_text(
+    const ResolverDisposition disposition) noexcept {
+  switch (disposition) {
+  case ResolverDisposition::passthrough:
+    return "passthrough";
+  case ResolverDisposition::rejected:
+    return "rejected";
+  case ResolverDisposition::null_result:
+    return "null-result";
   }
   return "unknown";
 }
@@ -233,6 +352,68 @@ const char *identity_name(const IdentityState state) noexcept {
     return "rejected";
   }
   return "unknown";
+}
+
+const char *feature_status_hook_state_name(const int state) noexcept {
+  switch (state) {
+  case -1:
+    return "unavailable";
+  case 0:
+    return "waiting";
+  case 1:
+    return "preparing";
+  case 2:
+    return "enabled";
+  default:
+    return "unknown";
+  }
+}
+
+const char *ngx_result_name(const NgxResult result) noexcept {
+  switch (result) {
+  case kResultSuccess:
+    return "success";
+  case kResultFail:
+    return "fail";
+  case kResultFeatureNotSupported:
+    return "feature-not-supported";
+  case kResultPlatformError:
+    return "platform-error";
+  case 0xBAD00003U:
+    return "already-exists";
+  case 0xBAD00004U:
+    return "not-found";
+  case 0xBAD00005U:
+    return "invalid-parameter";
+  case 0xBAD00006U:
+    return "scratch-buffer-too-small";
+  case 0xBAD00007U:
+    return "not-initialized";
+  case 0xBAD00008U:
+    return "unsupported-input-format";
+  case 0xBAD00009U:
+    return "rw-flag-missing";
+  case 0xBAD0000AU:
+    return "missing-input";
+  case 0xBAD0000BU:
+    return "unable-to-initialize-feature";
+  case 0xBAD0000CU:
+    return "out-of-date";
+  case 0xBAD0000DU:
+    return "out-of-gpu-memory";
+  case 0xBAD0000EU:
+    return "unsupported-format";
+  case 0xBAD0000FU:
+    return "unable-to-write-app-data-path";
+  case 0xBAD00010U:
+    return "unsupported-parameter";
+  case 0xBAD00011U:
+    return "denied";
+  case 0xBAD00012U:
+    return "not-implemented";
+  default:
+    return "other";
+  }
 }
 
 std::filesystem::path module_path(const HMODULE module) {
@@ -608,6 +789,7 @@ std::uint32_t expected_timestamp(const Slot slot) noexcept {
     return 0x60E65AC5U;
   case Slot::modern_capability:
   case Slot::modern_parameters:
+  case Slot::modern_d3d12_feature_status:
     return 0x6A0CB15EU;
   }
   return 0U;
@@ -624,6 +806,7 @@ std::uint32_t expected_image_size(const Slot slot) noexcept {
     return 0x00078000U;
   case Slot::modern_capability:
   case Slot::modern_parameters:
+  case Slot::modern_d3d12_feature_status:
     return 0x00173000U;
   }
   return 0U;
@@ -643,6 +826,8 @@ std::uintptr_t expected_rva(const Slot slot) noexcept {
     return 0x669F0U;
   case Slot::modern_parameters:
     return 0x66C50U;
+  case Slot::modern_d3d12_feature_status:
+    return 0x264E0U;
   }
   return 0U;
 }
@@ -658,6 +843,7 @@ const std::array<unsigned char, 32> &expected_hash(const Slot slot) noexcept {
     return kLegacyCoreHash;
   case Slot::modern_capability:
   case Slot::modern_parameters:
+  case Slot::modern_d3d12_feature_status:
     return kModernCoreHash;
   }
   return kLocalFeatureHash;
@@ -674,6 +860,7 @@ std::array<std::uint16_t, 4> expected_version(const Slot slot) noexcept {
     return {30U, 0U, 14U, 9516U};
   case Slot::modern_capability:
   case Slot::modern_parameters:
+  case Slot::modern_d3d12_feature_status:
     return {32U, 0U, 16U, 1047U};
   }
   return {};
@@ -765,6 +952,8 @@ bool slot_prologue_matches(const Slot slot, const HMODULE module,
     return exact_bytes(address, kModernCapabilityPrologue);
   case Slot::modern_parameters:
     return exact_bytes(address, kModernParametersPrologue);
+  case Slot::modern_d3d12_feature_status:
+    return exact_bytes(address, kModernFeatureStatusPrologue);
   }
   return false;
 }
@@ -855,7 +1044,7 @@ bool caller_is_module_rva(const void *const caller,
          executable_image_address(module, caller);
 }
 
-bool expected_resolver_caller(const Slot slot, const void *const caller) noexcept {
+bool expected_slot_caller(const Slot slot, const void *const caller) noexcept {
   switch (slot) {
   case Slot::legacy_capability:
   case Slot::legacy_parameters:
@@ -869,9 +1058,12 @@ bool expected_resolver_caller(const Slot slot, const void *const caller) noexcep
   case Slot::local_populate:
   case Slot::cache_populate:
     return caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
-                                0x43333U) ||
+                                 0x43333U) ||
            caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
-                                0x43351U);
+                                 0x43351U);
+  case Slot::modern_d3d12_feature_status:
+    return caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                                0x67704U);
   }
   return false;
 }
@@ -896,15 +1088,36 @@ bool procedure_name_equals(const LPCSTR name,
   }
 }
 
+TargetName classify_target_name(const LPCSTR name) noexcept {
+  if (procedure_name_equals(name, "NVSDK_NGX_PopulateParameters")) {
+    return TargetName::populate;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Init")) {
+    return TargetName::d3d12_init;
+  }
+  if (procedure_name_equals(name,
+                            "NVSDK_NGX_D3D12_GetCapabilityParameters")) {
+    return TargetName::capability_parameters;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_GetParameters")) {
+    return TargetName::parameters;
+  }
+  return TargetName::unknown;
+}
+
 void publish_event(const Slot slot, const void *const caller,
                    const void *const argument, const NgxResult result,
-                   const ULONGLONG duration_ticks) noexcept {
+                   const ULONGLONG duration_ticks,
+                   const std::int32_t feature_index = -1,
+                   const std::uint32_t api = 0U) noexcept {
   SlotRuntime &runtime = slot_runtime(slot);
   runtime.calls.fetch_add(1U, std::memory_order_relaxed);
   if (result == kResultSuccess) {
     runtime.success.fetch_add(1U, std::memory_order_relaxed);
   } else if (result == kResultFail) {
     runtime.bad00000.fetch_add(1U, std::memory_order_relaxed);
+  } else if (result == kResultFeatureNotSupported) {
+    runtime.bad00001.fetch_add(1U, std::memory_order_relaxed);
   } else if (result == kResultPlatformError) {
     runtime.bad00002.fetch_add(1U, std::memory_order_relaxed);
   } else {
@@ -933,7 +1146,57 @@ void publish_event(const Slot slot, const void *const caller,
   event.payload.caller = reinterpret_cast<std::uintptr_t>(caller);
   event.payload.argument = reinterpret_cast<std::uintptr_t>(argument);
   event.payload.result = result;
+  event.payload.feature_index = feature_index;
+  event.payload.api = api;
   event.payload.argument_nonnull = argument != nullptr;
+  event.state.store(EventState::ready, std::memory_order_release);
+}
+
+void publish_resolver_event(const ResolverDisposition disposition,
+                            const TargetName name, const HMODULE module,
+                            const FARPROC target,
+                            const void *const caller) noexcept {
+  const std::uint64_t reserved =
+      g_resolver_events_reserved.fetch_add(1U, std::memory_order_relaxed);
+  if (reserved >= g_resolver_events.size()) {
+    g_resolver_events_dropped.fetch_add(1U, std::memory_order_relaxed);
+    return;
+  }
+
+  ResolverEvent &event =
+      g_resolver_events[static_cast<std::size_t>(reserved)];
+  EventState expected = EventState::empty;
+  if (!event.state.compare_exchange_strong(
+          expected, EventState::writing, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    g_resolver_events_dropped.fetch_add(1U, std::memory_order_relaxed);
+    return;
+  }
+
+  const auto module_value = reinterpret_cast<std::uintptr_t>(module);
+  const auto target_value = reinterpret_cast<std::uintptr_t>(target);
+  PeIdentity identity{};
+  event.payload.sequence =
+      g_event_sequence.fetch_add(1U, std::memory_order_relaxed) + 1U;
+  event.payload.tick = GetTickCount64();
+  event.payload.thread_id = GetCurrentThreadId();
+  event.payload.name = name;
+  event.payload.disposition = disposition;
+  event.payload.module = module_value;
+  event.payload.target = target_value;
+  event.payload.caller = reinterpret_cast<std::uintptr_t>(caller);
+  event.payload.mapped_identity_available =
+      read_mapped_pe_identity(module, &identity);
+  if (event.payload.mapped_identity_available) {
+    event.payload.mapped_timestamp = identity.timestamp;
+    event.payload.mapped_image_size = identity.image_size;
+    event.payload.target_rva_valid = target_value >= module_value &&
+                                     target_value - module_value <
+                                         identity.image_size;
+    if (event.payload.target_rva_valid) {
+      event.payload.target_rva = target_value - module_value;
+    }
+  }
   event.state.store(EventState::ready, std::memory_order_release);
 }
 
@@ -1072,6 +1335,66 @@ modern_parameters_wrapper(NgxParameter **parameters) {
       parameters, caller, incoming_last_error);
 }
 
+extern "C" __declspec(noinline) void __cdecl
+modern_d3d12_feature_status_detour(
+    void *core, const void *feature_path, void *feature_state,
+    const std::int32_t feature_index, void *context, const std::uint32_t api,
+    const NgxResult status) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  const auto original = reinterpret_cast<FeatureStatusRecorderFn>(
+      g_original_feature_status_recorder.load(std::memory_order_acquire));
+  if (original == nullptr) {
+    SetLastError(incoming_last_error);
+    return;
+  }
+
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  SlotRuntime &runtime = slot_runtime(Slot::modern_d3d12_feature_status);
+  const bool trace_window =
+      g_trace_enabled.load(std::memory_order_seq_cst);
+  if (trace_window) {
+    g_feature_status_detours.fetch_add(1U, std::memory_order_relaxed);
+  }
+  const bool trace_active =
+      trace_window &&
+      g_feature_status_hook_state.load(std::memory_order_acquire) == 2 &&
+      runtime.identity.load(std::memory_order_acquire) ==
+          IdentityState::verified;
+  const std::uintptr_t verified_module =
+      runtime.module.load(std::memory_order_acquire);
+  const bool gate_matches =
+      verified_module != 0U &&
+      reinterpret_cast<std::uintptr_t>(caller) ==
+          verified_module + 0x67704U &&
+      feature_index == 1 && api == 2U;
+  if (trace_active && !gate_matches) {
+    g_feature_status_gate_rejects.fetch_add(1U, std::memory_order_relaxed);
+  }
+
+  constexpr std::uint32_t mask =
+      1U << slot_index(Slot::modern_d3d12_feature_status);
+  const bool recursive = (g_active_slots & mask) != 0U;
+  if (recursive) {
+    runtime.recursion.fetch_add(1U, std::memory_order_relaxed);
+  }
+  const std::uint32_t previous_mask = g_active_slots;
+  g_active_slots |= mask;
+  const ULONGLONG start = GetTickCount64();
+  SetLastError(incoming_last_error);
+  original(core, feature_path, feature_state, feature_index, context, api,
+           status);
+  const DWORD outgoing_last_error = GetLastError();
+  const ULONGLONG duration = GetTickCount64() - start;
+  g_active_slots = previous_mask;
+  if (trace_active && gate_matches && !recursive) {
+    publish_event(Slot::modern_d3d12_feature_status, caller, context, status,
+                  duration, feature_index, api);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(outgoing_last_error);
+}
+
 namespace {
 
 FARPROC wrapper_for_slot(const Slot slot) noexcept {
@@ -1088,43 +1411,44 @@ FARPROC wrapper_for_slot(const Slot slot) noexcept {
     return reinterpret_cast<FARPROC>(&modern_capability_wrapper);
   case Slot::modern_parameters:
     return reinterpret_cast<FARPROC>(&modern_parameters_wrapper);
+  case Slot::modern_d3d12_feature_status:
+    break;
   }
   return nullptr;
 }
 
-bool find_matching_slot(const LPCSTR name, const HMODULE module,
-                        const FARPROC target, const void *const caller,
-                        Slot *const output) noexcept {
+bool find_matching_slot(const TargetName name, const HMODULE module,
+                         const FARPROC target, const void *const caller,
+                         Slot *const output) noexcept {
   if (output == nullptr) {
     return false;
   }
-  if (procedure_name_equals(name, "NVSDK_NGX_PopulateParameters")) {
+  if (name == TargetName::populate) {
     for (const Slot slot : {Slot::local_populate, Slot::cache_populate}) {
       if (mapped_slot_matches(slot, module, target) &&
-          expected_resolver_caller(slot, caller)) {
+          expected_slot_caller(slot, caller)) {
         *output = slot;
         return true;
       }
     }
     return false;
   }
-  if (procedure_name_equals(name,
-                            "NVSDK_NGX_D3D12_GetCapabilityParameters")) {
+  if (name == TargetName::capability_parameters) {
     for (const Slot slot : {Slot::legacy_capability,
                             Slot::modern_capability}) {
       if (mapped_slot_matches(slot, module, target) &&
-          expected_resolver_caller(slot, caller)) {
+          expected_slot_caller(slot, caller)) {
         *output = slot;
         return true;
       }
     }
     return false;
   }
-  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_GetParameters")) {
+  if (name == TargetName::parameters) {
     for (const Slot slot : {Slot::legacy_parameters,
                             Slot::modern_parameters}) {
       if (mapped_slot_matches(slot, module, target) &&
-          expected_resolver_caller(slot, caller)) {
+          expected_slot_caller(slot, caller)) {
         *output = slot;
         return true;
       }
@@ -1132,13 +1456,6 @@ bool find_matching_slot(const LPCSTR name, const HMODULE module,
     return false;
   }
   return false;
-}
-
-bool is_target_name(const LPCSTR name) noexcept {
-  return procedure_name_equals(name, "NVSDK_NGX_PopulateParameters") ||
-         procedure_name_equals(
-             name, "NVSDK_NGX_D3D12_GetCapabilityParameters") ||
-         procedure_name_equals(name, "NVSDK_NGX_D3D12_GetParameters");
 }
 
 FARPROC bind_slot(const Slot slot, const HMODULE module, const FARPROC target,
@@ -1161,6 +1478,11 @@ FARPROC bind_slot(const Slot slot, const HMODULE module, const FARPROC target,
                                   std::memory_order_release);
     runtime.resolver_tick.store(GetTickCount64(), std::memory_order_release);
     runtime.identity.store(IdentityState::pending, std::memory_order_release);
+    const auto ready_event = reinterpret_cast<HANDLE>(
+        g_slot_ready_event.load(std::memory_order_acquire));
+    if (ready_event != nullptr) {
+      SetEvent(ready_event);
+    }
     return wrapper_for_slot(slot);
   }
   if (expected == target_value) {
@@ -1193,17 +1515,44 @@ get_proc_address_for_caller_detour(const HMODULE module, const LPCSTR name,
     }
   } else {
     g_resolver_calls.fetch_add(1U, std::memory_order_relaxed);
-    const bool target_name = is_target_name(name);
-    if (!target_name) {
+    const TargetName target_name = classify_target_name(name);
+    if (target_name == TargetName::unknown) {
       g_name_rejects.fetch_add(1U, std::memory_order_relaxed);
     } else if (target == nullptr) {
       g_target_nulls.fetch_add(1U, std::memory_order_relaxed);
+      publish_resolver_event(ResolverDisposition::null_result, target_name,
+                             module, target, caller);
+    } else if (target_name == TargetName::d3d12_init) {
+      g_d3d12_init_passthroughs.fetch_add(1U, std::memory_order_relaxed);
+      if (caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                               0x4320CU)) {
+        g_feature_d3d12_init_lookups.fetch_add(1U,
+                                              std::memory_order_relaxed);
+        const bool hook_ready =
+            g_feature_status_hook_ready.load(std::memory_order_acquire) &&
+            g_feature_status_hook_state.load(std::memory_order_acquire) == 2 &&
+            slot_runtime(Slot::modern_d3d12_feature_status)
+                    .identity.load(std::memory_order_acquire) ==
+                IdentityState::verified;
+        int no_feature_lookup{};
+        if (g_hook_readiness_at_first_feature_init_lookup
+                .compare_exchange_strong(
+                    no_feature_lookup, hook_ready ? 2 : 1,
+                    std::memory_order_acq_rel, std::memory_order_relaxed)) {
+          g_first_feature_d3d12_init_lookup_tick.store(
+              GetTickCount64(), std::memory_order_release);
+        }
+      }
+      publish_resolver_event(ResolverDisposition::passthrough, target_name,
+                             module, target, caller);
     } else {
       Slot slot{};
-      if (find_matching_slot(name, module, target, caller, &slot)) {
+      if (find_matching_slot(target_name, module, target, caller, &slot)) {
         returned = bind_slot(slot, module, target, caller);
       } else {
         g_target_rejects.fetch_add(1U, std::memory_order_relaxed);
+        publish_resolver_event(ResolverDisposition::rejected, target_name,
+                               module, target, caller);
       }
     }
   }
@@ -1480,6 +1829,7 @@ bool expected_slot_path(const Slot slot, const std::filesystem::path &path,
                full, L"\\System32\\DriverStore\\FileRepository\\");
   case Slot::modern_capability:
   case Slot::modern_parameters:
+  case Slot::modern_d3d12_feature_status:
     return equal_path_text(path.filename().wstring(), L"_nvngx.dll") &&
            contains_ascii_case_insensitive(
                full, L"\\System32\\DriverStore\\FileRepository\\");
@@ -1556,6 +1906,196 @@ bool verify_slot_identity(const Slot slot,
   return true;
 }
 
+void mark_feature_status_hook_unavailable(const std::string &reason,
+                                          const MH_STATUS status) {
+  g_feature_status_hook_state.store(-1, std::memory_order_release);
+  write_log("trace.boundary-unavailable slot=" +
+            std::string(slot_name(Slot::modern_d3d12_feature_status)) +
+            " reason=" + reason + " status=" +
+            std::to_string(static_cast<int>(status)) +
+            " init-replayed=false mutations=0");
+}
+
+void try_install_feature_status_hook(
+    const std::filesystem::path &host_directory,
+    const std::filesystem::path &cache_path) {
+  if (!g_trace_enabled.load(std::memory_order_seq_cst)) {
+    return;
+  }
+  const int current_state =
+      g_feature_status_hook_state.load(std::memory_order_acquire);
+  if (current_state != 0) {
+    if (current_state == 2) {
+      const std::uintptr_t installed_module =
+          slot_runtime(Slot::modern_d3d12_feature_status)
+              .module.load(std::memory_order_acquire);
+      for (const Slot slot : {Slot::modern_capability,
+                              Slot::modern_parameters}) {
+        const SlotRuntime &candidate = slot_runtime(slot);
+        if (candidate.identity.load(std::memory_order_acquire) ==
+                IdentityState::verified &&
+            candidate.module.load(std::memory_order_acquire) !=
+                installed_module) {
+          int enabled = 2;
+          if (g_feature_status_hook_state.compare_exchange_strong(
+                  enabled, -1, std::memory_order_acq_rel,
+                  std::memory_order_acquire)) {
+            write_log(
+                "trace.boundary-unavailable slot=" +
+                std::string(
+                    slot_name(Slot::modern_d3d12_feature_status)) +
+                " reason=verified-modern-module-conflict "
+                "hook-retained=true trampoline-retained=true telemetry=false "
+                "init-replayed=false mutations=0");
+          }
+          break;
+        }
+      }
+    }
+    return;
+  }
+
+  std::uintptr_t modern_module{};
+  for (const Slot slot : {Slot::modern_capability, Slot::modern_parameters}) {
+    const SlotRuntime &runtime = slot_runtime(slot);
+    if (runtime.identity.load(std::memory_order_acquire) !=
+        IdentityState::verified) {
+      continue;
+    }
+    const std::uintptr_t candidate =
+        runtime.module.load(std::memory_order_acquire);
+    if (candidate == 0U) {
+      continue;
+    }
+    if (modern_module != 0U && modern_module != candidate) {
+      int expected = 0;
+      if (g_feature_status_hook_state.compare_exchange_strong(
+              expected, -1, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        write_log("trace.boundary-unavailable slot=" +
+                  std::string(
+                      slot_name(Slot::modern_d3d12_feature_status)) +
+                  " reason=verified-modern-module-conflict status=unavailable "
+                  "init-replayed=false mutations=0");
+      }
+      return;
+    }
+    modern_module = candidate;
+  }
+  if (modern_module == 0U) {
+    return;
+  }
+
+  int expected = 0;
+  if (!g_feature_status_hook_state.compare_exchange_strong(
+          expected, 1, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return;
+  }
+
+  SlotRuntime &runtime = slot_runtime(Slot::modern_d3d12_feature_status);
+  const std::uintptr_t target =
+      modern_module + expected_rva(Slot::modern_d3d12_feature_status);
+  runtime.target.store(target, std::memory_order_release);
+  runtime.module.store(modern_module, std::memory_order_release);
+  runtime.resolver_caller.store(modern_module + 0x67704U,
+                                std::memory_order_release);
+  runtime.resolver_tick.store(GetTickCount64(), std::memory_order_release);
+  runtime.resolves.store(1U, std::memory_order_release);
+  runtime.identity.store(IdentityState::pending, std::memory_order_release);
+
+  try {
+    if (!verify_slot_identity(Slot::modern_d3d12_feature_status,
+                              host_directory, cache_path)) {
+      mark_feature_status_hook_unavailable("identity-rejected", MH_UNKNOWN);
+      return;
+    }
+  } catch (...) {
+    runtime.identity.store(IdentityState::rejected, std::memory_order_release);
+    mark_feature_status_hook_unavailable("identity-verification-exception",
+                                         MH_UNKNOWN);
+    return;
+  }
+
+  void *trampoline{};
+  const MH_STATUS create = MH_CreateHook(
+      reinterpret_cast<void *>(target),
+      reinterpret_cast<void *>(&modern_d3d12_feature_status_detour),
+      &trampoline);
+  if (create != MH_OK) {
+    mark_feature_status_hook_unavailable("hook-create", create);
+    return;
+  }
+  if (trampoline == nullptr) {
+    const MH_STATUS remove = MH_RemoveHook(reinterpret_cast<void *>(target));
+    mark_feature_status_hook_unavailable(
+        "hook-create-null-trampoline-remove-" +
+            std::to_string(static_cast<int>(remove)),
+        MH_UNKNOWN);
+    return;
+  }
+  g_original_feature_status_recorder.store(
+      reinterpret_cast<std::uintptr_t>(trampoline), std::memory_order_release);
+
+  const MH_STATUS queue =
+      MH_QueueEnableHook(reinterpret_cast<void *>(target));
+  if (queue != MH_OK) {
+    g_original_feature_status_recorder.store(0U, std::memory_order_release);
+    const MH_STATUS remove = MH_RemoveHook(reinterpret_cast<void *>(target));
+    mark_feature_status_hook_unavailable(
+        "hook-queue-remove-" + std::to_string(static_cast<int>(remove)), queue);
+    return;
+  }
+
+  const ULONGLONG attempt_tick = GetTickCount64();
+  // Publish enabled before applying: once the detour can execute, its original
+  // trampoline and strict observation gate are already fully initialized.
+  g_feature_status_hook_state.store(2, std::memory_order_release);
+  const MH_STATUS apply = MH_ApplyQueued();
+  if (apply != MH_OK) {
+    g_feature_status_hook_state.store(-1, std::memory_order_release);
+    write_log(
+        "trace.boundary-unavailable slot=" +
+        std::string(slot_name(Slot::modern_d3d12_feature_status)) +
+        " reason=hook-apply status=" +
+        std::to_string(static_cast<int>(apply)) +
+        " hook-retained=true trampoline-retained=true telemetry=false "
+        "init-replayed=false mutations=0");
+    return;
+  }
+
+  const ULONGLONG ready_tick = GetTickCount64();
+  g_feature_status_hook_tick.store(ready_tick, std::memory_order_relaxed);
+  g_feature_status_hook_ready.store(true, std::memory_order_release);
+
+  write_log(
+      "trace.boundary-ready slot=" +
+      std::string(slot_name(Slot::modern_d3d12_feature_status)) +
+      " target=_nvngx.dll+0x264E0 expected-caller=_nvngx.dll+0x67704 "
+      "feature-index=1 api=2 apply-attempt-tick=" +
+      std::to_string(attempt_tick) + " ready-tick=" +
+      std::to_string(ready_tick) +
+      " init-proxied=false init-replayed=false mutations=0");
+}
+
+void try_install_feature_status_hook_guarded(
+    const std::filesystem::path &host_directory,
+    const std::filesystem::path &cache_path) noexcept {
+  try {
+    try_install_feature_status_hook(host_directory, cache_path);
+  } catch (...) {
+    g_feature_status_hook_state.store(-1, std::memory_order_release);
+    try {
+      write_log(
+          "trace.boundary-unavailable slot=" +
+          std::string(slot_name(Slot::modern_d3d12_feature_status)) +
+          " reason=unexpected-install-exception hook-retained=true "
+          "telemetry=false init-replayed=false mutations=0");
+    } catch (...) {
+    }
+  }
+}
+
 std::string address_origin(const std::uintptr_t address) {
   if (address == 0U) {
     return "unavailable";
@@ -1580,17 +2120,73 @@ void drain_slot_events(const Slot slot) {
       continue;
     }
     const TraceEventPayload payload = event.payload;
-    write_log("trace.call sequence=" + std::to_string(payload.sequence) +
-              " slot=" + slot_name(slot) + " identity=" +
-              identity_name(runtime.identity.load(std::memory_order_acquire)) +
-              " hit-tick=" + std::to_string(payload.tick) + " hit-tid=" +
-              std::to_string(payload.thread_id) + " caller=" +
-              address_origin(payload.caller) + " caller-address=" +
-              hexadecimal(payload.caller) + " argument-nonnull=" +
-              (payload.argument_nonnull ? "true" : "false") +
-              " argument=" + hexadecimal(payload.argument) + " result=" +
-              hexadecimal(payload.result) + " duration-ms=" +
-              std::to_string(payload.duration_ticks) + " mutated=false");
+    const std::string prefix =
+        "trace.call sequence=" + std::to_string(payload.sequence) +
+        " slot=" + slot_name(slot) + " identity=" +
+        identity_name(runtime.identity.load(std::memory_order_acquire)) +
+        " hit-tick=" + std::to_string(payload.tick) + " hit-tid=" +
+        std::to_string(payload.thread_id) + " caller=" +
+        address_origin(payload.caller) + " caller-address=" +
+        hexadecimal(payload.caller);
+    if (is_feature_status_slot(slot)) {
+      write_log(prefix + " feature-index=" +
+                std::to_string(payload.feature_index) + " api=" +
+                std::to_string(payload.api) + " context-nonnull=" +
+                (payload.argument_nonnull ? "true" : "false") +
+                " status=" + hexadecimal(payload.result) + " status-name=" +
+                ngx_result_name(payload.result) + " failed=" +
+                (((payload.result & 0xFFF00000U) == 0xBAD00000U) ? "true"
+                                                                : "false") +
+                " duration-ms=" +
+                std::to_string(payload.duration_ticks) + " mutated=false");
+    } else {
+      write_log(prefix + " argument-nonnull=" +
+                (payload.argument_nonnull ? "true" : "false") +
+                " argument=" + hexadecimal(payload.argument) + " result=" +
+                hexadecimal(payload.result) + " duration-ms=" +
+                std::to_string(payload.duration_ticks) + " mutated=false");
+    }
+    event.state.store(EventState::logged, std::memory_order_release);
+  }
+}
+
+void drain_resolver_events() {
+  for (ResolverEvent &event : g_resolver_events) {
+    if (event.state.load(std::memory_order_acquire) != EventState::ready) {
+      continue;
+    }
+    const ResolverEventPayload payload = event.payload;
+    std::filesystem::path path;
+    MEMORY_BASIC_INFORMATION information{};
+    if (payload.module != 0U &&
+        VirtualQuery(reinterpret_cast<const void *>(payload.module),
+                     &information, sizeof(information)) == sizeof(information) &&
+        information.Type == MEM_IMAGE &&
+        reinterpret_cast<std::uintptr_t>(information.AllocationBase) ==
+            payload.module) {
+      path = module_path(reinterpret_cast<HMODULE>(payload.module));
+    }
+    write_log(
+        "trace.resolver-event sequence=" + std::to_string(payload.sequence) +
+        " disposition=" + resolver_disposition_text(payload.disposition) +
+        " name=" + target_name_text(payload.name) + " hit-tick=" +
+        std::to_string(payload.tick) + " hit-tid=" +
+        std::to_string(payload.thread_id) + " module=" +
+        hexadecimal(payload.module) + " module-file=" +
+        (path.empty() ? "unavailable" : utf8(path.filename().wstring())) +
+        " mapped-timestamp=" +
+        (payload.mapped_identity_available
+             ? hexadecimal(payload.mapped_timestamp)
+             : "unavailable") +
+        " mapped-size-of-image=" +
+        (payload.mapped_identity_available
+             ? hexadecimal(payload.mapped_image_size)
+             : "unavailable") +
+        " target=" + hexadecimal(payload.target) + " target-rva=" +
+        (payload.target_rva_valid ? hexadecimal(payload.target_rva)
+                                  : "unavailable") +
+        " caller=" + address_origin(payload.caller) + " caller-address=" +
+        hexadecimal(payload.caller) + " returned-original=true mutations=0");
     event.state.store(EventState::logged, std::memory_order_release);
   }
 }
@@ -1723,7 +2319,7 @@ bool verify_host_disk_identity(const std::filesystem::path &host_path) {
 void verify_pending_slot_identities(
     const std::filesystem::path &host_directory,
     const std::filesystem::path &cache_path) noexcept {
-  for (const Slot slot : kAllSlots) {
+  for (const Slot slot : kIdentityVerificationOrder) {
     if (slot_runtime(slot).identity.load(std::memory_order_acquire) !=
         IdentityState::pending) {
       continue;
@@ -1736,6 +2332,12 @@ void verify_pending_slot_identities(
       write_log("trace.identity slot=" + std::string(slot_name(slot)) +
                 " state=rejected reason=unexpected-verification-exception "
                 "mutations=0");
+    }
+    if ((slot == Slot::modern_capability ||
+         slot == Slot::modern_parameters) &&
+        slot_runtime(slot).identity.load(std::memory_order_acquire) ==
+            IdentityState::verified) {
+      try_install_feature_status_hook_guarded(host_directory, cache_path);
     }
   }
 }
@@ -1751,20 +2353,34 @@ void log_slot_summary(const Slot slot) {
   const auto target = runtime.target.load(std::memory_order_acquire);
   const auto module = runtime.module.load(std::memory_order_acquire);
   const auto caller = runtime.resolver_caller.load(std::memory_order_acquire);
+  const std::string binding =
+      is_feature_status_slot(slot)
+          ? " boundary-installs=" +
+                std::to_string(
+                    runtime.resolves.load(std::memory_order_relaxed)) +
+                " first-boundary-bind-tick=" +
+                std::to_string(
+                    runtime.resolver_tick.load(std::memory_order_relaxed)) +
+                " expected-caller=" + address_origin(caller)
+          : " resolves=" +
+                std::to_string(
+                    runtime.resolves.load(std::memory_order_relaxed)) +
+                " first-resolve-tick=" +
+                std::to_string(
+                    runtime.resolver_tick.load(std::memory_order_relaxed)) +
+                " resolver-caller=" + address_origin(caller);
   write_log(
       "trace.summary slot=" + std::string(slot_name(slot)) + " identity=" +
       identity_name(runtime.identity.load(std::memory_order_acquire)) +
       " module=" + hexadecimal(module) + " target=" + hexadecimal(target) +
-      " resolves=" +
-      std::to_string(runtime.resolves.load(std::memory_order_relaxed)) +
-      " first-resolve-tick=" +
-      std::to_string(runtime.resolver_tick.load(std::memory_order_relaxed)) +
-      " resolver-caller=" + address_origin(caller) + " calls=" +
+      binding + " calls=" +
       std::to_string(runtime.calls.load(std::memory_order_relaxed)) +
       " success=" +
       std::to_string(runtime.success.load(std::memory_order_relaxed)) +
       " bad00000=" +
       std::to_string(runtime.bad00000.load(std::memory_order_relaxed)) +
+      " bad00001=" +
+      std::to_string(runtime.bad00001.load(std::memory_order_relaxed)) +
       " bad00002=" +
       std::to_string(runtime.bad00002.load(std::memory_order_relaxed)) +
       " other=" +
@@ -1802,7 +2418,9 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
 
   for (;;) {
     verify_pending_slot_identities(host_directory, cache_path);
+    try_install_feature_status_hook_guarded(host_directory, cache_path);
     drain_all_slot_events();
+    drain_resolver_events();
     const ULONGLONG now = GetTickCount64();
     if (now >= next_census) {
       try {
@@ -1820,9 +2438,16 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
       break;
     }
     const ULONGLONG remaining = kTraceDurationMilliseconds - elapsed;
-    Sleep(remaining < kTracePollMilliseconds
-              ? static_cast<DWORD>(remaining)
-              : kTracePollMilliseconds);
+    const DWORD wait_milliseconds =
+        remaining < kTracePollMilliseconds
+            ? static_cast<DWORD>(remaining)
+            : kTracePollMilliseconds;
+    const auto ready_event = reinterpret_cast<HANDLE>(
+        g_slot_ready_event.load(std::memory_order_acquire));
+    if (ready_event == nullptr ||
+        WaitForSingleObject(ready_event, wait_milliseconds) == WAIT_FAILED) {
+      Sleep(wait_milliseconds);
+    }
   }
 
   const bool quiesced = close_trace_phase();
@@ -1831,6 +2456,7 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
             " hook-retained=true");
   verify_pending_slot_identities(host_directory, cache_path);
   drain_all_slot_events();
+  drain_resolver_events();
   try {
     census_modules(census);
   } catch (...) {
@@ -1844,6 +2470,27 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
 
   const std::uint64_t before_ready =
       g_resolver_before_ready.load(std::memory_order_relaxed);
+  const std::uint64_t feature_init_tick =
+      g_first_feature_d3d12_init_lookup_tick.load(std::memory_order_relaxed);
+  const std::uint64_t status_hook_tick =
+      g_feature_status_hook_tick.load(std::memory_order_relaxed);
+  const int status_hook_state =
+      g_feature_status_hook_state.load(std::memory_order_acquire);
+  const int first_lookup_readiness =
+      g_hook_readiness_at_first_feature_init_lookup.load(
+          std::memory_order_acquire);
+  const char *status_coverage = "inconclusive";
+  if (slot_runtime(Slot::modern_d3d12_feature_status)
+          .calls.load(std::memory_order_relaxed) != 0U) {
+    status_coverage = "target-status-observed";
+  } else if (status_hook_state == 2 && first_lookup_readiness == 0) {
+    status_coverage = "armed-no-feature-init-lookup";
+  } else if (status_hook_state == 2 && first_lookup_readiness == 2) {
+    status_coverage = "armed-before-feature-init-lookup";
+  } else if (status_hook_state == 2 && first_lookup_readiness == 1) {
+    status_coverage =
+        "armed-after-first-init-lookup-call-coverage-inconclusive";
+  }
   write_log(
       "trace.complete duration-ms=" +
       std::to_string(GetTickCount64() - start) + " census-modules=" +
@@ -1855,6 +2502,30 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
       std::to_string(g_target_nulls.load(std::memory_order_relaxed)) +
       " target-identity-or-caller-rejects=" +
       std::to_string(g_target_rejects.load(std::memory_order_relaxed)) +
+      " resolver-events-dropped=" +
+      std::to_string(
+          g_resolver_events_dropped.load(std::memory_order_relaxed)) +
+      " d3d12-init-passthrough-lookups=" +
+      std::to_string(
+          g_d3d12_init_passthroughs.load(std::memory_order_relaxed)) +
+      " feature-d3d12-init-lookups=" +
+      std::to_string(
+          g_feature_d3d12_init_lookups.load(std::memory_order_relaxed)) +
+      " first-feature-d3d12-init-lookup-tick=" +
+      std::to_string(feature_init_tick) +
+      " hook-readiness-at-first-feature-init-lookup=" +
+      std::to_string(first_lookup_readiness) +
+      " feature-status-hook=" +
+      feature_status_hook_state_name(status_hook_state) +
+      " feature-status-ready-tick=" +
+      std::to_string(status_hook_tick) +
+      " feature-status-coverage=" + status_coverage +
+      " feature-status-detours=" +
+      std::to_string(
+          g_feature_status_detours.load(std::memory_order_relaxed)) +
+      " feature-status-gate-rejects=" +
+      std::to_string(
+          g_feature_status_gate_rejects.load(std::memory_order_relaxed)) +
       " resolver-calls-before-ready=" + std::to_string(before_ready) +
       " quiesced=" + (quiesced ? "true" : "false") +
       " coverage=" +
@@ -1878,9 +2549,16 @@ DWORD WINAPI trace_worker(void *) noexcept {
     }
 
     open_log();
+    const HANDLE ready_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (ready_event != nullptr) {
+      g_slot_ready_event.store(reinterpret_cast<std::uintptr_t>(ready_event),
+                               std::memory_order_release);
+    }
     write_log(
-        "trace.start version=0.4.0 mode=ngx-resolver-boundary-observer "
-        "expected-loader=mo2-force-load mutations=0 attach-to-worker-ms=" +
+        "trace.start version=0.4.1 mode=ngx-d3d12-status-boundary-observer "
+        "expected-loader=mo2-force-load slot-wake-event=" +
+        std::string(ready_event != nullptr ? "true" : "false") +
+        " mutations=0 attach-to-worker-ms=" +
         std::to_string(GetTickCount64() - g_attach_tick));
 
     std::filesystem::path host_path;
