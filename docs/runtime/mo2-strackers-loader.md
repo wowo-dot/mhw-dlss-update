@@ -1,7 +1,8 @@
 # MO2 and Stracker's Loader deployment
 
-Status: staging into the dedicated `dlssTEST` MO2 mod is authorized. Keep the
-mod disabled after staging; no in-game run has been performed.
+Status: the bounded Stracker timing diagnostic proved that Stracker's native
+plugin pass occurs after NVIDIA's MHW cache feature is loaded. The current
+v0.4 NGX resolver-boundary observer therefore uses MO2 Force Load instead.
 
 ## Layout
 
@@ -27,6 +28,28 @@ The only installed payload is:
         └── mhw_dlss_probe.dll
 ```
 
+The RTX 5090 resolver observer is installed separately:
+
+```powershell
+cmake --install build --config RelWithDebInfo `
+  --prefix '<MO2-instance>/mods/dlssTEST' `
+  --component unlock
+```
+
+Its physical layout is intentionally outside Stracker's plugin directory:
+
+```text
+<MO2-instance>/mods/dlssTEST/
+└── mhw_dlss_unlock.dll
+```
+
+Configure that physical DLL as an MO2 forced library only for the dedicated
+MHW test executable. MO2 injects forced libraries before original game code;
+Stracker's `nativePC/plugins` scan is too late. Do not enable the global Force
+Load switch while stale LuaEngine rules remain individually enabled. Disable
+those rules or create a dedicated executable entry containing only this
+observer, then enable Force Load for that entry.
+
 Before installing, preserve any pre-existing file at that exact destination.
 The probe must remain a distinct MO2 mod. Do not copy it over
 `nvngx_dlss.dll`, `dinput8.dll`, `loader.dll`, the game executable, or another
@@ -35,10 +58,15 @@ plugin. The install must not write to the physical game directory.
 Staging ends after verifying that the expected DLL is present in the disabled
 `dlssTEST` mod. Do not enable the mod or launch the game as part of staging.
 
-The probe is process-lifetime-only. This deployment assumes Stracker's Loader
-retains each loaded plugin module until process exit; do not hot-unload or
-hot-reload it. Disabling the MO2 mod takes effect on the next launch, after MHW
-has exited completely.
+Both diagnostic DLLs pin themselves until process exit; do not hot-unload or
+hot-reload them. The v0.4 resolver observer stops binding and recording after
+its bounded window, while its retained resolver hook and any issued wrappers
+continue as pass-through calls. Disabling the MO2 mod takes effect on the next
+launch, after MHW has exited completely.
+
+The separate RTX 50-series resolver experiment is documented in
+[`rtx50-unlock-test.md`](rtx50-unlock-test.md). Do not run the Stracker
+lifecycle probe and Force Load resolver observer together for its first test.
 
 ## Staged test protocol
 

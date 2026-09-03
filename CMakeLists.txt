@@ -44,11 +44,41 @@ set_target_properties(mhw_dlss_probe PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+add_library(mhw_dlss_unlock SHARED
+    src/trace/dllmain.cpp
+)
+
+target_compile_features(mhw_dlss_unlock PRIVATE cxx_std_20)
+target_compile_definitions(mhw_dlss_unlock PRIVATE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+target_link_libraries(mhw_dlss_unlock PRIVATE minhook bcrypt dxgi version shell32 ole32)
+
+if(MSVC)
+    target_compile_options(mhw_dlss_unlock PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /guard:cf)
+    target_link_options(mhw_dlss_unlock PRIVATE /guard:cf /OPT:NOICF)
+endif()
+
+set_target_properties(mhw_dlss_unlock PROPERTIES
+    OUTPUT_NAME "mhw_dlss_unlock"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # `cmake --install --prefix <MO2 mod directory>` creates the exact virtual
 # layout consumed by Stracker's Loader without touching the game installation.
 install(TARGETS mhw_dlss_probe
     RUNTIME DESTINATION "nativePC/plugins"
     COMPONENT probe
+)
+
+install(TARGETS mhw_dlss_unlock
+    # This observer must be configured as an MO2 forced library so its resolver
+    # hook is installed before the game's first NGX export lookup.
+    RUNTIME DESTINATION "."
+    COMPONENT unlock
 )
 
 include(CTest)
@@ -78,6 +108,22 @@ if(BUILD_TESTING)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
     add_dependencies(probe_mock_host mhw_dlss_probe probe_mock_feature)
+
+    add_executable(unlock_policy_tests
+        tests/unlock_policy_tests.cpp
+        src/unlock/unlock_policy.cpp
+        src/unlock/unlock_policy.hpp
+    )
+    target_compile_features(unlock_policy_tests PRIVATE cxx_std_20)
+    target_include_directories(unlock_policy_tests PRIVATE src/unlock)
+    if(MSVC)
+        target_compile_options(unlock_policy_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    endif()
+    set_target_properties(unlock_policy_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME unlock_policy_tests COMMAND unlock_policy_tests)
+
     add_test(
         NAME probe_mock_host
         COMMAND probe_mock_host
