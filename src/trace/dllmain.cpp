@@ -7,12 +7,19 @@
 #include <tlhelp32.h>
 #include <MinHook.h>
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+#include "../bridge_probe/bridge_policy.hpp"
+#include "../bridge_probe/contract_snapshot.hpp"
+#include <d3d12.h>
+#endif
+
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,6 +30,10 @@
 #endif
 
 namespace {
+
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+namespace bridge = mhw::bridge_probe;
+#endif
 
 using NgxResult = std::uint32_t;
 using NgxParameter = void;
@@ -36,9 +47,39 @@ using FeatureStatusRecorderFn = void(__cdecl *)(
     NgxResult);
 using GetProcAddressForCallerFn = FARPROC(WINAPI *)(HMODULE, LPCSTR, void *);
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+using Feature = std::int32_t;
+using BridgeInitFn = NgxResult(__cdecl *)(std::uint64_t, const wchar_t *,
+                                         ID3D12Device *, std::uint32_t);
+using BridgeScratchFn = NgxResult(__cdecl *)(Feature, const NgxParameter *,
+                                            std::size_t *);
+using BridgeCreateFn = NgxResult(__cdecl *)(ID3D12GraphicsCommandList *,
+                                           Feature, const NgxParameter *,
+                                           void **);
+using BridgeProgressCallback = void(__cdecl *)(float, bool &);
+using BridgeEvaluateFn = NgxResult(__cdecl *)(ID3D12GraphicsCommandList *,
+                                             const void *,
+                                             const NgxParameter *,
+                                             BridgeProgressCallback);
+using BridgeReleaseFn = NgxResult(__cdecl *)(void *);
+using BridgeShutdownFn = NgxResult(__cdecl *)();
+using ParameterGetIntFn = NgxResult(__cdecl *)(NgxParameter *, const char *,
+                                              std::int32_t *);
+using ParameterGetUIntFn = NgxResult(__cdecl *)(NgxParameter *, const char *,
+                                               std::uint32_t *);
+using ParameterGetFloatFn = NgxResult(__cdecl *)(NgxParameter *, const char *,
+                                                float *);
+using ParameterGetResourceFn = NgxResult(__cdecl *)(NgxParameter *,
+                                                   const char *,
+                                                   ID3D12Resource **);
+#endif
+
 constexpr std::size_t kHashBufferSize = 1U << 20U;
 constexpr std::uint64_t kMaximumHashedFileSize = 128ULL << 20U;
 constexpr DWORD kTraceDurationMilliseconds = 30'000U;
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+constexpr DWORD kBridgeTraceDurationMilliseconds = 300'000U;
+#endif
 constexpr DWORD kTracePollMilliseconds = 25U;
 constexpr DWORD kCensusIntervalMilliseconds = 250U;
 constexpr DWORD kQuiesceTimeoutMilliseconds = 5'000U;
@@ -51,6 +92,17 @@ constexpr std::uint32_t kResultSuccess = 0x00000001U;
 constexpr std::uint32_t kResultFail = 0xBAD00000U;
 constexpr std::uint32_t kResultFeatureNotSupported = 0xBAD00001U;
 constexpr std::uint32_t kResultPlatformError = 0xBAD00002U;
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+constexpr std::uint32_t kResultInvalidParameter = 0xBAD00005U;
+constexpr std::uint32_t kResultNotInitialized = 0xBAD00007U;
+constexpr std::uint32_t kResultNotImplemented = 0xBAD00012U;
+constexpr std::uint64_t kExpectedApplicationId = 0x0B9D2F5CULL;
+constexpr std::uint64_t kOneEvaluateToken = 0x000000010000B12DULL;
+constexpr std::uint32_t kExpectedBridgeSdkVersion = 0x0001010DU;
+constexpr std::size_t kExpectedScratchBufferSize = 0x00300000U;
+constexpr std::size_t kMaximumDriverStoreDirectories = 16'384U;
+constexpr std::size_t kResolverPathCapacity = 1'024U;
+#endif
 constexpr std::uint32_t kExpectedHostTimestamp = 0x66D13CB6U;
 constexpr std::uint64_t kExpectedHostPreferredImageBase = 0x140000000ULL;
 constexpr std::uint32_t kExpectedHostImageSize = 0x55D3000U;
@@ -113,6 +165,27 @@ constexpr std::array<unsigned char, 28> kModernFeatureStatusPrologue{
     0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x18, 0xFA, 0xFF,
     0xFF, 0x48, 0x81, 0xEC, 0xE8, 0x06, 0x00, 0x00};
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+constexpr std::array<unsigned char, 16> kCacheShutdownPrologue{
+    0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0x3D, 0x34,
+    0xBA, 0xB2, 0x00, 0x00, 0x75, 0x0A, 0xB8, 0x07};
+constexpr std::array<unsigned char, 16> kCacheScratchPrologue{
+    0x48, 0x83, 0x3D, 0xD8, 0xB9, 0xB2, 0x00, 0x00,
+    0x75, 0x06, 0xB8, 0x07, 0x00, 0xD0, 0xBA, 0xC3};
+constexpr std::array<unsigned char, 16> kCacheCreatePrologue{
+    0x48, 0x83, 0x3D, 0xA8, 0xB9, 0xB2, 0x00, 0x00,
+    0x75, 0x06, 0xB8, 0x07, 0x00, 0xD0, 0xBA, 0xC3};
+constexpr std::array<unsigned char, 16> kCacheReleasePrologue{
+    0x48, 0x83, 0x3D, 0x88, 0xB9, 0xB2, 0x00, 0x00,
+    0x75, 0x06, 0xB8, 0x07, 0x00, 0xD0, 0xBA, 0xC3};
+constexpr std::array<unsigned char, 16> kCacheEvaluatePrologue{
+    0x48, 0x83, 0xEC, 0x38, 0x48, 0x83, 0x3D, 0x64,
+    0xB9, 0xB2, 0x00, 0x00, 0x75, 0x0A, 0xB8, 0x07};
+constexpr std::array<unsigned char, 16> kCacheInitPrologue{
+    0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x81,
+    0xEC, 0x60, 0x02, 0x00, 0x00, 0x48, 0x8B, 0x05};
+#endif
+
 enum class Slot : std::uint32_t {
   local_populate,
   cache_populate,
@@ -149,12 +222,29 @@ enum class TargetName : std::uint32_t {
   d3d12_init,
   capability_parameters,
   parameters,
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  d3d12_scratch,
+  d3d12_create,
+  d3d12_evaluate,
+  d3d12_evaluate_c,
+  d3d12_release,
+  d3d12_shutdown,
+  d3d12_shutdown1,
+  d3d12_create1,
+  d3d12_init_ext,
+  d3d12_init_ext1,
+  d3d12_init_ext2,
+  d3d12_populate_parameters_impl,
+  d3d12_populate_device_parameters_impl,
+#endif
 };
 
 enum class ResolverDisposition : std::uint32_t {
   passthrough,
+  substituted,
   rejected,
   null_result,
+  guarded_null,
 };
 
 enum class IdentityState : std::uint32_t {
@@ -238,6 +328,38 @@ struct ResolverEvent {
   ResolverEventPayload payload{};
 };
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+inline constexpr std::size_t kBridgeEventCapacity = 16U;
+
+struct BridgeEventPayload {
+  std::uint64_t sequence{};
+  ULONGLONG tick{};
+  DWORD thread_id{};
+  bridge::ExportId export_id{bridge::ExportId::unknown};
+  std::uintptr_t caller{};
+  NgxResult result{};
+  bridge::LifecycleState before{bridge::LifecycleState::disabled};
+  bridge::LifecycleState after{bridge::LifecycleState::disabled};
+  bridge::TransitionDecision decision{bridge::TransitionDecision::mode_disabled};
+  bridge::BoundaryResponse response{bridge::BoundaryResponse::fail_closed};
+  std::uint64_t token{};
+  std::uint64_t argument0{};
+  std::uint64_t argument1{};
+  bool capture_committed{};
+  bool d3d12_object_verified{};
+  bool observation_only{};
+  bool has_create_snapshot{};
+  bool has_evaluate_snapshot{};
+  bridge::CreateContractSnapshot create_snapshot{};
+  bridge::EvaluateContractSnapshot evaluate_snapshot{};
+};
+
+struct BridgeEvent {
+  std::atomic<EventState> state{EventState::empty};
+  BridgeEventPayload payload{};
+};
+#endif
+
 static_assert(std::atomic<std::uintptr_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<EventState>::is_always_lock_free);
@@ -274,6 +396,53 @@ std::atomic<bool> g_feature_status_hook_ready{};
 std::atomic<std::uint64_t> g_feature_status_detours{};
 std::atomic<std::uint64_t> g_feature_status_gate_rejects{};
 std::atomic<std::uintptr_t> g_slot_ready_event{};
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+std::array<BridgeEvent, kBridgeEventCapacity> g_bridge_events{};
+std::atomic<std::uint32_t> g_bridge_events_reserved{};
+std::atomic<std::uint32_t> g_bridge_events_dropped{};
+std::atomic<std::uint64_t> g_bridge_routes{};
+std::atomic<std::uint64_t> g_bridge_route_rejects{};
+std::atomic<std::uint64_t> g_bridge_guard_lookups{};
+std::atomic<std::uint64_t> g_bridge_guard_rejects{};
+std::atomic<std::uint64_t> g_bridge_guard_suppressions{};
+std::atomic<std::uint64_t> g_bridge_callback_routes{};
+std::atomic<bool> g_bridge_cache_ready{};
+std::atomic<bool> g_bridge_environment_ready{};
+// 0=not armed, 1=exact transaction armed, -1=intercepted then rejected,
+// -2=Init lookup missed; this run remains entirely pass-through/inconclusive.
+std::atomic<int> g_bridge_route_state{};
+std::atomic<bool> g_bridge_ever_armed{};
+std::atomic<bool> g_bridge_interception_started{};
+std::atomic<std::uintptr_t> g_bridge_cache_base{};
+std::atomic<std::uintptr_t> g_bridge_modern_core_base{};
+std::atomic<std::uint32_t> g_bridge_route_mask{};
+std::atomic<std::uint32_t> g_bridge_lookup_seen_mask{};
+std::atomic<bool> g_bridge_lookup_transaction_complete{};
+std::atomic<DWORD> g_bridge_route_thread_id{};
+std::atomic<bool> g_bridge_init_succeeded{};
+std::atomic<bool> g_bridge_token_issued{};
+std::atomic<std::uint64_t> g_bridge_scratch_calls{};
+std::atomic<std::uintptr_t> g_bridge_first_scratch_caller{};
+std::atomic<NgxResult> g_bridge_last_scratch_result{};
+// 0=idle, 1=owned/clean, 2=owned/poisoned, 3=idle/poisoned. A contender
+// poisons the active transaction instead of waiting through foreign callbacks.
+std::atomic<std::uint32_t> g_bridge_boundary_state{};
+std::atomic<std::uint64_t> g_bridge_boundary_contentions{};
+std::atomic<std::uintptr_t> g_parameter_get_int{};
+std::atomic<std::uintptr_t> g_parameter_get_uint{};
+std::atomic<std::uintptr_t> g_parameter_get_float{};
+std::atomic<std::uintptr_t> g_parameter_get_resource{};
+std::atomic<std::uint32_t> g_expected_cache_path_length{};
+wchar_t g_expected_cache_path[32'768]{};
+std::atomic<std::uint32_t> g_expected_modern_core_path_length{};
+wchar_t g_expected_modern_core_path[32'768]{};
+SRWLOCK g_bridge_lifecycle_lock = SRWLOCK_INIT;
+SRWLOCK g_bridge_route_lock = SRWLOCK_INIT;
+std::atomic<bridge::Mode> g_bridge_mode{bridge::Mode::disabled};
+bridge::OneShotLifecycle g_bridge_lifecycle{};
+bridge::CaptureState g_bridge_capture_state{};
+constinit const std::uint64_t g_bridge_token_storage{kOneEvaluateToken};
+#endif
 HMODULE g_self{};
 ULONGLONG g_attach_tick{};
 thread_local std::uint32_t g_active_slots{};
@@ -321,6 +490,34 @@ const char *target_name_text(const TargetName name) noexcept {
     return "NVSDK_NGX_D3D12_GetCapabilityParameters";
   case TargetName::parameters:
     return "NVSDK_NGX_D3D12_GetParameters";
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  case TargetName::d3d12_scratch:
+    return "NVSDK_NGX_D3D12_GetScratchBufferSize";
+  case TargetName::d3d12_create:
+    return "NVSDK_NGX_D3D12_CreateFeature";
+  case TargetName::d3d12_evaluate:
+    return "NVSDK_NGX_D3D12_EvaluateFeature";
+  case TargetName::d3d12_evaluate_c:
+    return "NVSDK_NGX_D3D12_EvaluateFeature_C";
+  case TargetName::d3d12_release:
+    return "NVSDK_NGX_D3D12_ReleaseFeature";
+  case TargetName::d3d12_shutdown:
+    return "NVSDK_NGX_D3D12_Shutdown";
+  case TargetName::d3d12_shutdown1:
+    return "NVSDK_NGX_D3D12_Shutdown1";
+  case TargetName::d3d12_create1:
+    return "NVSDK_NGX_D3D12_CreateFeature1";
+  case TargetName::d3d12_init_ext:
+    return "NVSDK_NGX_D3D12_Init_Ext";
+  case TargetName::d3d12_init_ext1:
+    return "NVSDK_NGX_D3D12_Init_Ext1";
+  case TargetName::d3d12_init_ext2:
+    return "NVSDK_NGX_D3D12_Init_Ext2";
+  case TargetName::d3d12_populate_parameters_impl:
+    return "NVSDK_NGX_D3D12_PopulateParameters_Impl";
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return "NVSDK_NGX_D3D12_PopulateDeviceParameters_Impl";
+#endif
   case TargetName::unknown:
     break;
   }
@@ -332,10 +529,14 @@ const char *resolver_disposition_text(
   switch (disposition) {
   case ResolverDisposition::passthrough:
     return "passthrough";
+  case ResolverDisposition::substituted:
+    return "substituted";
   case ResolverDisposition::rejected:
     return "rejected";
   case ResolverDisposition::null_result:
     return "null-result";
+  case ResolverDisposition::guarded_null:
+    return "guarded-null";
   }
   return "unknown";
 }
@@ -416,6 +617,107 @@ const char *ngx_result_name(const NgxResult result) noexcept {
   }
 }
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+const char *bridge_state_text(const bridge::LifecycleState state) noexcept {
+  switch (state) {
+  case bridge::LifecycleState::disabled:
+    return "disabled";
+  case bridge::LifecycleState::awaiting_verification:
+    return "awaiting-verification";
+  case bridge::LifecycleState::verified:
+    return "verified";
+  case bridge::LifecycleState::initialized:
+    return "initialized";
+  case bridge::LifecycleState::populated:
+    return "populated";
+  case bridge::LifecycleState::create_captured:
+    return "create-captured";
+  case bridge::LifecycleState::evaluate_token_issued:
+    return "evaluate-token-issued";
+  case bridge::LifecycleState::evaluate_captured:
+    return "evaluate-captured";
+  case bridge::LifecycleState::released:
+    return "released";
+  case bridge::LifecycleState::inert:
+    return "inert";
+  }
+  return "unknown";
+}
+
+const char *bridge_decision_text(
+    const bridge::TransitionDecision decision) noexcept {
+  switch (decision) {
+  case bridge::TransitionDecision::identity_verified:
+    return "identity-verified";
+  case bridge::TransitionDecision::initialized:
+    return "initialized";
+  case bridge::TransitionDecision::populated:
+    return "populated";
+  case bridge::TransitionDecision::create_captured_fail_closed:
+    return "create-captured-fail-closed";
+  case bridge::TransitionDecision::evaluate_token_issued:
+    return "evaluate-token-issued";
+  case bridge::TransitionDecision::evaluate_captured_fail_closed:
+    return "evaluate-captured-fail-closed";
+  case bridge::TransitionDecision::released:
+    return "released";
+  case bridge::TransitionDecision::shut_down:
+    return "shut-down";
+  case bridge::TransitionDecision::aborted:
+    return "aborted";
+  case bridge::TransitionDecision::mode_disabled:
+    return "mode-disabled";
+  case bridge::TransitionDecision::invalid_configuration:
+    return "invalid-configuration";
+  case bridge::TransitionDecision::identity_rejected:
+    return "identity-rejected";
+  case bridge::TransitionDecision::caller_rejected:
+    return "caller-rejected";
+  case bridge::TransitionDecision::invalid_order:
+    return "invalid-order";
+  case bridge::TransitionDecision::token_rejected:
+    return "token-rejected";
+  case bridge::TransitionDecision::already_inert:
+    return "already-inert";
+  case bridge::TransitionDecision::capacity_exhausted:
+    return "capacity-exhausted";
+  }
+  return "unknown";
+}
+
+const char *bridge_response_text(
+    const bridge::BoundaryResponse response) noexcept {
+  switch (response) {
+  case bridge::BoundaryResponse::none:
+    return "none";
+  case bridge::BoundaryResponse::fail_closed:
+    return "fail-closed";
+  case bridge::BoundaryResponse::success:
+    return "success";
+  case bridge::BoundaryResponse::success_with_token:
+    return "success-with-token";
+  }
+  return "unknown";
+}
+
+const char *capture_stop_reason_text(
+    const bridge::CaptureStopReason reason) noexcept {
+  switch (reason) {
+  case bridge::CaptureStopReason::none:
+    return "none";
+  case bridge::CaptureStopReason::callback_missing:
+    return "callback-missing";
+  case bridge::CaptureStopReason::callback_fault:
+    return "callback-fault";
+  case bridge::CaptureStopReason::query_capacity_exhausted:
+    return "query-capacity-exhausted";
+  case bridge::CaptureStopReason::invalid_state:
+    return "invalid-state";
+  }
+  return "unknown";
+}
+#endif
+
 std::filesystem::path module_path(const HMODULE module) {
   wchar_t path[32'768]{};
   const DWORD length =
@@ -432,12 +734,23 @@ std::filesystem::path trace_log_path() {
       L"LOCALAPPDATA", local_app_data,
       static_cast<DWORD>(_countof(local_app_data)));
   if (length != 0U && length < _countof(local_app_data)) {
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    return std::filesystem::path(local_app_data) / L"MhwDlssBridgeProbe" /
+           (L"bridge-" + std::to_wstring(GetCurrentProcessId()) + L".log");
+#else
     return std::filesystem::path(local_app_data) / L"MhwDlssUnlock" /
            (L"unlock-" + std::to_wstring(GetCurrentProcessId()) + L".log");
+#endif
   }
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  return std::filesystem::temp_directory_path() /
+         (L"mhw-dlss-bridge-" + std::to_wstring(GetCurrentProcessId()) +
+          L".log");
+#else
   return std::filesystem::temp_directory_path() /
          (L"mhw-dlss-unlock-" + std::to_wstring(GetCurrentProcessId()) +
           L".log");
+#endif
 }
 
 void open_log() noexcept {
@@ -778,6 +1091,223 @@ std::filesystem::path cache_feature_path() noexcept {
   return result;
 }
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+bool executable_image_address(HMODULE module,
+                              const void *address) noexcept;
+
+const char *bridge_mode_text(const bridge::Mode mode) noexcept {
+  switch (mode) {
+  case bridge::Mode::disabled:
+    return "disabled";
+  case bridge::Mode::capture_create:
+    return "capture-create";
+  case bridge::Mode::capture_one_evaluate:
+    return "capture-one-evaluate";
+  }
+  return "invalid";
+}
+
+bool configure_bridge_mode() noexcept {
+  char value[64]{};
+  SetLastError(ERROR_SUCCESS);
+  const DWORD length = GetEnvironmentVariableA(
+      "MHW_DLSS_BRIDGE_MODE", value, static_cast<DWORD>(_countof(value)));
+  bridge::ModeParseResult parsed{};
+  if (length == 0U && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+    parsed = bridge::parse_mode(bridge::kDisabledMode);
+  } else if (length == 0U || length >= _countof(value)) {
+    parsed = {bridge::Mode::disabled, false};
+  } else {
+    parsed = bridge::parse_mode(std::string_view(value, length));
+  }
+
+  AcquireSRWLockExclusive(&g_bridge_lifecycle_lock);
+  g_bridge_lifecycle =
+      bridge::OneShotLifecycle(parsed.mode, kOneEvaluateToken);
+  ReleaseSRWLockExclusive(&g_bridge_lifecycle_lock);
+  g_bridge_mode.store(parsed.mode, std::memory_order_release);
+  return parsed.recognized;
+}
+
+bool modern_core_disk_identity_matches(
+    const std::filesystem::path &path) noexcept {
+  PeIdentity disk{};
+  return !path.empty() && hash_matches(path, kModernCoreHash) &&
+         read_disk_pe_identity(path, &disk) &&
+         disk.machine == IMAGE_FILE_MACHINE_AMD64 &&
+         disk.optional_magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+         disk.timestamp == 0x6A0CB15EU &&
+         disk.image_base == kExpectedNvidiaPreferredImageBase &&
+         disk.image_size == 0x00173000U &&
+         file_version(path) ==
+             std::array<std::uint16_t, 4>{32U, 0U, 16U, 1047U};
+}
+
+bool locate_exact_modern_core(std::filesystem::path *const output) {
+  if (output == nullptr) {
+    return false;
+  }
+  output->clear();
+  wchar_t windows_directory[32'768]{};
+  const UINT length = GetWindowsDirectoryW(
+      windows_directory, static_cast<UINT>(_countof(windows_directory)));
+  if (length == 0U || length >= _countof(windows_directory)) {
+    return false;
+  }
+  const std::filesystem::path repository =
+      std::filesystem::path(windows_directory, windows_directory + length) /
+      L"System32" / L"DriverStore" / L"FileRepository";
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      repository, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  const std::filesystem::directory_iterator end;
+  if (error) {
+    return false;
+  }
+
+  std::size_t visited{};
+  std::filesystem::path match;
+  while (iterator != end && visited < kMaximumDriverStoreDirectories) {
+    ++visited;
+    std::error_code type_error;
+    if (iterator->is_directory(type_error) && !type_error) {
+      const std::filesystem::path candidate = iterator->path() / L"_nvngx.dll";
+      std::error_code exists_error;
+      if (std::filesystem::is_regular_file(candidate, exists_error) &&
+          !exists_error && modern_core_disk_identity_matches(candidate)) {
+        if (!match.empty() &&
+            !equal_path_text(match.wstring(), candidate.wstring())) {
+          return false;
+        }
+        match = candidate;
+      }
+    }
+    iterator.increment(error);
+    if (error) {
+      return false;
+    }
+  }
+  if (iterator != end || match.empty()) {
+    return false;
+  }
+  *output = match;
+  return true;
+}
+
+bool copy_fixed_path(const std::filesystem::path &path, wchar_t *const output,
+                     const std::size_t capacity,
+                     std::atomic<std::uint32_t> &output_length) {
+  if (output == nullptr || capacity == 0U) {
+    return false;
+  }
+  const std::wstring text = path.wstring();
+  if (text.empty() || text.size() >= capacity ||
+      text.size() > (std::numeric_limits<std::uint32_t>::max)()) {
+    return false;
+  }
+  std::memcpy(output, text.data(), text.size() * sizeof(wchar_t));
+  output[text.size()] = L'\0';
+  output_length.store(static_cast<std::uint32_t>(text.size()),
+                      std::memory_order_release);
+  return true;
+}
+
+bool prepare_bridge_preflight(const HMODULE host,
+                              const std::filesystem::path &cache_path) {
+  if (g_bridge_mode.load(std::memory_order_acquire) ==
+      bridge::Mode::disabled) {
+    return true;
+  }
+  if (GetModuleHandleW(L"mhw_dlss_unlock.dll") != nullptr) {
+    write_log("bridge.preflight result=rejected reason=legacy-observer-loaded");
+    return false;
+  }
+  if (host == nullptr || cache_path.empty()) {
+    write_log("bridge.preflight result=rejected reason=required-path-missing");
+    return false;
+  }
+
+  PeIdentity disk{};
+  if (!hash_matches(cache_path, kCacheFeatureHash) ||
+      !read_disk_pe_identity(cache_path, &disk) ||
+      disk.machine != IMAGE_FILE_MACHINE_AMD64 ||
+      disk.optional_magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+      disk.timestamp != 0x64405395U ||
+      disk.image_base != kExpectedNvidiaPreferredImageBase ||
+      disk.image_size != 0x00B57000U ||
+      file_version(cache_path) !=
+          std::array<std::uint16_t, 4>{1U, 2U, 110U, 0U}) {
+    write_log("bridge.preflight result=rejected reason=cache-identity-mismatch "
+              "path=" +
+              utf8(cache_path.wstring()));
+    return false;
+  }
+
+  std::filesystem::path modern_core_path;
+  if (!locate_exact_modern_core(&modern_core_path)) {
+    write_log("bridge.preflight result=rejected "
+              "reason=modern-core-identity-ambiguous-or-missing");
+    return false;
+  }
+
+  const FARPROC get_int =
+      GetProcAddress(host, "NVSDK_NGX_Parameter_GetI");
+  const FARPROC get_uint =
+      GetProcAddress(host, "NVSDK_NGX_Parameter_GetUI");
+  const FARPROC get_float =
+      GetProcAddress(host, "NVSDK_NGX_Parameter_GetF");
+  const FARPROC get_resource =
+      GetProcAddress(host, "NVSDK_NGX_Parameter_GetD3d12Resource");
+  const auto host_base = reinterpret_cast<std::uintptr_t>(host);
+  if (get_int == nullptr || get_uint == nullptr || get_float == nullptr ||
+      get_resource == nullptr ||
+      reinterpret_cast<std::uintptr_t>(get_resource) !=
+          host_base + 0x273E430U ||
+      reinterpret_cast<std::uintptr_t>(get_float) !=
+          host_base + 0x273E490U ||
+      reinterpret_cast<std::uintptr_t>(get_int) !=
+          host_base + 0x273E4F0U ||
+      reinterpret_cast<std::uintptr_t>(get_uint) !=
+          host_base + 0x273E550U ||
+      !executable_image_address(host,
+                                reinterpret_cast<const void *>(get_int)) ||
+      !executable_image_address(host,
+                                reinterpret_cast<const void *>(get_uint)) ||
+      !executable_image_address(host,
+                                reinterpret_cast<const void *>(get_float)) ||
+      !executable_image_address(
+          host, reinterpret_cast<const void *>(get_resource))) {
+    write_log("bridge.preflight result=rejected reason=host-getter-boundary");
+    return false;
+  }
+
+  if (!copy_fixed_path(cache_path, g_expected_cache_path,
+                       kResolverPathCapacity,
+                       g_expected_cache_path_length) ||
+      !copy_fixed_path(modern_core_path, g_expected_modern_core_path,
+                       kResolverPathCapacity,
+                       g_expected_modern_core_path_length)) {
+    write_log("bridge.preflight result=rejected reason=cache-path-length");
+    return false;
+  }
+  g_parameter_get_int.store(reinterpret_cast<std::uintptr_t>(get_int),
+                            std::memory_order_release);
+  g_parameter_get_uint.store(reinterpret_cast<std::uintptr_t>(get_uint),
+                             std::memory_order_release);
+  g_parameter_get_float.store(reinterpret_cast<std::uintptr_t>(get_float),
+                              std::memory_order_release);
+  g_parameter_get_resource.store(
+      reinterpret_cast<std::uintptr_t>(get_resource),
+      std::memory_order_release);
+  g_bridge_cache_ready.store(true, std::memory_order_release);
+  write_log("bridge.preflight result=verified cache-sha256=" +
+            sha256_text(kCacheFeatureHash) + " modern-core-sha256=" +
+            sha256_text(kModernCoreHash) + " parameter-getters=4");
+  return true;
+}
+#endif
+
 std::uint32_t expected_timestamp(const Slot slot) noexcept {
   switch (slot) {
   case Slot::local_populate:
@@ -1058,8 +1588,6 @@ bool expected_slot_caller(const Slot slot, const void *const caller) noexcept {
   case Slot::local_populate:
   case Slot::cache_populate:
     return caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
-                                 0x43333U) ||
-           caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
                                  0x43351U);
   case Slot::modern_d3d12_feature_status:
     return caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
@@ -1102,6 +1630,50 @@ TargetName classify_target_name(const LPCSTR name) noexcept {
   if (procedure_name_equals(name, "NVSDK_NGX_D3D12_GetParameters")) {
     return TargetName::parameters;
   }
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  if (procedure_name_equals(name,
+                            "NVSDK_NGX_D3D12_GetScratchBufferSize")) {
+    return TargetName::d3d12_scratch;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_CreateFeature")) {
+    return TargetName::d3d12_create;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_EvaluateFeature")) {
+    return TargetName::d3d12_evaluate;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_EvaluateFeature_C")) {
+    return TargetName::d3d12_evaluate_c;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_ReleaseFeature")) {
+    return TargetName::d3d12_release;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Shutdown")) {
+    return TargetName::d3d12_shutdown;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Shutdown1")) {
+    return TargetName::d3d12_shutdown1;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_CreateFeature1")) {
+    return TargetName::d3d12_create1;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Init_Ext")) {
+    return TargetName::d3d12_init_ext;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Init_Ext1")) {
+    return TargetName::d3d12_init_ext1;
+  }
+  if (procedure_name_equals(name, "NVSDK_NGX_D3D12_Init_Ext2")) {
+    return TargetName::d3d12_init_ext2;
+  }
+  if (procedure_name_equals(name,
+                            "NVSDK_NGX_D3D12_PopulateParameters_Impl")) {
+    return TargetName::d3d12_populate_parameters_impl;
+  }
+  if (procedure_name_equals(
+          name, "NVSDK_NGX_D3D12_PopulateDeviceParameters_Impl")) {
+    return TargetName::d3d12_populate_device_parameters_impl;
+  }
+#endif
   return TargetName::unknown;
 }
 
@@ -1285,6 +1857,493 @@ NgxResult invoke_get_parameters(NgxParameter **const parameters,
   return result;
 }
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+bridge::IdentityEvidence bridge_identity_evidence() noexcept {
+  const bool environment_verified =
+      g_bridge_environment_ready.load(std::memory_order_acquire);
+  const bool route_armed =
+      g_bridge_route_state.load(std::memory_order_acquire) == 1;
+  const bool cache_verified =
+      g_bridge_cache_ready.load(std::memory_order_acquire);
+  return {environment_verified,
+          g_original_resolver.load(std::memory_order_acquire) != 0U,
+          route_armed,
+          cache_verified && route_armed,
+          route_armed};
+}
+
+std::uintptr_t expected_bridge_invocation_rva(
+    const bridge::ExportId export_id, const void *const caller) noexcept {
+  switch (export_id) {
+  case bridge::ExportId::d3d12_init:
+    return 0x6769AU;
+  case bridge::ExportId::populate_parameters:
+    if (caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                             0x67ACEU)) {
+      return 0x67ACEU;
+    }
+    return 0x67BC2U;
+  case bridge::ExportId::d3d12_create_feature:
+    return 0x67DE6U;
+  case bridge::ExportId::d3d12_evaluate_feature:
+    return 0x6704AU;
+  case bridge::ExportId::d3d12_get_scratch_buffer_size:
+    return 0U;
+  case bridge::ExportId::d3d12_release_feature:
+    return 0x08AB7U;
+  case bridge::ExportId::d3d12_shutdown:
+    return 0x43815U;
+  case bridge::ExportId::d3d12_shutdown1:
+  case bridge::ExportId::d3d12_create_feature1:
+  case bridge::ExportId::d3d12_init_ext:
+  case bridge::ExportId::d3d12_init_ext1:
+  case bridge::ExportId::d3d12_init_ext2:
+  case bridge::ExportId::d3d12_populate_parameters_impl:
+  case bridge::ExportId::d3d12_populate_device_parameters_impl:
+  case bridge::ExportId::unknown:
+    break;
+  }
+  return 0U;
+}
+
+bridge::CallerEvidence bridge_caller_evidence(
+    const bridge::ExportId export_id, const void *const caller) noexcept {
+  bridge::CallerEvidence evidence{};
+  evidence.requested_export = export_id;
+  evidence.return_address = reinterpret_cast<std::uintptr_t>(caller);
+  evidence.expected_return_rva =
+      expected_bridge_invocation_rva(export_id, caller);
+  evidence.image_size = 0x00173000U;
+
+  MEMORY_BASIC_INFORMATION information{};
+  if (caller == nullptr ||
+      VirtualQuery(caller, &information, sizeof(information)) !=
+          sizeof(information) ||
+      information.AllocationBase == nullptr) {
+    return evidence;
+  }
+  const auto module = static_cast<HMODULE>(information.AllocationBase);
+  evidence.module_base = reinterpret_cast<std::uintptr_t>(module);
+  evidence.caller_binary_verified =
+      g_bridge_ever_armed.load(std::memory_order_acquire) &&
+      g_bridge_modern_core_base.load(std::memory_order_acquire) ==
+          evidence.module_base;
+  evidence.memory_image = information.Type == MEM_IMAGE;
+  evidence.allocation_base_matches = evidence.caller_binary_verified;
+  evidence.executable_section = executable_image_address(module, caller);
+  evidence.executable_page = evidence.executable_section;
+  return evidence;
+}
+
+bool bridge_caller_is_pinned_modern_core(
+    const void *const caller) noexcept {
+  const std::uintptr_t modern_base =
+      g_bridge_modern_core_base.load(std::memory_order_acquire);
+  if (caller == nullptr || modern_base == 0U) {
+    return false;
+  }
+  MEMORY_BASIC_INFORMATION information{};
+  if (VirtualQuery(caller, &information, sizeof(information)) !=
+          sizeof(information) ||
+      information.Type != MEM_IMAGE || information.AllocationBase == nullptr ||
+      reinterpret_cast<std::uintptr_t>(information.AllocationBase) !=
+          modern_base) {
+    return false;
+  }
+  return executable_image_address(
+      static_cast<HMODULE>(information.AllocationBase), caller);
+}
+
+bridge::TransitionResult bridge_apply(
+    const bridge::LifecycleOperation operation,
+    const bridge::ExportId export_id, const void *const caller,
+    const std::uint64_t token = 0U) noexcept {
+  const bridge::TransitionInput input{operation, bridge_identity_evidence(),
+                                      bridge_caller_evidence(export_id, caller),
+                                      token};
+  AcquireSRWLockExclusive(&g_bridge_lifecycle_lock);
+  const bridge::TransitionResult result = g_bridge_lifecycle.apply(input);
+  ReleaseSRWLockExclusive(&g_bridge_lifecycle_lock);
+  return result;
+}
+
+void poison_bridge_boundary() noexcept {
+  std::uint32_t state =
+      g_bridge_boundary_state.load(std::memory_order_acquire);
+  for (;;) {
+    if (state >= 2U) {
+      return;
+    }
+    const std::uint32_t poisoned = state == 0U ? 3U : 2U;
+    if (g_bridge_boundary_state.compare_exchange_weak(
+            state, poisoned, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      return;
+    }
+  }
+}
+
+class BridgeBoundaryLease final {
+public:
+  BridgeBoundaryLease() noexcept {
+    std::uint32_t idle{};
+    acquired_ = g_bridge_boundary_state.compare_exchange_strong(
+        idle, 1U, std::memory_order_acq_rel, std::memory_order_acquire);
+    if (!acquired_) {
+      g_bridge_boundary_contentions.fetch_add(1U,
+                                              std::memory_order_relaxed);
+      poison_bridge_boundary();
+    }
+  }
+
+  ~BridgeBoundaryLease() noexcept {
+    if (acquired_ && !finished_) {
+      std::uint32_t owned_clean = 1U;
+      if (!g_bridge_boundary_state.compare_exchange_strong(
+              owned_clean, 0U, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        g_bridge_boundary_state.store(3U, std::memory_order_release);
+      }
+    }
+  }
+
+  BridgeBoundaryLease(const BridgeBoundaryLease &) = delete;
+  BridgeBoundaryLease &operator=(const BridgeBoundaryLease &) = delete;
+
+  explicit operator bool() const noexcept { return acquired_; }
+
+  bool finish() noexcept {
+    if (!acquired_ || finished_) {
+      return false;
+    }
+    finished_ = true;
+    std::uint32_t owned_clean = 1U;
+    if (g_bridge_boundary_state.compare_exchange_strong(
+            owned_clean, 0U, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      return true;
+    }
+    g_bridge_boundary_state.store(3U, std::memory_order_release);
+    return false;
+  }
+
+private:
+  bool acquired_{};
+  bool finished_{};
+};
+
+void publish_bridge_event(const bridge::ExportId export_id,
+                          const void *const caller,
+                          const bridge::TransitionResult &transition,
+                          const NgxResult result,
+                          const std::uint64_t argument0 = 0U,
+                          const std::uint64_t argument1 = 0U,
+                          const bool d3d12_verified = false,
+                          const bridge::CreateContractSnapshot *const
+                              create_snapshot = nullptr,
+                          const bridge::EvaluateContractSnapshot *const
+                              evaluate_snapshot = nullptr,
+                          const bool observation_only = false) noexcept {
+  const std::uint32_t reserved =
+      g_bridge_events_reserved.fetch_add(1U, std::memory_order_relaxed);
+  if (reserved >= g_bridge_events.size()) {
+    g_bridge_events_dropped.fetch_add(1U, std::memory_order_relaxed);
+    return;
+  }
+  BridgeEvent &event = g_bridge_events[reserved];
+  EventState expected = EventState::empty;
+  if (!event.state.compare_exchange_strong(
+          expected, EventState::writing, std::memory_order_acq_rel,
+          std::memory_order_relaxed)) {
+    g_bridge_events_dropped.fetch_add(1U, std::memory_order_relaxed);
+    return;
+  }
+  event.payload.sequence =
+      g_event_sequence.fetch_add(1U, std::memory_order_relaxed) + 1U;
+  event.payload.tick = GetTickCount64();
+  event.payload.thread_id = GetCurrentThreadId();
+  event.payload.export_id = export_id;
+  event.payload.caller = reinterpret_cast<std::uintptr_t>(caller);
+  event.payload.result = result;
+  event.payload.before = transition.before;
+  event.payload.after = transition.after;
+  event.payload.decision = transition.decision;
+  event.payload.response = transition.response;
+  event.payload.token = transition.issued_token;
+  event.payload.argument0 = argument0;
+  event.payload.argument1 = argument1;
+  event.payload.capture_committed = transition.capture_committed;
+  event.payload.d3d12_object_verified = d3d12_verified;
+  event.payload.observation_only = observation_only;
+  if (create_snapshot != nullptr) {
+    event.payload.has_create_snapshot = true;
+    event.payload.create_snapshot = *create_snapshot;
+  }
+  if (evaluate_snapshot != nullptr) {
+    event.payload.has_evaluate_snapshot = true;
+    event.payload.evaluate_snapshot = *evaluate_snapshot;
+  }
+  event.state.store(EventState::ready, std::memory_order_release);
+}
+
+bridge::LifecycleState bridge_lifecycle_state() noexcept {
+  AcquireSRWLockShared(&g_bridge_lifecycle_lock);
+  const bridge::LifecycleState state = g_bridge_lifecycle.state();
+  ReleaseSRWLockShared(&g_bridge_lifecycle_lock);
+  return state;
+}
+
+bool bridge_populate_budget_available() noexcept {
+  AcquireSRWLockShared(&g_bridge_lifecycle_lock);
+  const bool available = g_bridge_lifecycle.populate_budget_available();
+  ReleaseSRWLockShared(&g_bridge_lifecycle_lock);
+  return available;
+}
+
+bridge::TransitionResult bridge_observation_transition() noexcept {
+  bridge::TransitionResult result{};
+  result.before = bridge_lifecycle_state();
+  result.after = result.before;
+  result.response = bridge::BoundaryResponse::none;
+  return result;
+}
+
+bool bridge_route_table_complete() noexcept {
+  if (!g_bridge_lookup_transaction_complete.load(
+          std::memory_order_acquire)) {
+    return false;
+  }
+  return g_bridge_route_state.load(std::memory_order_acquire) == 1 &&
+         g_bridge_route_mask.load(std::memory_order_acquire) ==
+             bridge::kProviderRouteMaskComplete &&
+         g_bridge_lookup_seen_mask.load(std::memory_order_acquire) ==
+             bridge::kProviderLookupMaskComplete;
+}
+
+struct BridgeLifecycleDiagnostics {
+  bool overflowed{};
+  std::uint32_t dropped_events{};
+};
+
+BridgeLifecycleDiagnostics bridge_lifecycle_diagnostics() noexcept {
+  AcquireSRWLockShared(&g_bridge_lifecycle_lock);
+  const BridgeLifecycleDiagnostics diagnostics{
+      g_bridge_lifecycle.overflowed(),
+      g_bridge_lifecycle.dropped_event_count()};
+  ReleaseSRWLockShared(&g_bridge_lifecycle_lock);
+  return diagnostics;
+}
+
+bool verify_d3d12_device(ID3D12Device *const device) noexcept {
+  if (device == nullptr) {
+    return false;
+  }
+  ID3D12Device *verified{};
+  HRESULT result = E_FAIL;
+  bool release_completed = false;
+  __try {
+    result = device->QueryInterface(__uuidof(ID3D12Device),
+                                    reinterpret_cast<void **>(&verified));
+    if (SUCCEEDED(result) && verified != nullptr) {
+      verified->Release();
+      release_completed = true;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    result = E_FAIL;
+    verified = nullptr;
+  }
+  return SUCCEEDED(result) && verified != nullptr && release_completed;
+}
+
+bool verify_d3d12_command_list(
+    ID3D12GraphicsCommandList *const command_list) noexcept {
+  if (command_list == nullptr) {
+    return false;
+  }
+  ID3D12GraphicsCommandList *verified{};
+  HRESULT result = E_FAIL;
+  bool release_completed = false;
+  __try {
+    result = command_list->QueryInterface(
+        __uuidof(ID3D12GraphicsCommandList),
+        reinterpret_cast<void **>(&verified));
+    if (SUCCEEDED(result) && verified != nullptr) {
+      verified->Release();
+      release_completed = true;
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    result = E_FAIL;
+    verified = nullptr;
+  }
+  return SUCCEEDED(result) && verified != nullptr && release_completed;
+}
+
+bool store_bridge_output(void **const output, void *const value) noexcept {
+  if (output == nullptr) {
+    return false;
+  }
+  __try {
+    *output = value;
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+bool store_bridge_size(std::size_t *const output,
+                       const std::size_t value) noexcept {
+  if (output == nullptr) {
+    return false;
+  }
+  __try {
+    *output = value;
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+bool readable_nonempty_path(const wchar_t *const path) noexcept {
+  if (path == nullptr) {
+    return false;
+  }
+  __try {
+    return path[0] != L'\0';
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+}
+
+std::uint64_t read_bridge_token(const void *const handle) noexcept {
+  if (handle == nullptr) {
+    return 0U;
+  }
+  __try {
+    return *static_cast<const std::uint64_t *>(handle);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    return 0U;
+  }
+}
+
+struct BridgeParameterContext {
+  NgxParameter *parameters{};
+};
+
+bridge::UnsignedGetterReply bridge_get_unsigned(
+    void *const opaque_context, const std::string_view key) noexcept {
+  bridge::UnsignedGetterReply reply{};
+  const auto function = reinterpret_cast<ParameterGetUIntFn>(
+      g_parameter_get_uint.load(std::memory_order_acquire));
+  if (opaque_context == nullptr || function == nullptr || key.empty()) {
+    return reply;
+  }
+  auto &context = *static_cast<BridgeParameterContext *>(opaque_context);
+  if (context.parameters == nullptr) {
+    return reply;
+  }
+  __try {
+    reply.getter_result =
+        function(context.parameters, key.data(), &reply.value);
+    reply.callback_completed = true;
+    reply.present = reply.getter_result == kResultSuccess;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    reply.callback_completed = false;
+  }
+  return reply;
+}
+
+bridge::SignedGetterReply bridge_get_signed(
+    void *const opaque_context, const std::string_view key) noexcept {
+  bridge::SignedGetterReply reply{};
+  const auto function = reinterpret_cast<ParameterGetIntFn>(
+      g_parameter_get_int.load(std::memory_order_acquire));
+  if (opaque_context == nullptr || function == nullptr || key.empty()) {
+    return reply;
+  }
+  auto &context = *static_cast<BridgeParameterContext *>(opaque_context);
+  if (context.parameters == nullptr) {
+    return reply;
+  }
+  __try {
+    reply.getter_result =
+        function(context.parameters, key.data(), &reply.value);
+    reply.callback_completed = true;
+    reply.present = reply.getter_result == kResultSuccess;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    reply.callback_completed = false;
+  }
+  return reply;
+}
+
+bridge::FloatGetterReply bridge_get_float(
+    void *const opaque_context, const std::string_view key) noexcept {
+  bridge::FloatGetterReply reply{};
+  const auto function = reinterpret_cast<ParameterGetFloatFn>(
+      g_parameter_get_float.load(std::memory_order_acquire));
+  if (opaque_context == nullptr || function == nullptr || key.empty()) {
+    return reply;
+  }
+  auto &context = *static_cast<BridgeParameterContext *>(opaque_context);
+  if (context.parameters == nullptr) {
+    return reply;
+  }
+  __try {
+    reply.getter_result =
+        function(context.parameters, key.data(), &reply.value);
+    reply.callback_completed = true;
+    reply.present = reply.getter_result == kResultSuccess;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    reply.callback_completed = false;
+  }
+  return reply;
+}
+
+bridge::ResourceGetterReply bridge_get_resource(
+    void *const opaque_context, const std::string_view key) noexcept {
+  bridge::ResourceGetterReply reply{};
+  const auto function = reinterpret_cast<ParameterGetResourceFn>(
+      g_parameter_get_resource.load(std::memory_order_acquire));
+  if (opaque_context == nullptr || function == nullptr || key.empty()) {
+    return reply;
+  }
+  auto &context = *static_cast<BridgeParameterContext *>(opaque_context);
+  if (context.parameters == nullptr) {
+    return reply;
+  }
+  ID3D12Resource *resource{};
+  __try {
+    reply.getter_result =
+        function(context.parameters, key.data(), &resource);
+    reply.value = reinterpret_cast<std::uintptr_t>(resource);
+    reply.callback_completed = true;
+    reply.present = reply.getter_result == kResultSuccess;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    reply.callback_completed = false;
+  }
+  return reply;
+}
+
+bridge::GetterCallbacks bridge_getter_callbacks(
+    BridgeParameterContext &context) noexcept {
+  return {&context, &bridge_get_unsigned, &bridge_get_signed,
+          &bridge_get_float, &bridge_get_resource};
+}
+
+bridge::CreateContractSnapshot capture_bridge_create_contract(
+    NgxParameter *const parameters) noexcept {
+  BridgeParameterContext context{parameters};
+  return bridge::capture_create_contract(g_bridge_capture_state,
+                                         bridge_getter_callbacks(context));
+}
+
+bridge::EvaluateContractSnapshot capture_bridge_evaluate_contract(
+    NgxParameter *const parameters) noexcept {
+  BridgeParameterContext context{parameters};
+  return bridge::capture_evaluate_contract(g_bridge_capture_state,
+                                           bridge_getter_callbacks(context));
+}
+#endif
+
 } // namespace
 
 extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
@@ -1299,9 +2358,529 @@ extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
 cache_populate_wrapper(NgxParameter *parameters) {
   const DWORD incoming_last_error = GetLastError();
   const void *const caller = _ReturnAddress();
-  return invoke_populate<Slot::cache_populate>(parameters, caller,
-                                               incoming_last_error);
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  const bool bridge_mode_active =
+      g_bridge_mode.load(std::memory_order_acquire) !=
+          bridge::Mode::disabled;
+  const int route_state =
+      g_bridge_route_state.load(std::memory_order_acquire);
+  const bool transaction_claimed =
+      g_bridge_interception_started.load(std::memory_order_acquire);
+  if (!bridge_mode_active || !transaction_claimed || route_state == -2) {
+    return invoke_populate<Slot::cache_populate>(parameters, caller,
+                                                 incoming_last_error);
+  }
+
+  // Keep the bridge phase visible to close_trace_phase and serialize the
+  // cache's parameter mutation with Create/Evaluate contract capture.
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultNotInitialized;
+  }
+  const bridge::CallerEvidence caller_evidence = bridge_caller_evidence(
+      bridge::ExportId::populate_parameters, caller);
+  const bridge::LifecycleState lifecycle_state = bridge_lifecycle_state();
+  const bool exact_invocation =
+      parameters != nullptr && bridge_route_table_complete() &&
+      slot_runtime(Slot::cache_populate)
+              .identity.load(std::memory_order_acquire) !=
+          IdentityState::rejected &&
+      bridge::caller_is_verified_for(
+          caller_evidence, bridge::ExportId::populate_parameters) &&
+      bridge_populate_budget_available() &&
+      (lifecycle_state == bridge::LifecycleState::initialized ||
+       lifecycle_state == bridge::LifecycleState::populated);
+  if (!exact_invocation) {
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    const bridge::TransitionResult transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::populate_parameters, caller);
+    poison_bridge_boundary();
+    static_cast<void>(boundary.finish());
+    publish_bridge_event(
+        bridge::ExportId::populate_parameters, caller, transition,
+        kResultNotInitialized, reinterpret_cast<std::uintptr_t>(parameters));
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultNotInitialized;
+  }
+#endif
+  const NgxResult result = invoke_populate<Slot::cache_populate>(
+      parameters, caller, incoming_last_error);
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  const DWORD outgoing_last_error = GetLastError();
+  const bridge::TransitionResult transition = bridge_apply(
+      result == kResultSuccess ? bridge::LifecycleOperation::populate
+                               : bridge::LifecycleOperation::abort,
+      bridge::ExportId::populate_parameters, caller);
+  const bool transition_accepted =
+      result == kResultSuccess && transition.transition_applied &&
+      transition.after == bridge::LifecycleState::populated &&
+      transition.decision == bridge::TransitionDecision::populated &&
+      transition.response == bridge::BoundaryResponse::success &&
+      slot_runtime(Slot::cache_populate)
+              .identity.load(std::memory_order_acquire) !=
+          IdentityState::rejected;
+  if (!transition_accepted) {
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    poison_bridge_boundary();
+  }
+
+  const bool boundary_clean = boundary.finish();
+  if (!boundary_clean) {
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+  }
+  const NgxResult returned_result = transition_accepted && boundary_clean
+                                        ? kResultSuccess
+                                        : kResultNotInitialized;
+  publish_bridge_event(
+      bridge::ExportId::populate_parameters, caller, transition,
+      returned_result, reinterpret_cast<std::uintptr_t>(parameters), 0U,
+      false, nullptr, nullptr, false);
+  if (!boundary_clean && transition.after != bridge::LifecycleState::inert) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::populate_parameters, caller);
+    publish_bridge_event(bridge::ExportId::populate_parameters, caller,
+                         abort_transition, kResultNotInitialized,
+                         reinterpret_cast<std::uintptr_t>(parameters));
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(outgoing_last_error);
+  return returned_result;
+#else
+  return result;
+#endif
 }
+
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_init_wrapper(const std::uint64_t application_id,
+                          const wchar_t *const application_data_path,
+                          ID3D12Device *const device,
+                          const std::uint32_t sdk_version) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultNotInitialized;
+  }
+
+  const bridge::CallerEvidence caller_evidence = bridge_caller_evidence(
+      bridge::ExportId::d3d12_init, caller);
+  const bool caller_verified = bridge::caller_is_verified_for(
+      caller_evidence, bridge::ExportId::d3d12_init);
+  const bool lifecycle_ready =
+      bridge_lifecycle_state() == bridge::LifecycleState::verified;
+  const bool route_table_complete = bridge_route_table_complete();
+  if (!route_table_complete) {
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    poison_bridge_boundary();
+  }
+  const bool preliminary_arguments_valid =
+      caller_verified && lifecycle_ready &&
+      application_id == kExpectedApplicationId &&
+      readable_nonempty_path(application_data_path) &&
+      sdk_version == kExpectedBridgeSdkVersion && route_table_complete;
+  const bool device_verified =
+      preliminary_arguments_valid && verify_d3d12_device(device);
+  const bool arguments_valid =
+      preliminary_arguments_valid && device_verified;
+  const bridge::TransitionResult transition = bridge_apply(
+      arguments_valid ? bridge::LifecycleOperation::initialize
+                      : bridge::LifecycleOperation::abort,
+      bridge::ExportId::d3d12_init, caller);
+  NgxResult result =
+      !arguments_valid
+          ? kResultInvalidParameter
+          : (transition.response == bridge::BoundaryResponse::success
+                 ? kResultSuccess
+                 : kResultNotInitialized);
+  if (result == kResultSuccess) {
+    g_bridge_init_succeeded.store(true, std::memory_order_release);
+  }
+  const bool boundary_clean = boundary.finish();
+  if (!boundary_clean) {
+    g_bridge_init_succeeded.store(false, std::memory_order_release);
+    result = kResultNotInitialized;
+  }
+  publish_bridge_event(bridge::ExportId::d3d12_init, caller, transition,
+                       result, application_id, sdk_version, device_verified);
+  if (!boundary_clean && transition.after != bridge::LifecycleState::inert) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort, bridge::ExportId::d3d12_init,
+        caller);
+    publish_bridge_event(bridge::ExportId::d3d12_init, caller,
+                         abort_transition, kResultNotInitialized,
+                         application_id, sdk_version, device_verified);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return result;
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_scratch_wrapper(const Feature feature,
+                             const NgxParameter *const parameters,
+                             std::size_t *const scratch_size) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  const bool output_cleared = store_bridge_size(scratch_size, 0U);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    g_bridge_last_scratch_result.store(kResultNotInitialized,
+                                       std::memory_order_release);
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultNotInitialized;
+  }
+  const bridge::LifecycleState state = bridge_lifecycle_state();
+  const bool state_valid = state == bridge::LifecycleState::initialized ||
+                           state == bridge::LifecycleState::populated;
+  const bool arguments_valid =
+      output_cleared && bridge_caller_is_pinned_modern_core(caller) &&
+      feature == 1 && parameters != nullptr && bridge_route_table_complete();
+  const bool operation_valid = arguments_valid && state_valid;
+  NgxResult result = kResultNotInitialized;
+  bool operation_poisoned = false;
+  if (operation_valid &&
+      store_bridge_size(scratch_size, kExpectedScratchBufferSize)) {
+    result = kResultSuccess;
+  } else {
+    operation_poisoned = true;
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    static_cast<void>(bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::d3d12_get_scratch_buffer_size, caller));
+    poison_bridge_boundary();
+    static_cast<void>(store_bridge_size(scratch_size, 0U));
+  }
+  const bool boundary_clean = boundary.finish();
+  if (!boundary_clean) {
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    static_cast<void>(store_bridge_size(scratch_size, 0U));
+    result = kResultNotInitialized;
+    if (!operation_poisoned) {
+      static_cast<void>(bridge_apply(
+          bridge::LifecycleOperation::abort,
+          bridge::ExportId::d3d12_get_scratch_buffer_size, caller));
+    }
+  }
+  g_bridge_scratch_calls.fetch_add(1U, std::memory_order_relaxed);
+  std::uintptr_t no_caller{};
+  static_cast<void>(g_bridge_first_scratch_caller.compare_exchange_strong(
+      no_caller, reinterpret_cast<std::uintptr_t>(caller),
+      std::memory_order_release, std::memory_order_relaxed));
+  g_bridge_last_scratch_result.store(result, std::memory_order_release);
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return result;
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_create_wrapper(ID3D12GraphicsCommandList *const command_list,
+                            const Feature feature,
+                            const NgxParameter *const parameters,
+                            void **const output_handle) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+
+  const bridge::CallerEvidence caller_evidence = bridge_caller_evidence(
+      bridge::ExportId::d3d12_create_feature, caller);
+  const bool caller_verified = bridge::caller_is_verified_for(
+      caller_evidence, bridge::ExportId::d3d12_create_feature);
+  const bool output_cleared =
+      caller_verified && store_bridge_output(output_handle, nullptr);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultFeatureNotSupported;
+  }
+  const bridge::LifecycleState lifecycle_state = bridge_lifecycle_state();
+  const bool lifecycle_ready =
+      lifecycle_state == bridge::LifecycleState::initialized ||
+      lifecycle_state == bridge::LifecycleState::populated;
+  const bool preliminary_arguments_valid =
+      output_cleared && caller_verified && lifecycle_ready && feature == 1 &&
+      parameters != nullptr && bridge_route_table_complete();
+  const bool command_list_verified =
+      preliminary_arguments_valid &&
+      verify_d3d12_command_list(command_list);
+  const bool arguments_valid =
+      preliminary_arguments_valid && command_list_verified;
+  bridge::TransitionResult transition = bridge_apply(
+      arguments_valid ? bridge::LifecycleOperation::capture_create
+                      : bridge::LifecycleOperation::abort,
+      bridge::ExportId::d3d12_create_feature, caller);
+
+  bridge::CreateContractSnapshot snapshot{};
+  bool snapshot_captured = false;
+  if (arguments_valid && transition.capture_committed) {
+    snapshot = capture_bridge_create_contract(
+        const_cast<NgxParameter *>(parameters));
+    snapshot_captured = true;
+  }
+
+  NgxResult result = kResultFeatureNotSupported;
+  const bool token_requested =
+      transition.response == bridge::BoundaryResponse::success_with_token;
+  const bool snapshot_complete =
+      snapshot_captured && snapshot.summary.complete;
+  bool token_written =
+      token_requested && snapshot_complete &&
+      store_bridge_output(
+          output_handle,
+          const_cast<std::uint64_t *>(&g_bridge_token_storage));
+  if (token_written) {
+    g_bridge_token_issued.store(true, std::memory_order_release);
+    result = kResultSuccess;
+  }
+  const bool boundary_clean = boundary.finish();
+  if (!boundary_clean) {
+    if (token_written) {
+      g_bridge_token_issued.store(false, std::memory_order_release);
+      static_cast<void>(store_bridge_output(output_handle, nullptr));
+      token_written = false;
+    }
+    result = kResultFeatureNotSupported;
+  }
+  publish_bridge_event(
+      bridge::ExportId::d3d12_create_feature, caller, transition, result,
+      static_cast<std::uint64_t>(feature),
+      reinterpret_cast<std::uintptr_t>(parameters), command_list_verified,
+      snapshot_captured ? &snapshot : nullptr, nullptr);
+  if (transition.capture_committed &&
+      (!snapshot_complete || (token_requested && !token_written) ||
+       !boundary_clean)) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::d3d12_create_feature, caller);
+    publish_bridge_event(bridge::ExportId::d3d12_create_feature, caller,
+                         abort_transition, kResultFeatureNotSupported,
+                         static_cast<std::uint64_t>(feature),
+                          reinterpret_cast<std::uintptr_t>(parameters),
+                          command_list_verified);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return result;
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_evaluate_wrapper(
+    ID3D12GraphicsCommandList *const command_list,
+    const void *const feature_handle,
+    const NgxParameter *const parameters,
+    const BridgeProgressCallback) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return kResultNotImplemented;
+  }
+
+  const bridge::CallerEvidence caller_evidence = bridge_caller_evidence(
+      bridge::ExportId::d3d12_evaluate_feature, caller);
+  const bool caller_verified = bridge::caller_is_verified_for(
+      caller_evidence, bridge::ExportId::d3d12_evaluate_feature);
+  const bool lifecycle_ready = bridge_lifecycle_state() ==
+                               bridge::LifecycleState::evaluate_token_issued;
+  const std::uint64_t token =
+      caller_verified && lifecycle_ready ? read_bridge_token(feature_handle)
+                                         : 0U;
+  const bool preliminary_arguments_valid =
+      caller_verified && lifecycle_ready && parameters != nullptr &&
+      token == kOneEvaluateToken && bridge_route_table_complete();
+  const bool command_list_verified =
+      preliminary_arguments_valid &&
+      verify_d3d12_command_list(command_list);
+  const bool arguments_valid =
+      preliminary_arguments_valid && command_list_verified;
+  bridge::TransitionResult transition = bridge_apply(
+      arguments_valid ? bridge::LifecycleOperation::capture_evaluate
+                      : bridge::LifecycleOperation::abort,
+      bridge::ExportId::d3d12_evaluate_feature, caller, token);
+
+  bridge::EvaluateContractSnapshot snapshot{};
+  bool snapshot_captured = false;
+  if (arguments_valid && transition.capture_committed) {
+    snapshot = capture_bridge_evaluate_contract(
+        const_cast<NgxParameter *>(parameters));
+    snapshot_captured = true;
+  }
+  const bool boundary_clean = boundary.finish();
+  publish_bridge_event(
+      bridge::ExportId::d3d12_evaluate_feature, caller, transition,
+      kResultNotImplemented, token,
+      reinterpret_cast<std::uintptr_t>(parameters), command_list_verified,
+      nullptr, snapshot_captured ? &snapshot : nullptr);
+  if (transition.capture_committed &&
+      ((!snapshot_captured || !snapshot.summary.complete) ||
+       !boundary_clean)) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::d3d12_evaluate_feature, caller, token);
+    publish_bridge_event(bridge::ExportId::d3d12_evaluate_feature, caller,
+                         abort_transition, kResultNotImplemented, token,
+                          reinterpret_cast<std::uintptr_t>(parameters),
+                          command_list_verified);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return kResultNotImplemented;
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_release_wrapper(void *const feature_handle) noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  const bridge::CallerEvidence caller_evidence = bridge_caller_evidence(
+      bridge::ExportId::d3d12_release_feature, caller);
+  const bool caller_verified = bridge::caller_is_verified_for(
+      caller_evidence, bridge::ExportId::d3d12_release_feature);
+  const std::uint64_t token =
+      caller_verified ? read_bridge_token(feature_handle) : 0U;
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    bool expected_outstanding = true;
+    const bool cleanup_authorized =
+        caller_verified && token == kOneEvaluateToken &&
+        g_bridge_token_issued.compare_exchange_strong(
+            expected_outstanding, false, std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    const bool owner_finished =
+        g_bridge_boundary_state.load(std::memory_order_acquire) == 3U;
+    const bridge::TransitionResult transition =
+        owner_finished
+            ? bridge_apply(cleanup_authorized
+                               ? bridge::LifecycleOperation::release
+                               : bridge::LifecycleOperation::abort,
+                           bridge::ExportId::d3d12_release_feature, caller,
+                           token)
+            : bridge_observation_transition();
+    const NgxResult result =
+        cleanup_authorized ? kResultSuccess : kResultNotInitialized;
+    publish_bridge_event(bridge::ExportId::d3d12_release_feature, caller,
+                         transition, result, token, 0U, false, nullptr,
+                         nullptr, !owner_finished);
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return result;
+  }
+  bool expected_outstanding = true;
+  const bool cleanup_authorized =
+      caller_verified && token == kOneEvaluateToken &&
+      g_bridge_token_issued.compare_exchange_strong(
+          expected_outstanding, false, std::memory_order_acq_rel,
+          std::memory_order_acquire);
+  const bridge::TransitionResult transition = bridge_apply(
+      cleanup_authorized ? bridge::LifecycleOperation::release
+                         : bridge::LifecycleOperation::abort,
+      bridge::ExportId::d3d12_release_feature, caller, token);
+  const NgxResult result = cleanup_authorized ? kResultSuccess
+                                               : kResultNotInitialized;
+  const bool boundary_clean = boundary.finish();
+  publish_bridge_event(bridge::ExportId::d3d12_release_feature, caller,
+                       transition, result, token);
+  if (!boundary_clean && transition.after != bridge::LifecycleState::inert) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::d3d12_release_feature, caller, token);
+    publish_bridge_event(bridge::ExportId::d3d12_release_feature, caller,
+                         abort_transition, result, token);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return result;
+}
+
+extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
+bridge_d3d12_shutdown_wrapper() noexcept {
+  const DWORD incoming_last_error = GetLastError();
+  const void *const caller = _ReturnAddress();
+  g_active_wrapper_calls.fetch_add(1U, std::memory_order_seq_cst);
+  const bridge::CallerEvidence caller_evidence =
+      bridge_caller_evidence(bridge::ExportId::d3d12_shutdown, caller);
+  BridgeBoundaryLease boundary;
+  if (!boundary) {
+    bool expected_initialized = true;
+    const bool cleanup_authorized =
+        bridge::caller_is_verified_for(caller_evidence,
+                                       bridge::ExportId::d3d12_shutdown) &&
+        g_bridge_init_succeeded.compare_exchange_strong(
+            expected_initialized, false, std::memory_order_acq_rel,
+            std::memory_order_acquire);
+    const bool owner_finished =
+        g_bridge_boundary_state.load(std::memory_order_acquire) == 3U;
+    const bridge::TransitionResult transition =
+        owner_finished
+            ? bridge_apply(cleanup_authorized
+                               ? bridge::LifecycleOperation::shutdown
+                               : bridge::LifecycleOperation::abort,
+                           bridge::ExportId::d3d12_shutdown, caller)
+            : bridge_observation_transition();
+    const NgxResult result =
+        cleanup_authorized ? kResultSuccess : kResultNotInitialized;
+    publish_bridge_event(bridge::ExportId::d3d12_shutdown, caller,
+                         transition, result, 0U, 0U, false, nullptr,
+                         nullptr, !owner_finished);
+    g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+    SetLastError(incoming_last_error);
+    return result;
+  }
+  bool expected_initialized = true;
+  const bool cleanup_authorized =
+      bridge::caller_is_verified_for(caller_evidence,
+                                     bridge::ExportId::d3d12_shutdown) &&
+      g_bridge_init_succeeded.compare_exchange_strong(
+          expected_initialized, false, std::memory_order_acq_rel,
+          std::memory_order_acquire);
+  const bridge::TransitionResult transition = bridge_apply(
+      cleanup_authorized ? bridge::LifecycleOperation::shutdown
+                         : bridge::LifecycleOperation::abort,
+      bridge::ExportId::d3d12_shutdown, caller);
+  const NgxResult result = cleanup_authorized ? kResultSuccess
+                                               : kResultNotInitialized;
+  const bool boundary_clean = boundary.finish();
+  publish_bridge_event(bridge::ExportId::d3d12_shutdown, caller, transition,
+                       result);
+  if (!boundary_clean && transition.after != bridge::LifecycleState::inert) {
+    const bridge::TransitionResult abort_transition = bridge_apply(
+        bridge::LifecycleOperation::abort,
+        bridge::ExportId::d3d12_shutdown, caller);
+    publish_bridge_event(bridge::ExportId::d3d12_shutdown, caller,
+                         abort_transition, result);
+  }
+  g_active_wrapper_calls.fetch_sub(1U, std::memory_order_seq_cst);
+  SetLastError(incoming_last_error);
+  return result;
+}
+#endif
 
 extern "C" __declspec(dllexport) __declspec(noinline) NgxResult __cdecl
 legacy_capability_wrapper(NgxParameter **parameters) {
@@ -1417,6 +2996,595 @@ FARPROC wrapper_for_slot(const Slot slot) noexcept {
   return nullptr;
 }
 
+FARPROC bind_slot(Slot slot, HMODULE module, FARPROC target,
+                  const void *caller) noexcept;
+
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+enum class BridgeRouteResult : std::uint8_t {
+  not_candidate,
+  substituted,
+  guarded_null,
+  rejected,
+};
+
+bool is_bridge_target_name(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::populate:
+  case TargetName::d3d12_init:
+  case TargetName::d3d12_scratch:
+  case TargetName::d3d12_create:
+  case TargetName::d3d12_evaluate:
+  case TargetName::d3d12_release:
+  case TargetName::d3d12_shutdown:
+  case TargetName::d3d12_shutdown1:
+  case TargetName::d3d12_create1:
+  case TargetName::d3d12_init_ext:
+  case TargetName::d3d12_init_ext1:
+  case TargetName::d3d12_init_ext2:
+  case TargetName::d3d12_populate_parameters_impl:
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return true;
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+  case TargetName::d3d12_evaluate_c:
+    return false;
+  }
+  return false;
+}
+
+bridge::ExportId bridge_export_for_target(TargetName name) noexcept;
+
+std::uint32_t bridge_route_bit(const TargetName name) noexcept {
+  return bridge::provider_route_bit(bridge_export_for_target(name));
+}
+
+std::uint32_t bridge_lookup_bit(const TargetName name) noexcept {
+  return bridge::provider_lookup_bit(bridge_export_for_target(name));
+}
+
+bridge::ExportId bridge_export_for_target(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::populate:
+    return bridge::ExportId::populate_parameters;
+  case TargetName::d3d12_init:
+    return bridge::ExportId::d3d12_init;
+  case TargetName::d3d12_create:
+    return bridge::ExportId::d3d12_create_feature;
+  case TargetName::d3d12_evaluate:
+    return bridge::ExportId::d3d12_evaluate_feature;
+  case TargetName::d3d12_evaluate_c:
+    return bridge::ExportId::unknown;
+  case TargetName::d3d12_release:
+    return bridge::ExportId::d3d12_release_feature;
+  case TargetName::d3d12_shutdown:
+    return bridge::ExportId::d3d12_shutdown;
+  case TargetName::d3d12_scratch:
+    return bridge::ExportId::d3d12_get_scratch_buffer_size;
+  case TargetName::d3d12_shutdown1:
+    return bridge::ExportId::d3d12_shutdown1;
+  case TargetName::d3d12_create1:
+    return bridge::ExportId::d3d12_create_feature1;
+  case TargetName::d3d12_init_ext:
+    return bridge::ExportId::d3d12_init_ext;
+  case TargetName::d3d12_init_ext1:
+    return bridge::ExportId::d3d12_init_ext1;
+  case TargetName::d3d12_init_ext2:
+    return bridge::ExportId::d3d12_init_ext2;
+  case TargetName::d3d12_populate_parameters_impl:
+    return bridge::ExportId::d3d12_populate_parameters_impl;
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return bridge::ExportId::d3d12_populate_device_parameters_impl;
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+    return bridge::ExportId::unknown;
+  }
+  return bridge::ExportId::unknown;
+}
+
+std::uintptr_t bridge_target_rva(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::d3d12_shutdown:
+    return 0x08310U;
+  case TargetName::d3d12_scratch:
+    return 0x08370U;
+  case TargetName::d3d12_create:
+    return 0x083A0U;
+  case TargetName::d3d12_release:
+    return 0x083C0U;
+  case TargetName::d3d12_evaluate:
+    return 0x083E0U;
+  case TargetName::d3d12_init:
+    return 0x08410U;
+  case TargetName::populate:
+    return 0x1DFA0U;
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+  case TargetName::d3d12_evaluate_c:
+  case TargetName::d3d12_shutdown1:
+  case TargetName::d3d12_create1:
+  case TargetName::d3d12_init_ext:
+  case TargetName::d3d12_init_ext1:
+  case TargetName::d3d12_init_ext2:
+  case TargetName::d3d12_populate_parameters_impl:
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return 0U;
+  }
+  return 0U;
+}
+
+std::uintptr_t bridge_resolver_return_rva(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::d3d12_init:
+    return 0x4320CU;
+  case TargetName::d3d12_shutdown:
+    return 0x43222U;
+  case TargetName::d3d12_shutdown1:
+    return 0x43241U;
+  case TargetName::d3d12_scratch:
+    return 0x43257U;
+  case TargetName::d3d12_create:
+    return 0x4326DU;
+  case TargetName::d3d12_create1:
+    return 0x43283U;
+  case TargetName::d3d12_evaluate:
+    return 0x43299U;
+  case TargetName::d3d12_release:
+    return 0x432AFU;
+  case TargetName::d3d12_init_ext:
+    return 0x432C5U;
+  case TargetName::d3d12_init_ext1:
+    return 0x432DBU;
+  case TargetName::d3d12_init_ext2:
+    return 0x432F1U;
+  case TargetName::d3d12_populate_parameters_impl:
+    return 0x43333U;
+  case TargetName::populate:
+    return 0x43351U;
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return 0x43367U;
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+  case TargetName::d3d12_evaluate_c:
+    return 0U;
+  }
+  return 0U;
+}
+
+FARPROC bridge_wrapper_for_target(const TargetName name) noexcept {
+  switch (name) {
+  case TargetName::d3d12_init:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_init_wrapper);
+  case TargetName::d3d12_scratch:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_scratch_wrapper);
+  case TargetName::d3d12_create:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_create_wrapper);
+  case TargetName::d3d12_evaluate:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_evaluate_wrapper);
+  case TargetName::d3d12_release:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_release_wrapper);
+  case TargetName::d3d12_shutdown:
+    return reinterpret_cast<FARPROC>(&bridge_d3d12_shutdown_wrapper);
+  case TargetName::populate:
+    return reinterpret_cast<FARPROC>(&cache_populate_wrapper);
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+  case TargetName::d3d12_evaluate_c:
+  case TargetName::d3d12_shutdown1:
+  case TargetName::d3d12_create1:
+  case TargetName::d3d12_init_ext:
+  case TargetName::d3d12_init_ext1:
+  case TargetName::d3d12_init_ext2:
+  case TargetName::d3d12_populate_parameters_impl:
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return nullptr;
+  }
+  return nullptr;
+}
+
+bool bridge_target_prologue_matches(const TargetName name,
+                                    const void *const target) noexcept {
+  switch (name) {
+  case TargetName::d3d12_init:
+    return exact_bytes(target, kCacheInitPrologue);
+  case TargetName::d3d12_shutdown:
+    return exact_bytes(target, kCacheShutdownPrologue);
+  case TargetName::d3d12_scratch:
+    return exact_bytes(target, kCacheScratchPrologue);
+  case TargetName::d3d12_create:
+    return exact_bytes(target, kCacheCreatePrologue);
+  case TargetName::d3d12_evaluate:
+    return exact_bytes(target, kCacheEvaluatePrologue);
+  case TargetName::d3d12_release:
+    return exact_bytes(target, kCacheReleasePrologue);
+  case TargetName::populate:
+    return exact_bytes(target, kCachePopulatePrologue);
+  case TargetName::unknown:
+  case TargetName::capability_parameters:
+  case TargetName::parameters:
+  case TargetName::d3d12_evaluate_c:
+  case TargetName::d3d12_shutdown1:
+  case TargetName::d3d12_create1:
+  case TargetName::d3d12_init_ext:
+  case TargetName::d3d12_init_ext1:
+  case TargetName::d3d12_init_ext2:
+  case TargetName::d3d12_populate_parameters_impl:
+  case TargetName::d3d12_populate_device_parameters_impl:
+    return false;
+  }
+  return false;
+}
+
+bool mapped_cache_candidate(const HMODULE module) noexcept {
+  PeIdentity identity{};
+  return read_mapped_pe_identity(module, &identity) &&
+         identity.machine == IMAGE_FILE_MACHINE_AMD64 &&
+         identity.optional_magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+         identity.timestamp == 0x64405395U &&
+         identity.image_size == 0x00B57000U &&
+         identity.image_base == reinterpret_cast<std::uintptr_t>(module);
+}
+
+bool module_path_matches_fixed(
+    const HMODULE module, const wchar_t *const expected,
+    const std::atomic<std::uint32_t> &expected_length) noexcept {
+  if (module == nullptr || expected == nullptr) {
+    return false;
+  }
+  const std::uint32_t wanted =
+      expected_length.load(std::memory_order_acquire);
+  if (wanted == 0U || wanted >= kResolverPathCapacity) {
+    return false;
+  }
+  wchar_t actual[kResolverPathCapacity]{};
+  const DWORD actual_length = GetModuleFileNameW(
+      module, actual, static_cast<DWORD>(_countof(actual)));
+  return actual_length == wanted && actual_length < _countof(actual) &&
+         equal_path_text(std::wstring_view(actual, actual_length),
+                         std::wstring_view(expected, wanted));
+}
+
+bool bridge_current_target_matches(const TargetName name,
+                                   const HMODULE module,
+                                   const FARPROC target) noexcept {
+  const std::uintptr_t rva = bridge_target_rva(name);
+  const auto base = reinterpret_cast<std::uintptr_t>(module);
+  return rva != 0U && mapped_cache_candidate(module) && target != nullptr &&
+         reinterpret_cast<std::uintptr_t>(target) == base + rva &&
+         executable_image_address(module,
+                                  reinterpret_cast<const void *>(target)) &&
+         bridge_target_prologue_matches(
+             name, reinterpret_cast<const void *>(target));
+}
+
+bool bridge_cache_module_matches(const HMODULE module) noexcept {
+  if (!mapped_cache_candidate(module) ||
+      !module_path_matches_fixed(module, g_expected_cache_path,
+                                 g_expected_cache_path_length)) {
+    return false;
+  }
+
+  const auto base = reinterpret_cast<std::uintptr_t>(module);
+  const auto exact_executable = [module, base](
+                                    const std::uintptr_t rva,
+                                    const auto &bytes) noexcept {
+    const auto *const address = reinterpret_cast<const void *>(base + rva);
+    return executable_image_address(module, address) &&
+           exact_bytes(address, bytes);
+  };
+  return exact_executable(0x08310U, kCacheShutdownPrologue) &&
+         exact_executable(0x08370U, kCacheScratchPrologue) &&
+         exact_executable(0x083A0U, kCacheCreatePrologue) &&
+         exact_executable(0x083C0U, kCacheReleasePrologue) &&
+         exact_executable(0x083E0U, kCacheEvaluatePrologue) &&
+         exact_executable(0x08410U, kCacheInitPrologue) &&
+         exact_executable(0x1DFA0U, kCachePopulatePrologue);
+}
+
+bool bridge_modern_core_caller_matches(
+    const TargetName name, const void *const caller,
+    std::uintptr_t *const output_base) noexcept {
+  if (output_base == nullptr) {
+    return false;
+  }
+  *output_base = 0U;
+  const std::uintptr_t return_rva = bridge_resolver_return_rva(name);
+  if (return_rva == 0U ||
+      !caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                            return_rva)) {
+    return false;
+  }
+  MEMORY_BASIC_INFORMATION information{};
+  if (VirtualQuery(caller, &information, sizeof(information)) !=
+          sizeof(information) ||
+      information.AllocationBase == nullptr) {
+    return false;
+  }
+  const auto module = static_cast<HMODULE>(information.AllocationBase);
+  if (!module_path_matches_fixed(module, g_expected_modern_core_path,
+                                 g_expected_modern_core_path_length)) {
+    return false;
+  }
+  const auto base = reinterpret_cast<std::uintptr_t>(module);
+  if (!executable_image_address(
+          module, reinterpret_cast<const void *>(base + 0x66C50U)) ||
+      !exact_bytes(reinterpret_cast<const void *>(base + 0x66C50U),
+                   kModernParametersPrologue)) {
+    return false;
+  }
+  *output_base = base;
+  return true;
+}
+
+bool bridge_fast_route_matches(const TargetName name, const HMODULE module,
+                               const FARPROC target,
+                               const void *const caller) noexcept {
+  const std::uintptr_t cache_base =
+      g_bridge_cache_base.load(std::memory_order_acquire);
+  const std::uintptr_t modern_base =
+      g_bridge_modern_core_base.load(std::memory_order_acquire);
+  return cache_base != 0U && modern_base != 0U &&
+         reinterpret_cast<std::uintptr_t>(module) == cache_base &&
+         GetModuleHandleW(L"mhw_dlss_unlock.dll") == nullptr &&
+         module_path_matches_fixed(module, g_expected_cache_path,
+                                   g_expected_cache_path_length) &&
+         bridge_current_target_matches(name, module, target) &&
+         caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                              bridge_resolver_return_rva(name)) &&
+         reinterpret_cast<std::uintptr_t>(caller) ==
+             modern_base + bridge_resolver_return_rva(name);
+}
+
+bool bridge_fast_guard_matches(const TargetName name, const HMODULE module,
+                               const FARPROC target,
+                               const void *const caller) noexcept {
+  const std::uintptr_t cache_base =
+      g_bridge_cache_base.load(std::memory_order_acquire);
+  const std::uintptr_t modern_base =
+      g_bridge_modern_core_base.load(std::memory_order_acquire);
+  return bridge::is_provider_guard_export(bridge_export_for_target(name)) &&
+         cache_base != 0U && modern_base != 0U && target == nullptr &&
+         reinterpret_cast<std::uintptr_t>(module) == cache_base &&
+         GetModuleHandleW(L"mhw_dlss_unlock.dll") == nullptr &&
+         mapped_cache_candidate(module) &&
+         module_path_matches_fixed(module, g_expected_cache_path,
+                                   g_expected_cache_path_length) &&
+         caller_is_module_rva(caller, 0x6A0CB15EU, 0x00173000U,
+                              bridge_resolver_return_rva(name)) &&
+         reinterpret_cast<std::uintptr_t>(caller) ==
+             modern_base + bridge_resolver_return_rva(name);
+}
+
+BridgeRouteResult maybe_route_bridge_export(
+    const TargetName name, const HMODULE module, const FARPROC target,
+    const void *const caller, FARPROC *const output) {
+  if (output == nullptr ||
+      g_bridge_mode.load(std::memory_order_acquire) ==
+          bridge::Mode::disabled ||
+      !is_bridge_target_name(name)) {
+    return BridgeRouteResult::not_candidate;
+  }
+  *output = nullptr;
+  const bridge::ExportId export_id = bridge_export_for_target(name);
+  const std::uint32_t lookup_bit = bridge_lookup_bit(name);
+  const bool guard_only = bridge::is_provider_guard_export(export_id);
+  const bool generic_callback =
+      export_id == bridge::ExportId::populate_parameters;
+  const FARPROC wrapper = bridge_wrapper_for_target(name);
+  if (export_id == bridge::ExportId::unknown || lookup_bit == 0U ||
+      (!guard_only && wrapper == nullptr)) {
+    return BridgeRouteResult::rejected;
+  }
+
+  std::uintptr_t observed_modern_base{};
+  const bool exact_resolver_origin = bridge_modern_core_caller_matches(
+      name, caller, &observed_modern_base);
+
+  AcquireSRWLockExclusive(&g_bridge_route_lock);
+  int route_state = g_bridge_route_state.load(std::memory_order_acquire);
+  if (route_state == -2) {
+    ReleaseSRWLockExclusive(&g_bridge_route_lock);
+    return BridgeRouteResult::not_candidate;
+  }
+  const bool interception_started =
+      g_bridge_interception_started.load(std::memory_order_acquire);
+  const std::uint32_t seen_mask =
+      g_bridge_lookup_seen_mask.load(std::memory_order_acquire);
+  const std::uintptr_t pinned_cache_base =
+      g_bridge_cache_base.load(std::memory_order_acquire);
+  const DWORD route_thread_id =
+      g_bridge_route_thread_id.load(std::memory_order_acquire);
+  const bool route_thread_matches =
+      route_thread_id != 0U && route_thread_id == GetCurrentThreadId();
+  const bool pinned_cache_module =
+      pinned_cache_base != 0U &&
+      reinterpret_cast<std::uintptr_t>(module) == pinned_cache_base;
+  const bool first_transaction_member =
+      !interception_started && exact_resolver_origin;
+  const bool incomplete_transaction_member =
+      interception_started &&
+      seen_mask != bridge::kProviderLookupMaskComplete &&
+      (route_thread_matches || exact_resolver_origin || pinned_cache_module);
+  const bool completed_transaction_member =
+      interception_started &&
+      seen_mask == bridge::kProviderLookupMaskComplete &&
+      exact_resolver_origin &&
+      pinned_cache_module &&
+      observed_modern_base ==
+          g_bridge_modern_core_base.load(std::memory_order_acquire);
+
+  // Joining after Init would leave the modern core with a mixed table of raw
+  // and bridge pointers. Treat that startup-worker race as an untouched,
+  // inconclusive run instead.
+  if (!interception_started && exact_resolver_origin &&
+      name != TargetName::d3d12_init) {
+    g_bridge_route_state.store(-2, std::memory_order_release);
+    g_bridge_route_thread_id.store(GetCurrentThreadId(),
+                                   std::memory_order_release);
+    g_bridge_lookup_seen_mask.fetch_or(lookup_bit,
+                                       std::memory_order_release);
+    ReleaseSRWLockExclusive(&g_bridge_route_lock);
+    static_cast<void>(bridge_apply(bridge::LifecycleOperation::abort,
+                                   export_id, caller));
+    g_bridge_route_rejects.fetch_add(1U, std::memory_order_relaxed);
+    return BridgeRouteResult::not_candidate;
+  }
+  if (!first_transaction_member && !incomplete_transaction_member &&
+      !completed_transaction_member) {
+    ReleaseSRWLockExclusive(&g_bridge_route_lock);
+    return BridgeRouteResult::not_candidate;
+  }
+
+  if (first_transaction_member) {
+    g_bridge_interception_started.store(true, std::memory_order_release);
+    g_bridge_route_thread_id.store(GetCurrentThreadId(),
+                                   std::memory_order_release);
+    g_bridge_modern_core_base.store(observed_modern_base,
+                                    std::memory_order_release);
+  }
+
+  bool route_poisoned = false;
+  const auto poison_route = [&]() noexcept {
+    route_poisoned = true;
+    g_bridge_lookup_transaction_complete.store(false,
+                                               std::memory_order_release);
+    if (route_state == -1) {
+      return;
+    }
+    g_bridge_route_state.store(-1, std::memory_order_release);
+    route_state = -1;
+    poison_bridge_boundary();
+    static_cast<void>(bridge_apply(bridge::LifecycleOperation::abort,
+                                   export_id, caller));
+  };
+  if (seen_mask != bridge::kProviderLookupMaskComplete &&
+      export_id != bridge::expected_provider_lookup(seen_mask)) {
+    poison_route();
+  }
+  g_bridge_lookup_seen_mask.fetch_or(lookup_bit,
+                                     std::memory_order_release);
+
+  if (route_state == 0) {
+    std::uintptr_t modern_base{};
+    const bool verified =
+        g_bridge_environment_ready.load(std::memory_order_acquire) &&
+        GetModuleHandleW(L"mhw_dlss_unlock.dll") == nullptr &&
+        export_id == bridge::ExportId::d3d12_init &&
+        bridge_cache_module_matches(module) &&
+        bridge_current_target_matches(name, module, target) &&
+        bridge_modern_core_caller_matches(name, caller, &modern_base);
+    if (verified) {
+      g_bridge_cache_base.store(reinterpret_cast<std::uintptr_t>(module),
+                                std::memory_order_release);
+      g_bridge_modern_core_base.store(modern_base,
+                                      std::memory_order_release);
+      g_bridge_route_state.store(1, std::memory_order_release);
+      const bridge::TransitionResult transition = bridge_apply(
+          bridge::LifecycleOperation::verify,
+          export_id, caller);
+      if (transition.transition_applied &&
+          transition.decision == bridge::TransitionDecision::identity_verified) {
+        g_bridge_ever_armed.store(true, std::memory_order_release);
+        g_bridge_route_mask.fetch_or(bridge_route_bit(name),
+                                     std::memory_order_release);
+        route_state = 1;
+      } else {
+        g_bridge_lookup_transaction_complete.store(
+            false, std::memory_order_release);
+        g_bridge_route_state.store(-1, std::memory_order_release);
+        route_state = -1;
+        route_poisoned = true;
+        poison_bridge_boundary();
+      }
+    } else {
+      g_bridge_lookup_transaction_complete.store(false,
+                                                 std::memory_order_release);
+      g_bridge_route_state.store(-1, std::memory_order_release);
+      route_state = -1;
+      route_poisoned = true;
+      poison_bridge_boundary();
+      static_cast<void>(bridge_apply(bridge::LifecycleOperation::abort,
+                                     export_id, caller));
+    }
+  }
+
+  const bool sequence_thread_valid =
+      seen_mask == bridge::kProviderLookupMaskComplete ||
+      route_thread_matches || first_transaction_member;
+  const bool exact_member =
+      sequence_thread_valid &&
+      (guard_only ? bridge_fast_guard_matches(name, module, target, caller)
+                  : bridge_fast_route_matches(name, module, target, caller));
+  if (route_state == 1 && !exact_member) {
+    poison_route();
+  }
+  if (route_state == 1 && bridge_route_bit(name) != 0U) {
+    g_bridge_route_mask.fetch_or(bridge_route_bit(name),
+                                 std::memory_order_release);
+  }
+
+  BridgeRouteResult result = BridgeRouteResult::substituted;
+  if (guard_only) {
+    // These seven symbols have different ABIs or bypass the generic Populate
+    // callback. The pinned provider exports none of them. Preserve that exact
+    // null contract, and suppress a drifted non-null result rather than ever
+    // coercing it through one of the base wrappers.
+    *output = nullptr;
+    result = BridgeRouteResult::guarded_null;
+  } else if (generic_callback) {
+    // Populate is the only non-lifecycle callback in the transaction. Bind its
+    // exact original before returning the observer wrapper. Once poisoned, do
+    // not let the raw callback create a mixed modern/cache provider table.
+    if (route_state == 1 && exact_member &&
+        bind_slot(Slot::cache_populate, module, target, caller) == wrapper) {
+      *output = wrapper;
+      g_bridge_callback_routes.fetch_add(1U, std::memory_order_relaxed);
+    } else {
+      *output = nullptr;
+      poison_route();
+    }
+  } else {
+    // Every admitted base lifecycle member receives a local wrapper. If one
+    // member fails validation, the table therefore fails closed instead of
+    // leaking a mixture of original and substituted lifecycle exports.
+    *output = wrapper;
+  }
+  const std::uint32_t completed_lookup_mask =
+      seen_mask | lookup_bit;
+  if (route_state == 1 && exact_member && !route_poisoned &&
+      g_bridge_route_state.load(std::memory_order_acquire) == 1 &&
+      completed_lookup_mask == bridge::kProviderLookupMaskComplete) {
+    // This release store is the transaction commit point. Runtime wrappers
+    // cannot synthesize provider success until every preceding route/guard
+    // validation and the generic Populate binding are visible.
+    g_bridge_lookup_transaction_complete.store(true,
+                                               std::memory_order_release);
+  }
+  ReleaseSRWLockExclusive(&g_bridge_route_lock);
+
+  if (guard_only) {
+    g_bridge_guard_lookups.fetch_add(1U, std::memory_order_relaxed);
+    if (target != nullptr) {
+      g_bridge_guard_suppressions.fetch_add(1U,
+                                            std::memory_order_relaxed);
+    }
+    if (route_state != 1 || route_poisoned || target != nullptr) {
+      g_bridge_guard_rejects.fetch_add(1U, std::memory_order_relaxed);
+    }
+  } else {
+    g_bridge_routes.fetch_add(1U, std::memory_order_relaxed);
+  }
+  if (route_state != 1 || route_poisoned) {
+    g_bridge_route_rejects.fetch_add(1U, std::memory_order_relaxed);
+  }
+  return result;
+}
+#endif
+
 bool find_matching_slot(const TargetName name, const HMODULE module,
                          const FARPROC target, const void *const caller,
                          Slot *const output) noexcept {
@@ -1509,14 +3677,43 @@ get_proc_address_for_caller_detour(const HMODULE module, const LPCSTR name,
   const FARPROC target = original(module, name, caller);
   const DWORD outgoing_last_error = GetLastError();
   FARPROC returned = target;
+  const TargetName target_name = classify_target_name(name);
+  bool bridge_handled = false;
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  FARPROC bridge_target{};
+  const BridgeRouteResult bridge_route = maybe_route_bridge_export(
+      target_name, module, target, caller, &bridge_target);
+  if (bridge_route == BridgeRouteResult::substituted) {
+    returned = bridge_target;
+    bridge_handled = true;
+    if (observe) {
+      publish_resolver_event(ResolverDisposition::substituted, target_name,
+                             module, target, caller);
+    }
+  } else if (bridge_route == BridgeRouteResult::guarded_null) {
+    returned = nullptr;
+    bridge_handled = true;
+    if (observe) {
+      publish_resolver_event(ResolverDisposition::guarded_null, target_name,
+                             module, target, caller);
+    }
+  } else if (bridge_route == BridgeRouteResult::rejected) {
+    bridge_handled = true;
+    if (observe) {
+      publish_resolver_event(ResolverDisposition::rejected, target_name,
+                             module, target, caller);
+    }
+  }
+#endif
   if (!observe) {
     if (g_trace_state.load(std::memory_order_acquire) == 0) {
       g_resolver_before_ready.fetch_add(1U, std::memory_order_relaxed);
     }
   } else {
     g_resolver_calls.fetch_add(1U, std::memory_order_relaxed);
-    const TargetName target_name = classify_target_name(name);
-    if (target_name == TargetName::unknown) {
+    if (bridge_handled) {
+      // The exact bridge decision has already been recorded above.
+    } else if (target_name == TargetName::unknown) {
       g_name_rejects.fetch_add(1U, std::memory_order_relaxed);
     } else if (target == nullptr) {
       g_target_nulls.fetch_add(1U, std::memory_order_relaxed);
@@ -2113,6 +4310,122 @@ std::string address_origin(const std::uintptr_t address) {
          hexadecimal(address - base);
 }
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+const char *boolean_text(const bool value) noexcept {
+  return value ? "true" : "false";
+}
+
+void write_bridge_capture_summary(const std::uint64_t sequence,
+                                  const char *const phase,
+                                  const bridge::CaptureSummary &summary) {
+  write_log("bridge.contract-summary sequence=" + std::to_string(sequence) +
+            " phase=" + phase + " queries=" +
+            std::to_string(summary.queries_attempted) + " complete=" +
+            boolean_text(summary.complete) + " fault-latched=" +
+            boolean_text(summary.fault_latched) + " stop-reason=" +
+            capture_stop_reason_text(summary.stop_reason));
+}
+
+template <typename Capture>
+void write_bridge_scalar_capture(const std::uint64_t sequence,
+                                 const char *const phase,
+                                 const char *const kind,
+                                 const std::string_view key,
+                                 const Capture &capture,
+                                 const std::string &value) {
+  write_log("bridge.contract sequence=" + std::to_string(sequence) +
+            " phase=" + phase + " kind=" + kind + " key=" +
+            std::string(key) + " attempted=" +
+            boolean_text(capture.query_attempted) +
+            " callback-completed=" +
+            boolean_text(capture.callback_completed) + " present=" +
+            boolean_text(capture.present) + " getter-result=" +
+            hexadecimal(capture.getter_result) + " value=" + value);
+}
+
+void drain_bridge_events() {
+  for (BridgeEvent &event : g_bridge_events) {
+    if (event.state.load(std::memory_order_acquire) != EventState::ready) {
+      continue;
+    }
+    const BridgeEventPayload payload = event.payload;
+    const std::string_view export_view =
+        bridge::export_name(payload.export_id);
+    write_log(
+        "bridge.call sequence=" + std::to_string(payload.sequence) +
+        " export=" +
+        (export_view.empty() ? std::string("unknown")
+                             : std::string(export_view)) +
+        " hit-tick=" + std::to_string(payload.tick) + " hit-tid=" +
+        std::to_string(payload.thread_id) + " caller=" +
+        address_origin(payload.caller) + " caller-address=" +
+        hexadecimal(payload.caller) + " before=" +
+        bridge_state_text(payload.before) + " after=" +
+        bridge_state_text(payload.after) + " decision=" +
+        (payload.observation_only
+             ? std::string("observation-only")
+             : std::string(bridge_decision_text(payload.decision))) +
+        " response=" +
+        bridge_response_text(payload.response) + " result=" +
+        hexadecimal(payload.result) + " result-name=" +
+        ngx_result_name(payload.result) + " token=" +
+        hexadecimal(payload.token) + " argument0=" +
+        hexadecimal(payload.argument0) + " argument1=" +
+        hexadecimal(payload.argument1) + " capture-committed=" +
+        boolean_text(payload.capture_committed) +
+        " d3d12-object-verified=" +
+        boolean_text(payload.d3d12_object_verified) +
+        " lifecycle-observation-only=" +
+        boolean_text(payload.observation_only));
+
+    if (payload.has_create_snapshot) {
+      for (const auto &capture : payload.create_snapshot.unsigned_values) {
+        write_bridge_scalar_capture(
+            payload.sequence, "create", "uint", bridge::key_name(capture.key),
+            capture, std::to_string(capture.value));
+      }
+      for (const auto &capture : payload.create_snapshot.signed_values) {
+        write_bridge_scalar_capture(
+            payload.sequence, "create", "int", bridge::key_name(capture.key),
+            capture, std::to_string(capture.value));
+      }
+      write_bridge_capture_summary(payload.sequence, "create",
+                                   payload.create_snapshot.summary);
+    }
+    if (payload.has_evaluate_snapshot) {
+      for (const auto &capture : payload.evaluate_snapshot.resources) {
+        write_log(
+            "bridge.contract sequence=" + std::to_string(payload.sequence) +
+            " phase=evaluate kind=resource key=" +
+            std::string(bridge::key_name(capture.key)) + " attempted=" +
+            boolean_text(capture.query_attempted) +
+            " callback-completed=" +
+            boolean_text(capture.callback_completed) + " present=" +
+            boolean_text(capture.present) + " getter-result=" +
+            hexadecimal(capture.getter_result) + " value=" +
+            hexadecimal(capture.value) + " value-is-null=" +
+            boolean_text(capture.value_is_null));
+      }
+      for (const auto &capture : payload.evaluate_snapshot.floats) {
+        write_bridge_scalar_capture(
+            payload.sequence, "evaluate", "float",
+            bridge::key_name(capture.key), capture,
+            std::to_string(capture.value));
+      }
+      for (const auto &capture : payload.evaluate_snapshot.signed_values) {
+        write_bridge_scalar_capture(
+            payload.sequence, "evaluate", "int",
+            bridge::key_name(capture.key), capture,
+            std::to_string(capture.value));
+      }
+      write_bridge_capture_summary(payload.sequence, "evaluate",
+                                   payload.evaluate_snapshot.summary);
+    }
+    event.state.store(EventState::logged, std::memory_order_release);
+  }
+}
+#endif
+
 void drain_slot_events(const Slot slot) {
   SlotRuntime &runtime = slot_runtime(slot);
   for (TraceEvent &event : runtime.events) {
@@ -2186,7 +4499,18 @@ void drain_resolver_events() {
         (payload.target_rva_valid ? hexadecimal(payload.target_rva)
                                   : "unavailable") +
         " caller=" + address_origin(payload.caller) + " caller-address=" +
-        hexadecimal(payload.caller) + " returned-original=true mutations=0");
+        hexadecimal(payload.caller) + " returned-original=" +
+        ((payload.disposition == ResolverDisposition::substituted ||
+          (payload.disposition == ResolverDisposition::guarded_null &&
+           payload.target != 0U))
+             ? "false"
+             : "true") +
+        " mutations=" +
+        ((payload.disposition == ResolverDisposition::substituted ||
+          (payload.disposition == ResolverDisposition::guarded_null &&
+           payload.target != 0U))
+             ? "1"
+             : "0"));
     event.state.store(EventState::logged, std::memory_order_release);
   }
 }
@@ -2348,6 +4672,27 @@ void drain_all_slot_events() {
   }
 }
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+bool bridge_capture_goal_reached() noexcept {
+  const bridge::Mode mode =
+      g_bridge_mode.load(std::memory_order_acquire);
+  const bridge::LifecycleState state = bridge_lifecycle_state();
+  if (g_bridge_init_succeeded.load(std::memory_order_acquire) ||
+      g_bridge_token_issued.load(std::memory_order_acquire)) {
+    return false;
+  }
+  if (mode == bridge::Mode::capture_create) {
+    return state == bridge::LifecycleState::create_captured ||
+           state == bridge::LifecycleState::inert;
+  }
+  if (mode == bridge::Mode::capture_one_evaluate) {
+    return state == bridge::LifecycleState::released ||
+           state == bridge::LifecycleState::inert;
+  }
+  return false;
+}
+#endif
+
 void log_slot_summary(const Slot slot) {
   const SlotRuntime &runtime = g_slots[slot_index(slot)];
   const auto target = runtime.target.load(std::memory_order_acquire);
@@ -2413,14 +4758,24 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
   census.seen.reserve(kMaximumCensusModules);
   const ULONGLONG start = GetTickCount64();
   ULONGLONG next_census = start;
+  DWORD trace_duration = kTraceDurationMilliseconds;
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  if (g_bridge_mode.load(std::memory_order_acquire) !=
+      bridge::Mode::disabled) {
+    trace_duration = kBridgeTraceDurationMilliseconds;
+  }
+#endif
   write_log("trace.window start=true duration-ms=" +
-            std::to_string(kTraceDurationMilliseconds));
+            std::to_string(trace_duration));
 
   for (;;) {
     verify_pending_slot_identities(host_directory, cache_path);
     try_install_feature_status_hook_guarded(host_directory, cache_path);
     drain_all_slot_events();
     drain_resolver_events();
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    drain_bridge_events();
+#endif
     const ULONGLONG now = GetTickCount64();
     if (now >= next_census) {
       try {
@@ -2434,10 +4789,14 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
       next_census = now + kCensusIntervalMilliseconds;
     }
     const ULONGLONG elapsed = now - start;
-    if (elapsed >= kTraceDurationMilliseconds) {
+    bool capture_goal_reached = false;
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    capture_goal_reached = bridge_capture_goal_reached();
+#endif
+    if (elapsed >= trace_duration || capture_goal_reached) {
       break;
     }
-    const ULONGLONG remaining = kTraceDurationMilliseconds - elapsed;
+    const ULONGLONG remaining = trace_duration - elapsed;
     const DWORD wait_milliseconds =
         remaining < kTracePollMilliseconds
             ? static_cast<DWORD>(remaining)
@@ -2451,12 +4810,26 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
   }
 
   const bool quiesced = close_trace_phase();
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  write_log("trace.window closed=true observer-bindings-enabled=false "
+             "provider-routes-retained=" +
+            std::string(
+                g_bridge_interception_started.load(std::memory_order_acquire)
+                            ? "true"
+                            : "false") +
+            " quiesced=" + std::string(quiesced ? "true" : "false") +
+            " hook-retained=true");
+#else
   write_log("trace.window closed=true bindings-enabled=false quiesced=" +
             std::string(quiesced ? "true" : "false") +
             " hook-retained=true");
+#endif
   verify_pending_slot_identities(host_directory, cache_path);
   drain_all_slot_events();
   drain_resolver_events();
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  drain_bridge_events();
+#endif
   try {
     census_modules(census);
   } catch (...) {
@@ -2491,6 +4864,87 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
     status_coverage =
         "armed-after-first-init-lookup-call-coverage-inconclusive";
   }
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+  const BridgeLifecycleDiagnostics lifecycle_diagnostics =
+      bridge_lifecycle_diagnostics();
+  const int final_route_state =
+      g_bridge_route_state.load(std::memory_order_acquire);
+  const std::uint32_t final_lookup_mask =
+      g_bridge_lookup_seen_mask.load(std::memory_order_acquire);
+  const std::string startup_coverage =
+      final_route_state == -2
+          ? "inconclusive-init-lookup-missed"
+          : (bridge_route_table_complete()
+                 ? "complete-init-first-14-lookup-transaction"
+                 : "inconclusive-no-or-partial-transaction");
+  const std::string mutation_summary =
+      g_bridge_mode.load(std::memory_order_acquire) == bridge::Mode::disabled
+          ? "0"
+          : std::to_string(
+                g_bridge_routes.load(std::memory_order_relaxed) +
+                g_bridge_guard_suppressions.load(
+                    std::memory_order_relaxed));
+  write_log(
+      "bridge.summary mode=" +
+      std::string(bridge_mode_text(
+          g_bridge_mode.load(std::memory_order_acquire))) +
+       " route-state=" +
+       std::to_string(final_route_state) +
+       " interception-started=" +
+       boolean_text(
+           g_bridge_interception_started.load(std::memory_order_acquire)) +
+       " route-mask=" +
+       hexadecimal(g_bridge_route_mask.load(std::memory_order_acquire)) +
+       " lookup-seen-mask=" + hexadecimal(final_lookup_mask) +
+       " guard-seen-mask=" +
+       hexadecimal(final_lookup_mask & bridge::kProviderGuardMaskComplete) +
+       " callback-seen-mask=" +
+       hexadecimal(final_lookup_mask &
+                   bridge::kProviderCallbackMaskComplete) +
+       " route-table-complete=" +
+      boolean_text(bridge_route_table_complete()) + " routes=" +
+      std::to_string(g_bridge_routes.load(std::memory_order_relaxed)) +
+      " route-rejects=" +
+      std::to_string(g_bridge_route_rejects.load(std::memory_order_relaxed)) +
+      " guard-lookups=" +
+      std::to_string(g_bridge_guard_lookups.load(std::memory_order_relaxed)) +
+      " guard-rejects=" +
+      std::to_string(g_bridge_guard_rejects.load(std::memory_order_relaxed)) +
+      " guard-suppressions=" +
+      std::to_string(
+          g_bridge_guard_suppressions.load(std::memory_order_relaxed)) +
+      " callback-routes=" +
+      std::to_string(
+          g_bridge_callback_routes.load(std::memory_order_relaxed)) +
+      " lifecycle-state=" + bridge_state_text(bridge_lifecycle_state()) +
+      " scratch-calls=" +
+      std::to_string(g_bridge_scratch_calls.load(std::memory_order_relaxed)) +
+      " first-scratch-caller=" +
+      address_origin(
+          g_bridge_first_scratch_caller.load(std::memory_order_acquire)) +
+      " scratch-result=" +
+      hexadecimal(g_bridge_last_scratch_result.load(
+          std::memory_order_acquire)) +
+      " bridge-events=" +
+      std::to_string(g_bridge_events_reserved.load(std::memory_order_relaxed)) +
+       " bridge-events-dropped=" +
+       std::to_string(g_bridge_events_dropped.load(std::memory_order_relaxed)) +
+       " boundary-contentions=" +
+       std::to_string(
+           g_bridge_boundary_contentions.load(std::memory_order_relaxed)) +
+       " lifecycle-overflowed=" +
+       boolean_text(lifecycle_diagnostics.overflowed) +
+       " lifecycle-events-dropped=" +
+       std::to_string(lifecycle_diagnostics.dropped_events) +
+       " init-cleanup-outstanding=" +
+      boolean_text(g_bridge_init_succeeded.load(std::memory_order_acquire)) +
+       " token-cleanup-outstanding=" +
+       boolean_text(g_bridge_token_issued.load(std::memory_order_acquire)) +
+       " startup-coverage=" + startup_coverage);
+#else
+  const std::string mutation_summary = "0";
+  const std::string startup_coverage = "observer-worker-gap-not-covered";
+#endif
   write_log(
       "trace.complete duration-ms=" +
       std::to_string(GetTickCount64() - start) + " census-modules=" +
@@ -2532,7 +4986,8 @@ void run_bounded_trace(const std::filesystem::path &host_directory,
       (before_ready == 0U && quiesced
            ? "best-effort-complete-after-enable"
            : "incomplete-after-enable") +
-      " startup-worker-gap-observable=false mutations=0");
+      " startup-coverage=" + startup_coverage + " mutations=" +
+      mutation_summary);
 }
 
 DWORD WINAPI trace_worker(void *) noexcept {
@@ -2554,12 +5009,27 @@ DWORD WINAPI trace_worker(void *) noexcept {
       g_slot_ready_event.store(reinterpret_cast<std::uintptr_t>(ready_event),
                                std::memory_order_release);
     }
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    const bool mode_recognized = configure_bridge_mode();
+    const bridge::Mode configured_mode =
+        g_bridge_mode.load(std::memory_order_acquire);
+    write_log(
+        "trace.start version=0.5.0 mode=modern-provider-bridge-probe "
+        "bridge-mode=" +
+        std::string(bridge_mode_text(configured_mode)) +
+        " mode-recognized=" + (mode_recognized ? "true" : "false") +
+        " expected-loader=mo2-force-load slot-wake-event=" +
+        std::string(ready_event != nullptr ? "true" : "false") +
+        " default-inert=true attach-to-worker-ms=" +
+        std::to_string(GetTickCount64() - g_attach_tick));
+#else
     write_log(
         "trace.start version=0.4.1 mode=ngx-d3d12-status-boundary-observer "
         "expected-loader=mo2-force-load slot-wake-event=" +
         std::string(ready_event != nullptr ? "true" : "false") +
         " mutations=0 attach-to-worker-ms=" +
         std::to_string(GetTickCount64() - g_attach_tick));
+#endif
 
     std::filesystem::path host_path;
     if (!prepare_host_boundary(&host_path)) {
@@ -2567,16 +5037,56 @@ DWORD WINAPI trace_worker(void *) noexcept {
       return 0U;
     }
 
+    const std::filesystem::path cache_path = cache_feature_path();
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    bool environment_verified = false;
+    if (configured_mode != bridge::Mode::disabled) {
+      environment_verified =
+          mode_recognized && verify_host_disk_identity(host_path) &&
+          verify_nvidia_adapter_inventory() &&
+          prepare_bridge_preflight(GetModuleHandleW(nullptr), cache_path);
+      if (!environment_verified) {
+        g_bridge_lookup_transaction_complete.store(
+            false, std::memory_order_release);
+        g_bridge_route_state.store(-1, std::memory_order_release);
+        g_trace_state.store(-1, std::memory_order_release);
+        write_log("bridge.inert reason=preflight-rejected "
+                  "resolver-installed=false provider-routes=0");
+        return 0U;
+      }
+    }
+#endif
+
     void *resolver{};
-    if (!resolve_and_verify_system_target(&resolver) ||
-        !install_resolver_hook(resolver)) {
+    if (!resolve_and_verify_system_target(&resolver)) {
+      g_trace_state.store(-1, std::memory_order_release);
+      return 0U;
+    }
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    if (environment_verified) {
+      g_bridge_environment_ready.store(true, std::memory_order_release);
+    }
+#endif
+    if (!install_resolver_hook(resolver)) {
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+      g_bridge_environment_ready.store(false, std::memory_order_release);
+#endif
       g_trace_state.store(-1, std::memory_order_release);
       return 0U;
     }
     g_trace_state.store(1, std::memory_order_release);
 
-    if (!verify_host_disk_identity(host_path) ||
-        !verify_nvidia_adapter_inventory()) {
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    const bool post_hook_environment_valid =
+        configured_mode != bridge::Mode::disabled ||
+        (verify_host_disk_identity(host_path) &&
+         verify_nvidia_adapter_inventory());
+#else
+    const bool post_hook_environment_valid =
+        verify_host_disk_identity(host_path) &&
+        verify_nvidia_adapter_inventory();
+#endif
+    if (!post_hook_environment_valid) {
       const bool quiesced = close_trace_phase();
       g_trace_state.store(-1, std::memory_order_release);
       write_log("trace.inert reason=environment-verification-failed "
@@ -2586,9 +5096,17 @@ DWORD WINAPI trace_worker(void *) noexcept {
       return 0U;
     }
 
-    const std::filesystem::path cache_path = cache_feature_path();
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+    write_log("trace.active host-verified=true gpu-allowlist=RTX_5090 "
+              "bridge-mode=" +
+              std::string(bridge_mode_text(configured_mode)) +
+              " hook-lifetime=process provider-mutations-possible=" +
+              (configured_mode == bridge::Mode::disabled ? "false"
+                                                          : "true"));
+#else
     write_log("trace.active host-verified=true gpu-allowlist=RTX_5090 "
               "hook-lifetime=process mutations=0");
+#endif
     run_bounded_trace(host_path.parent_path(), cache_path);
     g_trace_state.store(2, std::memory_order_release);
   } catch (...) {
@@ -2604,7 +5122,12 @@ DWORD WINAPI trace_worker(void *) noexcept {
 
 } // namespace
 
+#if defined(MHW_DLSS_BRIDGE_PROBE)
+extern "C" __declspec(dllexport) int __cdecl
+MhwDlssBridgeProbeGetState() noexcept {
+#else
 extern "C" __declspec(dllexport) int __cdecl MhwDlssUnlockGetState() noexcept {
+#endif
   return g_trace_state.load(std::memory_order_acquire);
 }
 

@@ -47,6 +47,21 @@ and the isolated
 [`docs/runtime/rtx50-unlock-test.md`](docs/runtime/rtx50-unlock-test.md)
 acceptance procedure.
 
+`mhw_dlss_bridge_probe` is the next, separate milestone. It targets the pinned
+modern-core-to-feature-provider boundary instead of patching DLSS 1. It is
+disabled by default and offers two exact opt-in contract-capture modes:
+`capture-create` and the later `capture-one-evaluate`. The bridge substitutes
+the complete stateful feature lifecycle as a fail-closed set, never mixes its
+state with the old provider, and does not submit GPU work. It does **not** yet
+load modern DLSS or render an upscaled frame. See the
+[`boundary specification`](docs/research/modern-provider-bridge.md) and
+[`first offline test`](docs/runtime/modern-bridge-probe-test.md).
+The first probe must observe the complete Init-first 14-lookup transaction
+(six lifecycle exports, seven null-only ABI guards, and the generic Populate
+callback); if its asynchronous startup worker misses Init, that run stays
+pass-through and is reported as inconclusive instead of joining the provider
+table halfway.
+
 ## Build
 
 Configure a 64-bit MSVC build:
@@ -65,6 +80,7 @@ MinHook 1.3.4 is fetched at configure time from its pinned upstream commit; see
 - Supported research target: DirectX 12
 - Implemented: dependency-free binary string scanner, requirements/gap report,
   hash-gated observational NGX/DXGI probe with runtime identity correlation,
-  exact-build NGX resolver/export/status tracer, and isolated MO2 packaging
+  exact-build NGX resolver/export/status tracer, disabled-by-default
+  provider-contract bridge policy, and isolated MO2 packaging
 - Not implemented: modern DLSS evaluation or frame generation
 - Game files are never committed or patched

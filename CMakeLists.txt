@@ -21,6 +21,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(minhook)
 
+add_library(mhw_dlss_bridge_policy STATIC
+    src/bridge_probe/bridge_policy.cpp
+    src/bridge_probe/bridge_policy.hpp
+    src/bridge_probe/contract_snapshot.cpp
+    src/bridge_probe/contract_snapshot.hpp
+)
+target_compile_features(mhw_dlss_bridge_policy PUBLIC cxx_std_20)
+target_include_directories(mhw_dlss_bridge_policy PUBLIC src/bridge_probe)
+if(MSVC)
+    target_compile_options(mhw_dlss_bridge_policy PRIVATE
+        /W4 /WX /permissive- /EHsc /utf-8 /guard:cf
+    )
+endif()
+
 add_library(mhw_dlss_probe SHARED
     src/probe/dllmain.cpp
     src/probe/ngx_abi.hpp
@@ -67,6 +81,46 @@ set_target_properties(mhw_dlss_unlock PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# Early-load bridge boundary. The implementation intentionally reuses the
+# exact resolver/status instrumentation from the preserved v0.4.1 observer,
+# with bridge behavior compiled behind a separate definition and output name.
+add_library(mhw_dlss_bridge_probe SHARED
+    src/trace/dllmain.cpp
+    src/bridge_probe/bridge_policy.hpp
+    src/bridge_probe/contract_snapshot.hpp
+)
+target_compile_features(mhw_dlss_bridge_probe PRIVATE cxx_std_20)
+target_compile_definitions(mhw_dlss_bridge_probe PRIVATE
+    MHW_DLSS_BRIDGE_PROBE=1
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+target_link_libraries(mhw_dlss_bridge_probe PRIVATE
+    mhw_dlss_bridge_policy
+    minhook
+    bcrypt
+    d3d12
+    dxgi
+    dxguid
+    version
+    shell32
+    ole32
+)
+if(MSVC)
+    target_compile_options(mhw_dlss_bridge_probe PRIVATE
+        /W4 /WX /permissive- /EHsc /utf-8 /guard:cf
+    )
+    target_link_options(mhw_dlss_bridge_probe PRIVATE
+        /guard:cf /OPT:NOICF
+    )
+endif()
+set_target_properties(mhw_dlss_bridge_probe PROPERTIES
+    OUTPUT_NAME "mhw_dlss_bridge_probe"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 # `cmake --install --prefix <MO2 mod directory>` creates the exact virtual
 # layout consumed by Stracker's Loader without touching the game installation.
 install(TARGETS mhw_dlss_probe
@@ -81,8 +135,45 @@ install(TARGETS mhw_dlss_unlock
     COMPONENT unlock
 )
 
+install(TARGETS mhw_dlss_bridge_probe
+    # Like the resolver observer, this must be configured as an MO2 forced
+    # library. It is mutually exclusive with mhw_dlss_unlock at runtime.
+    RUNTIME DESTINATION "."
+    COMPONENT bridge-probe
+)
+
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(bridge_policy_tests tests/bridge_policy_tests.cpp)
+    target_compile_features(bridge_policy_tests PRIVATE cxx_std_20)
+    target_link_libraries(bridge_policy_tests PRIVATE mhw_dlss_bridge_policy)
+    if(MSVC)
+        target_compile_options(bridge_policy_tests PRIVATE
+            /W4 /WX /permissive- /EHsc /utf-8
+        )
+    endif()
+    set_target_properties(bridge_policy_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME bridge_policy_tests COMMAND bridge_policy_tests)
+
+    add_executable(contract_snapshot_tests
+        tests/contract_snapshot_tests.cpp
+    )
+    target_compile_features(contract_snapshot_tests PRIVATE cxx_std_20)
+    target_link_libraries(contract_snapshot_tests PRIVATE
+        mhw_dlss_bridge_policy
+    )
+    if(MSVC)
+        target_compile_options(contract_snapshot_tests PRIVATE
+            /W4 /WX /permissive- /EHsc /utf-8
+        )
+    endif()
+    set_target_properties(contract_snapshot_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    add_test(NAME contract_snapshot_tests COMMAND contract_snapshot_tests)
+
     add_library(probe_mock_feature SHARED
         tests/probe_mock_feature.cpp
         src/probe/ngx_abi.hpp
