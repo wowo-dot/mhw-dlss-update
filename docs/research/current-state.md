@@ -5,7 +5,8 @@ MHW** on the DLSS Performance path with Reflex On. The multiplier changes live
 from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. Since
 v0.9.1 DLSS-G also gets a **HUD-less colour** input, and the HUD stays stable
 in generated frames. v0.9.2 takes the brightness from the game's own screen
-write. The current build is v0.9.3 (git tag `v0.9.3`). DLAA, DLSS Performance
+write. The current build is v0.10.0 (git tag `v0.10.0`), Phase 1 of the resize
+milestone. DLAA, DLSS Performance
 and Reflex keep working. Next: resize, then the configuration-based alpha with
 performance cleanup.
 
@@ -51,10 +52,12 @@ a stable HUD, and the game blends its UI in linear space before the brightness
 curve, so exact recomposition is not possible
 (`frame-generation-hudless-capture-result.md`).
 
-## Installed now: v0.9.3
+## Installed now: v0.10.0
 
-`mhw_fg_game_probe` is in the MO2 slot with its run folder
-`local/fg-game-20261006/game-10` (latest sealed run: `game-09`, v0.9.2). Install or restore with
+`mhw_fg_game_probe` (lifecycle observation and DLSS-G Off guard,
+`frame-generation-lifecycle.md`) is in the MO2 slot with its run folder
+`local/fg-game-20261006/game-11` (latest sealed run: `game-09`, v0.9.2;
+`game-10` holds an unlaunched v0.9.3 install). Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).
 `<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
 starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
