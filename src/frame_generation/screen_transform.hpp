@@ -21,8 +21,9 @@ inline float brightness(float c, float g) noexcept {
     return 1.0f - std::pow(1.0f - k * c, g);
 }
 
-// IEC 61966-2-1 encode.
+// IEC 61966-2-1 encode of [0, 1].
 inline float srgb_encode(float c) noexcept {
+    c = std::clamp(c, 0.0f, 1.0f);
     return c <= 0.0031308f ? 12.92f * c : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
 }
 

@@ -60,6 +60,7 @@ struct Session {
     Staged staged;
     std::unique_ptr<HudlessPass> hudless;
     bool hudless_failed{};
+    std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
     std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
         probe_ok{}, probe_fallback{}, probe_invalid{};
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
@@ -93,6 +94,15 @@ sl::float4x4 matrix(const std::array<float, 16> &m) {
     return r;
 }
 
+// Keeps the first failure only; printable ASCII without quotes or backslashes.
+void note_hudless_error(Session &s, const char *why) noexcept {
+    if (s.hudless_error[0] || !why) return;
+    for (std::size_t i = 0; i + 1 < s.hudless_error.size() && why[i]; ++i) {
+        const char c = why[i];
+        s.hudless_error[i] = c >= 0x20 && c < 0x7f && c != '"' && c != '\\' ? c : ' ';
+    }
+}
+
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -123,10 +133,16 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
                 throw std::runtime_error("hudless image");
             i.hudless->SetName(L"mhw-fg-hudless");
         }
+    } catch (const std::exception &e) {
+        note_hudless_error(s, e.what());
+        s.hudless_failed = true;
     } catch (...) {
+        note_hudless_error(s, "hudless creation");
+        s.hudless_failed = true;
+    }
+    if (s.hudless_failed) {
         s.hudless.reset();
         for (auto &i : s.images) i.hudless.Reset();
-        s.hudless_failed = true;
     }
     for (auto &i : s.images) {
         auto d = s.depth_desc, m = s.motion_desc;
@@ -298,6 +314,9 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                     s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state, system.address);
                     s.slot_hudless[slot] = true;
                     ++s.hudless_recorded;
+                } catch (const std::exception &e) {
+                    note_hudless_error(s, e.what());
+                    ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
                 } catch (...) {
                     ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
                 }
@@ -476,7 +495,8 @@ void write(std::ostream &o) {
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
-      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << "},\"staged\":" << s.staged_count
+      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << ",\"error\":\""
+      << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
       << ",\"staged_dropped\":" << s.staged_dropped << ",\"final_unstaged\":" << s.final_unstaged
       << ",\"final_mismatch\":" << s.final_mismatch
       << ",\"presented_frames\":[";

@@ -1,4 +1,4 @@
-# In-game HUD-less colour for DLSS-G (v0.9.0)
+# In-game HUD-less colour for DLSS-G (v0.9.0, fixed in v0.9.1)
 
 Design, 2026-10-06. Goal: give DLSS Frame Generation a HUD-free image in the
 backbuffer's colour space, so generated frames stop warping the HUD. Background:
@@ -63,6 +63,36 @@ generated frames (minimap, item bar, damage numbers, prompts) while moving the
 camera. Accept when `hudless.tagged` tracks `tagged`, the probe reports the
 expected brightness, there are zero skips in gameplay, and the user sees a
 stable HUD.
+
+## v0.9.0 in game (game-07): HUD-less pass never created
+
+The FG path itself worked at the new recording point: 2x for 2553 tagged
+Presents with no record failures, exceptions or SDK errors; `staged_dropped`
+4, `final_unstaged` 7, `final_mismatch` 17, all around loads. HUD-less was
+`failed` from the first frame, so every frame was skipped as `disabled` and
+DLSS-G got a null HUD-less tag. The failure reason was discarded.
+
+Cause, reproduced offline with fxc: X3571 ("pow(f, e) will not work for
+negative f") on `pow(c, 1/2.4)` in the sRGB encode, made fatal by
+`D3DCOMPILE_WARNINGS_ARE_ERRORS`. No test compiled the shader.
+
+## v0.9.1
+
+- The encode clamps its input to [0, 1] (C++ mirror too; no value change for
+  the transform's outputs).
+- `HudlessPass::compile()` is exposed. `hudless_pass_warp` (ctest) compiles it
+  as the DLL does and runs the pass on WARP with the debug layer and GPU-based
+  validation. It checks five CBSystem cases (g = 1, 2, 0.5; g out of range;
+  wrong `fGammaCorrect`) on a 72x40 scene (not a multiple of the group size),
+  covering saturate and the linear sRGB segment. Every channel is within 1 LSB
+  of `screen_transform.hpp`, and the probes report the CBSystem values and
+  verdicts. Barriers leave the scene in RENDER_TARGET and the target in its tag
+  state.
+- The debug layer also showed that the probe buffer was created in
+  `COPY_SOURCE`, which buffers ignore (they start in COMMON). The probe now
+  rests in COMMON: COMMON → UAV → COPY_SOURCE → COMMON on each record.
+- The first HUD-less failure message is kept (`hudless.error`, 159 printable
+  characters, JSON-safe) for both creation and recording failures.
 
 ## Not covered
 

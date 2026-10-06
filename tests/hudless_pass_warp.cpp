@@ -1,0 +1,252 @@
+// HudlessPass on WARP with the debug layer and GPU-based validation: the
+// compute shader compiles as the DLL builds it, the pass leaves the scene in
+// RENDER_TARGET and the target in its tag state, the output matches the
+// unit-tested screen transform, and the probe reports the CBSystem it read.
+#include "../src/frame_generation/hudless_pass.hpp"
+#include "../src/frame_generation/screen_transform.hpp"
+#include <windows.h>
+#include <dxgi1_4.h>
+#include <d3d12sdklayers.h>
+#include <wrl/client.h>
+#include <cmath>
+#include <cstring>
+#include <iostream>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+using Microsoft::WRL::ComPtr;
+using mhw::frame_generation::HudlessPass;
+namespace screen = mhw::frame_generation::screen;
+
+namespace {
+void require(bool v, const std::string &why) { if (!v) throw std::runtime_error(why); }
+void hr(HRESULT v, const char *why) { require(SUCCEEDED(v), why); }
+
+constexpr unsigned width = 72, height = 40;  // Not a multiple of the 16x16 group.
+constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+constexpr float gamma_correct = 1.0f / 2.2f;
+
+// Values exact in R11G11B10_FLOAT; 2.0 checks the saturate, 1/512 the linear
+// sRGB segment. Columns of width / 4 pixels.
+constexpr float columns[4][3]{{0.5f, 0.25f, 0.125f}, {0.75f, 1.0f / 512, 0.0f}, {2.0f, 1.0f, 0.0625f}, {0.0f, 0.0f, 0.0f}};
+
+struct Case {
+    float gamma, gamma_ex;
+    bool ok;  // Expected layout and range verdict.
+};
+constexpr Case cases[]{{gamma_correct, 1.0f, true}, {gamma_correct, 2.0f, true}, {gamma_correct, 0.5f, true},
+                       {gamma_correct, 8.0f, false}, {0.3f, 2.0f, false}};
+
+struct Device {
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12InfoQueue> info;
+    ComPtr<ID3D12CommandQueue> queue;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    ComPtr<ID3D12Fence> fence;
+    std::uint64_t signal{};
+
+    Device() {
+        ComPtr<ID3D12Debug> debug;
+        hr(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)), "debug layer");
+        debug->EnableDebugLayer();
+        ComPtr<ID3D12Debug1> validation;
+        hr(debug.As(&validation), "validation");
+        validation->SetEnableGPUBasedValidation(TRUE);
+        ComPtr<IDXGIFactory4> factory;
+        ComPtr<IDXGIAdapter1> warp;
+        hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "factory");
+        hr(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "warp");
+        hr(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)), "device");
+        hr(device.As(&info), "info queue");
+        hr(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "fence");
+        D3D12_COMMAND_QUEUE_DESC q{};
+        hr(device->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
+        hr(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)), "allocator");
+        hr(device->CreateCommandList(0, q.Type, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "list");
+    }
+    ComPtr<ID3D12Resource> resource(const D3D12_RESOURCE_DESC &desc, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state) {
+        D3D12_HEAP_PROPERTIES heap{type};
+        ComPtr<ID3D12Resource> r;
+        hr(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&r)), "resource");
+        return r;
+    }
+    void execute() {
+        hr(list->Close(), "close");
+        ID3D12CommandList *lists[]{list.Get()};
+        queue->ExecuteCommandLists(1, lists);
+        hr(queue->Signal(fence.Get(), ++signal), "signal");
+        const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        require(event != nullptr, "event");
+        const auto armed = fence->SetEventOnCompletion(signal, event);
+        const auto waited = SUCCEEDED(armed) ? WaitForSingleObject(event, 30000) : WAIT_FAILED;
+        CloseHandle(event);
+        require(waited == WAIT_OBJECT_0, "GPU wait");
+        hr(device->GetDeviceRemovedReason(), "device health");
+        hr(allocator->Reset(), "allocator reset");
+        hr(list->Reset(allocator.Get(), nullptr), "list reset");
+    }
+    void messages() {
+        unsigned problems{};
+        for (UINT64 i = 0; i < info->GetNumStoredMessages(); ++i) {
+            SIZE_T size{};
+            hr(info->GetMessage(i, nullptr, &size), "message size");
+            std::vector<std::byte> bytes(size);
+            auto *m = reinterpret_cast<D3D12_MESSAGE *>(bytes.data());
+            hr(info->GetMessage(i, m, &size), "message");
+            if (m->Severity <= D3D12_MESSAGE_SEVERITY_WARNING) {
+                std::cerr << m->pDescription << '\n';
+                ++problems;
+            }
+        }
+        require(!problems, "debug layer warnings or errors");
+    }
+};
+
+// Exact R11G11B10_FLOAT encoding of 0 or a positive power-of-two multiple
+// with a short mantissa (all `columns` values): 5-bit exponent, bias 15.
+std::uint32_t small_float(float v, unsigned mantissa_bits) {
+    if (v == 0.0f) return 0;
+    int exponent{};
+    const float fraction = std::frexp(v, &exponent) * 2.0f - 1.0f;  // v = (1 + fraction) * 2^(exponent - 1)
+    const float scaled = fraction * float(1u << mantissa_bits);
+    require(scaled == std::floor(scaled) && exponent - 1 + 15 > 0 && exponent - 1 + 15 < 31, "exact R11G11B10 value");
+    return (std::uint32_t(exponent - 1 + 15) << mantissa_bits) | std::uint32_t(scaled);
+}
+std::uint32_t r11g11b10(const float (&c)[3]) {
+    return small_float(c[0], 6) | small_float(c[1], 6) << 11 | small_float(c[2], 5) << 22;
+}
+
+D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+    D3D12_RESOURCE_BARRIER b{};
+    b.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
+    return b;
+}
+}  // namespace
+
+int main() {
+    try {
+        require(HudlessPass::compile() != nullptr, "offline compile");
+        Device f;
+        HudlessPass pass(f.device.Get(), width, height);
+
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width = width;
+        d.Height = height;
+        d.DepthOrArraySize = d.MipLevels = 1;
+        d.SampleDesc.Count = 1;
+        d.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        auto scene = f.resource(d, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT scene_footprint{};
+        UINT64 scene_bytes{};
+        f.device->GetCopyableFootprints(&d, 0, 1, 0, &scene_footprint, nullptr, nullptr, &scene_bytes);
+        d.Format = HudlessPass::format;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        auto target = f.resource(d, D3D12_HEAP_TYPE_DEFAULT, tag_state);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+        UINT64 bytes{};
+        f.device->GetCopyableFootprints(&d, 0, 1, 0, &footprint, nullptr, nullptr, &bytes);
+        D3D12_RESOURCE_DESC b{};
+        b.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        b.Width = bytes;
+        b.Height = b.DepthOrArraySize = b.MipLevels = 1;
+        b.SampleDesc.Count = 1;
+        b.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        auto readback = f.resource(b, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        b.Width = 256 * std::size(cases);
+        auto constants = f.resource(b, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+
+        // CBSystem per case at 256-byte strides: fGammaCorrect@20, fGammaCorrectEx@24.
+        std::byte *cb{};
+        const D3D12_RANGE none{};
+        hr(constants->Map(0, &none, reinterpret_cast<void **>(&cb)), "map constants");
+        for (unsigned i = 0; i < std::size(cases); ++i) {
+            const float values[3]{cases[i].gamma, cases[i].gamma_ex, 7.0f};
+            std::memset(cb + 256 * i, 0, 256);
+            std::memcpy(cb + 256 * i + 20, values, sizeof(values));
+        }
+        constants->Unmap(0, nullptr);
+
+        b.Width = scene_bytes;
+        auto upload = f.resource(b, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        std::byte *texels{};
+        hr(upload->Map(0, &none, reinterpret_cast<void **>(&texels)), "map scene upload");
+        for (unsigned y = 0; y < height; ++y)
+            for (unsigned x = 0; x < width; ++x) {
+                const auto packed = r11g11b10(columns[x / (width / 4)]);
+                std::memcpy(texels + y * scene_footprint.Footprint.RowPitch + x * 4, &packed, 4);
+            }
+        upload->Unmap(0, nullptr);
+
+        unsigned checked{};
+        for (unsigned i = 0; i < std::size(cases); ++i) {
+            const auto &c = cases[i];
+            const unsigned slot = i % HudlessPass::slots;
+            // Refill the scene; GPU-based validation checks that the previous
+            // pass left it in RENDER_TARGET.
+            auto fill = transition(scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+            f.list->ResourceBarrier(1, &fill);
+            D3D12_TEXTURE_COPY_LOCATION scene_dst{}, scene_src{};
+            scene_dst.pResource = scene.Get();
+            scene_dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            scene_src.pResource = upload.Get();
+            scene_src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            scene_src.PlacedFootprint = scene_footprint;
+            f.list->CopyTextureRegion(&scene_dst, 0, 0, 0, &scene_src, nullptr);
+            std::swap(fill.Transition.StateBefore, fill.Transition.StateAfter);
+            f.list->ResourceBarrier(1, &fill);
+            pass.record(f.list.Get(), slot, scene.Get(), target.Get(), tag_state,
+                        constants->GetGPUVirtualAddress() + UINT64(256) * i);
+            const auto to_copy = transition(target.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            f.list->ResourceBarrier(1, &to_copy);
+            D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
+            dst.pResource = readback.Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            dst.PlacedFootprint = footprint;
+            src.pResource = target.Get();
+            src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            f.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            const auto back = transition(target.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, tag_state);
+            f.list->ResourceBarrier(1, &back);
+            f.execute();
+
+            const auto probe = pass.probe(slot);
+            require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex && probe.parameters_ok == c.ok,
+                    "probe case " + std::to_string(i));
+            const float g = c.ok ? c.gamma_ex : 1.0f;
+            void *mapped{};
+            hr(readback->Map(0, nullptr, &mapped), "map readback");
+            const auto *pixels = static_cast<const std::uint8_t *>(mapped);
+            for (unsigned y = 0; y < height; ++y)
+                for (unsigned x = 0; x < width; ++x) {
+                    const auto *p = pixels + y * footprint.Footprint.RowPitch + x * 4;
+                    const auto &v = columns[x / (width / 4)];
+                    for (unsigned ch = 0; ch < 3; ++ch) {
+                        const float expected = screen::srgb_encode(screen::brightness(v[ch], g)) * 255.0f;
+                        require(std::abs(float(p[ch]) - expected) <= 1.0f,
+                                "pixel case " + std::to_string(i) + " at " + std::to_string(x) + "," + std::to_string(y) +
+                                    " channel " + std::to_string(ch) + ": " + std::to_string(p[ch]) + " vs " +
+                                    std::to_string(expected));
+                        ++checked;
+                    }
+                    require(p[3] == 255, "alpha");
+                }
+            const D3D12_RANGE nothing{};
+            readback->Unmap(0, &nothing);
+        }
+        // An unwritten slot reads as invalid.
+        HudlessPass fresh(f.device.Get(), width, height);
+        require(!fresh.probe(0).valid, "unwritten probe");
+        f.messages();
+        std::cout << "hudless_pass_warp: " << std::size(cases) << " cases, " << checked << " channels\n";
+        return 0;
+    } catch (const std::exception &e) {
+        std::cerr << "hudless_pass_warp: " << e.what() << '\n';
+        return 1;
+    }
+}

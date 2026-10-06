@@ -22,7 +22,7 @@ cbuffer CBSystem : register(b0) { uint4 iRegion; float fSourceMipLevel; float fG
 Texture2D<float4> scene : register(t0);
 RWTexture2D<unorm float4> hudless : register(u0);
 RWByteAddressBuffer probe : register(u1);
-float encode(float c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+float encode(float c) { c = saturate(c); return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
 [numthreads(16,16,1)] void main(uint3 id : SV_DispatchThreadID) {
     float g = fGammaCorrectEx.x;
     bool ok = g >= GAMMA_MIN && g <= GAMMA_MAX && abs(fGammaCorrect - 0.45454545) < 0.001;
@@ -38,6 +38,21 @@ float encode(float c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(c, 1.0 /
 }
 )";
 }  // namespace
+
+ComPtr<ID3DBlob> HudlessPass::compile() {
+    const auto min = std::to_string(screen::gamma_min), max = std::to_string(screen::gamma_max),
+               magic = std::to_string(probe_magic) + "u";
+    const D3D_SHADER_MACRO macros[]{{"GAMMA_MIN", min.c_str()}, {"GAMMA_MAX", max.c_str()},
+                                    {"PROBE_MAGIC", magic.c_str()}, {nullptr, nullptr}};
+    ComPtr<ID3DBlob> code, errors;
+    const auto compiled = D3DCompile(shader, sizeof(shader) - 1, "mhw_fg_hudless", macros, nullptr, "main", "cs_5_0",
+                                     D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS |
+                                         D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+    if (FAILED(compiled))
+        throw std::runtime_error(errors ? std::string(static_cast<const char *>(errors->GetBufferPointer()), errors->GetBufferSize())
+                                        : "hudless shader compile");
+    return code;
+}
 
 HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     : device_(device), width_(width), height_(height) {
@@ -57,20 +72,11 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {1, 0};
     D3D12_ROOT_SIGNATURE_DESC rd{3, params};
-    ComPtr<ID3DBlob> signature, code, errors;
+    ComPtr<ID3DBlob> signature, errors;
     hr(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &errors), "hudless root serialization");
     hr(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&root_)),
        "hudless root");
-    const auto min = std::to_string(screen::gamma_min), max = std::to_string(screen::gamma_max),
-               magic = std::to_string(probe_magic) + "u";
-    const D3D_SHADER_MACRO macros[]{{"GAMMA_MIN", min.c_str()}, {"GAMMA_MAX", max.c_str()},
-                                    {"PROBE_MAGIC", magic.c_str()}, {nullptr, nullptr}};
-    const auto compiled = D3DCompile(shader, sizeof(shader) - 1, "mhw_fg_hudless", macros, nullptr, "main", "cs_5_0",
-                                     D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS |
-                                         D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
-    if (FAILED(compiled))
-        throw std::runtime_error(errors ? std::string(static_cast<const char *>(errors->GetBufferPointer()), errors->GetBufferSize())
-                                        : "hudless shader compile");
+    const auto code = compile();
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature = root_.Get();
     pd.CS = {code->GetBufferPointer(), code->GetBufferSize()};
@@ -89,7 +95,8 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     const D3D12_HEAP_PROPERTIES default_heap{D3D12_HEAP_TYPE_DEFAULT}, readback_heap{D3D12_HEAP_TYPE_READBACK};
-    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
+    // Buffers start in COMMON; record() returns the probe to COMMON each time.
+    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON, nullptr,
                                        IID_PPV_ARGS(&probe_)), "hudless probe");
     buffer.Flags = D3D12_RESOURCE_FLAG_NONE;
     hr(device->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
@@ -130,7 +137,7 @@ void HudlessPass::record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12R
     before[0].Transition = {scene, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET,
                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
     before[1].Transition = {target, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, target_state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
-    before[2].Transition = {probe_.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    before[2].Transition = {probe_.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_COMMON,
                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
     list->ResourceBarrier(3, before);
     ID3D12DescriptorHeap *heaps[]{heap_.Get()};
@@ -143,8 +150,12 @@ void HudlessPass::record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12R
     list->Dispatch((width_ + 15) / 16, (height_ + 15) / 16, 1);
     D3D12_RESOURCE_BARRIER after[3]{before[0], before[1], before[2]};
     for (auto &b : after) std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+    after[2].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
     list->ResourceBarrier(3, after);
     list->CopyBufferRegion(readback_.Get(), UINT64(probe_bytes) * slot, probe_.Get(), UINT64(probe_bytes) * slot, probe_bytes);
+    after[2].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    after[2].Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
+    list->ResourceBarrier(1, &after[2]);
     written_[slot] = true;
 }
 

@@ -20,6 +20,9 @@ public:
         float gamma_ex{}, gamma{};
         bool parameters_ok{}, valid{};
     };
+    // The compute shader as the constructor builds it; throws with the
+    // compiler's message. No device needed (offline tests use it).
+    static Microsoft::WRL::ComPtr<ID3DBlob> compile();
     // Throws on any creation failure; the caller then runs without HUD-less.
     HudlessPass(ID3D12Device *device, unsigned width, unsigned height);
     // Records on `list` with the caller's bindings already saved. Transitions
