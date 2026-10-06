@@ -13,7 +13,8 @@ namespace mhw::temporal_present { struct Bindings; }
 // Render side: the DLSS replacement stages a reconstructed frame's converted
 // depth/motion and camera; the replaced final-screen draw of the same frame
 // (game DIRECT list, before any UI) copies them into an FG-owned slot and
-// writes the HUD-less colour from the HUD-free final scene target.
+// writes the HUD-less colour from the HUD-free final scene target, using the
+// brightness captured from the previous screen write (closing()).
 // Submission observer: mark the slot's list generation submitted or reset.
 // Owner thread, before PresentStart: tag the newest earlier slot with the
 // borrowed Reflex token, set camera constants and FG options. Any missing or
@@ -43,6 +44,14 @@ void stage(std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth, ID3D
 // the HUD-free final target in RENDER_TARGET; state must match `roots` after.
 void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
             std::uint64_t frame, std::uint64_t epoch) noexcept;
+// Close hook, before the native Close of a DIRECT list (this runtime's hooks
+// bypassed). After a HUD-less record and before the next Present, records the
+// brightness capture from graphics root parameter 5 as the list's last
+// commands. `roots` is the list's mirrored bindings.
+void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots) noexcept;
+// Any thread, lock-free: whether closing() can record now (skip the binding
+// lookup otherwise).
+bool capture_wanted() noexcept;
 void submitted(std::uint64_t list, std::uint64_t generation, std::uint64_t batch) noexcept;
 void reset(std::uint64_t list, std::uint64_t generation) noexcept;
 

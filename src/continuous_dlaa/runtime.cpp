@@ -719,7 +719,16 @@ HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator
     obs::reset(list,l->generation,pipeline);return result;
 }
 HRESULT WINAPI close_hook(ID3D12GraphicsCommandList *list){
-    Guard guard;const auto result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *)>(originals[6])(list);
+    Guard guard;
+#ifdef MHW_FG_GAME
+    // FG brightness capture: the list's last commands, before the native Close.
+    if(!injected&&frame_generation::game::capture_wanted()){
+        bool open=false;{Lock lock;const auto *l=find(list);open=l&&!l->closed;}
+        temporal_present::Bindings roots;
+        if(open&&obs::inspect(list,roots)){injected=true;frame_generation::game::closing(list,roots);injected=false;}
+    }
+#endif
+    const auto result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *)>(originals[6])(list);
     Lock lock;if(auto *l=find(list)){if(SUCCEEDED(result))l->closed=true;else if(lease.list==list||unfiltered_lifetime.tracked(list,l->generation))fail(17);}return result;
 }
 void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList *const *submitted){

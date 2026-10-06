@@ -1,7 +1,9 @@
-// HudlessPass on WARP with the debug layer and GPU-based validation: the
-// compute shader compiles as the DLL builds it, the pass leaves the scene in
-// RENDER_TARGET and the target in its tag state, the output matches the
-// unit-tested screen transform, and the probe reports the CBSystem it read.
+// HudlessPass on WARP with the debug layer and GPU-based validation: both
+// compute shaders compile as the DLL builds them; the brightness capture keeps
+// the last valid CBSystem across lists and counts attempts/matches; the
+// transform leaves the scene in RENDER_TARGET and the target in its tag state,
+// matches the unit-tested screen transform with the captured g (g = 1 before
+// any valid capture), and the probe reports the state it used.
 #include "../src/frame_generation/hudless_pass.hpp"
 #include "../src/frame_generation/screen_transform.hpp"
 #include <windows.h>
@@ -33,12 +35,25 @@ constexpr float gamma_correct = 1.0f / 2.2f;
 // sRGB segment. Columns of width / 4 pixels.
 constexpr float columns[4][3]{{0.5f, 0.25f, 0.125f}, {0.75f, 1.0f / 512, 0.0f}, {2.0f, 1.0f, 0.0625f}, {0.0f, 0.0f, 0.0f}};
 
-struct Case {
-    float gamma, gamma_ex;
-    bool ok;  // Expected layout and range verdict.
+// Candidate CBSystem contents: fGammaCorrect, fGammaCorrectEx.x.
+constexpr float candidates[][2]{{gamma_correct, 2.0f}, {0.3f, 2.0f},          {gamma_correct, 0.5f},
+                                {gamma_correct, 8.0f}, {gamma_correct, 1.0f}, {0.3f, 0.7f}};
+// Each step: captures in their own list (in order; -1 none), then the
+// transform in the next list, as in the game (screen write list, next frame).
+struct Step {
+    int captures[2];
+    bool ok;                        // A valid capture exists
+    float gamma, gamma_ex;          // Last valid capture (probe), 0 before any
+    std::uint32_t attempts, matches;
+    float last_gamma, last_gamma_ex;  // Raw values of the last attempt
 };
-constexpr Case cases[]{{gamma_correct, 1.0f, true}, {gamma_correct, 2.0f, true}, {gamma_correct, 0.5f, true},
-                       {gamma_correct, 8.0f, false}, {0.3f, 2.0f, false}};
+constexpr Step steps[]{
+    {{-1, -1}, false, 0.0f, 0.0f, 0, 0, 0.0f, 0.0f},
+    {{0, -1}, true, gamma_correct, 2.0f, 1, 1, gamma_correct, 2.0f},
+    {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f},  // bad layout: keep 2
+    {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f},
+    {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f},  // out of range: keep 0.5
+    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f}};          // valid then invalid
 
 struct Device {
     ComPtr<ID3D12Device> device;
@@ -129,7 +144,8 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
 
 int main() {
     try {
-        require(HudlessPass::compile() != nullptr, "offline compile");
+        require(HudlessPass::compile(HudlessPass::Shader::transform) != nullptr &&
+                    HudlessPass::compile(HudlessPass::Shader::capture) != nullptr, "offline compile");
         Device f;
         HudlessPass pass(f.device.Get(), width, height);
 
@@ -158,15 +174,15 @@ int main() {
         b.SampleDesc.Count = 1;
         b.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         auto readback = f.resource(b, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
-        b.Width = 256 * std::size(cases);
+        b.Width = 256 * std::size(candidates);
         auto constants = f.resource(b, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-        // CBSystem per case at 256-byte strides: fGammaCorrect@20, fGammaCorrectEx@24.
+        // CBSystem per candidate at 256-byte strides: fGammaCorrect@20, fGammaCorrectEx@24.
         std::byte *cb{};
         const D3D12_RANGE none{};
         hr(constants->Map(0, &none, reinterpret_cast<void **>(&cb)), "map constants");
-        for (unsigned i = 0; i < std::size(cases); ++i) {
-            const float values[3]{cases[i].gamma, cases[i].gamma_ex, 7.0f};
+        for (unsigned i = 0; i < std::size(candidates); ++i) {
+            const float values[3]{candidates[i][0], candidates[i][1], 7.0f};
             std::memset(cb + 256 * i, 0, 256);
             std::memcpy(cb + 256 * i + 20, values, sizeof(values));
         }
@@ -184,9 +200,14 @@ int main() {
         upload->Unmap(0, nullptr);
 
         unsigned checked{};
-        for (unsigned i = 0; i < std::size(cases); ++i) {
-            const auto &c = cases[i];
+        for (unsigned i = 0; i < std::size(steps); ++i) {
+            const auto &c = steps[i];
             const unsigned slot = i % HudlessPass::slots;
+            if (c.captures[0] >= 0) {
+                for (const int k : c.captures)
+                    if (k >= 0) pass.capture(f.list.Get(), constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k));
+                f.execute();
+            }
             // Refill the scene; GPU-based validation checks that the previous
             // pass left it in RENDER_TARGET.
             auto fill = transition(scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -200,8 +221,7 @@ int main() {
             f.list->CopyTextureRegion(&scene_dst, 0, 0, 0, &scene_src, nullptr);
             std::swap(fill.Transition.StateBefore, fill.Transition.StateAfter);
             f.list->ResourceBarrier(1, &fill);
-            pass.record(f.list.Get(), slot, scene.Get(), target.Get(), tag_state,
-                        constants->GetGPUVirtualAddress() + UINT64(256) * i);
+            pass.record(f.list.Get(), slot, scene.Get(), target.Get(), tag_state);
             const auto to_copy = transition(target.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
             f.list->ResourceBarrier(1, &to_copy);
             D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
@@ -216,8 +236,11 @@ int main() {
             f.execute();
 
             const auto probe = pass.probe(slot);
-            require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex && probe.parameters_ok == c.ok,
-                    "probe case " + std::to_string(i));
+            require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex && probe.parameters_ok == c.ok &&
+                        probe.attempts == c.attempts && probe.matches == c.matches && probe.last_gamma == c.last_gamma &&
+                        probe.last_gamma_ex == c.last_gamma_ex,
+                    "probe step " + std::to_string(i) + ": attempts " + std::to_string(probe.attempts) + " matches " +
+                        std::to_string(probe.matches) + " g " + std::to_string(probe.gamma_ex));
             const float g = c.ok ? c.gamma_ex : 1.0f;
             void *mapped{};
             hr(readback->Map(0, nullptr, &mapped), "map readback");
@@ -229,7 +252,7 @@ int main() {
                     for (unsigned ch = 0; ch < 3; ++ch) {
                         const float expected = screen::srgb_encode(screen::brightness(v[ch], g)) * 255.0f;
                         require(std::abs(float(p[ch]) - expected) <= 1.0f,
-                                "pixel case " + std::to_string(i) + " at " + std::to_string(x) + "," + std::to_string(y) +
+                                "pixel step " + std::to_string(i) + " at " + std::to_string(x) + "," + std::to_string(y) +
                                     " channel " + std::to_string(ch) + ": " + std::to_string(p[ch]) + " vs " +
                                     std::to_string(expected));
                         ++checked;
@@ -243,7 +266,7 @@ int main() {
         HudlessPass fresh(f.device.Get(), width, height);
         require(!fresh.probe(0).valid, "unwritten probe");
         f.messages();
-        std::cout << "hudless_pass_warp: " << std::size(cases) << " cases, " << checked << " channels\n";
+        std::cout << "hudless_pass_warp: " << std::size(steps) << " steps, " << checked << " channels\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << "hudless_pass_warp: " << e.what() << '\n';

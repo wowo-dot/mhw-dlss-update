@@ -27,12 +27,16 @@ constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
 struct Images {
     ComPtr<ID3D12Resource> depth, motion, hudless;
 };
-// Graphics root parameter of the final-screen PS CBSystem (b3) in MHW's
-// root-CBV layouts (PS bN = parameter 2 + N); checked per frame.
+// Graphics root parameter of the screen write's PS CBSystem (b3): parameter 5
+// of its root signature (RenderDoc, EID 36144 of the HUD capture). The screen
+// write is the last draw of its list, so the binding is still current when the
+// list closes; the capture pass validates the contents on the GPU.
 constexpr unsigned system_parameter = 5;
-enum class HudSkip : unsigned { disabled, no_cbv, no_restore, failed, count };
-constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{
-    "disabled", "no_cbv", "no_restore", "failed"};
+// Lists closed between a HUD-less record and the next Present that may record
+// a capture (the screen write's list is one of them).
+constexpr unsigned capture_limit = 4;
+enum class HudSkip : unsigned { disabled, no_restore, failed, count };
+constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{"disabled", "no_restore", "failed"};
 struct Staged {
     bool valid{};
     std::uint64_t frame{}, epoch{};
@@ -61,6 +65,9 @@ struct Session {
     std::unique_ptr<HudlessPass> hudless;
     bool hudless_failed{};
     std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
+    std::atomic<bool> capture_window{};  // A HUD-less pass was recorded since the last Present
+    unsigned captures_this_frame{};
+    std::uint64_t captures{}, capture_no_cbv{}, capture_limited{}, capture_failed{};
     std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
         probe_ok{}, probe_fallback{}, probe_invalid{};
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
@@ -295,13 +302,10 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
         for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
         list->ResourceBarrier(4, b.data());
 
-        // HUD-less colour from the HUD-free final scene, with the game's own
-        // CBSystem (brightness) bound to the final-screen draw.
-        const auto &system = roots.graphics.arguments[system_parameter];
+        // HUD-less colour from the HUD-free final scene; the brightness comes
+        // from the last screen write's CBSystem (closing()).
         if (!s.hudless)
             ++s.hud_skips[static_cast<unsigned>(HudSkip::disabled)];
-        else if (system.kind != temporal_present::ArgumentKind::cbv || !system.address)
-            ++s.hud_skips[static_cast<unsigned>(HudSkip::no_cbv)];
         else {
             std::unique_ptr<temporal_present::RestoreBindings> restore;
             try {
@@ -311,9 +315,10 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             }
             if (restore) {
                 try {
-                    s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state, system.address);
+                    s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state);
                     s.slot_hudless[slot] = true;
                     ++s.hudless_recorded;
+                    s.capture_window.store(true);
                 } catch (const std::exception &e) {
                     note_hudless_error(s, e.what());
                     ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
@@ -335,6 +340,36 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
     }
 }
 
+bool capture_wanted() noexcept { return session.armed.load() && session.capture_window.load(); }
+
+void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots) noexcept {
+    auto &s = session;
+    if (!s.armed.load() || !list) return;
+    try {
+        std::lock_guard lock(s.mutex);
+        if (!s.hudless || !s.capture_window.load()) return;
+        const auto &system = roots.graphics.arguments[system_parameter];
+        if (!roots.known || !roots.valid || system.kind != temporal_present::ArgumentKind::cbv || !system.address) {
+            ++s.capture_no_cbv;
+            return;
+        }
+        if (s.captures_this_frame >= capture_limit) {
+            ++s.capture_limited;
+            return;
+        }
+        try {
+            s.hudless->capture(list, system.address);
+            ++s.captures_this_frame;
+            ++s.captures;
+        } catch (const std::exception &e) {
+            note_hudless_error(s, e.what());
+            ++s.capture_failed;
+        }
+    } catch (...) {
+        ++s.capture_failed;
+    }
+}
+
 void submitted(std::uint64_t list, std::uint64_t generation, std::uint64_t batch) noexcept {
     std::lock_guard lock(session.mutex);
     session.ring.submitted(list, generation, batch);
@@ -352,6 +387,8 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
     try {
         std::lock_guard lock(s.mutex);
         ++s.presents;
+        s.capture_window.store(false);
+        s.captures_this_frame = 0;
         if (!s.sdk) return;
         // A missed present_end must not leak a tagged slot.
         if (s.pending != none) finish_pending(s, false);
@@ -495,8 +532,11 @@ void write(std::ostream &o) {
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
-      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << ",\"error\":\""
-      << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
+      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << ",\"gpu_attempts\":"
+      << s.last_probe.attempts << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":["
+      << s.last_probe.last_gamma << ',' << s.last_probe.last_gamma_ex << "],\"captures\":" << s.captures
+      << ",\"capture_no_cbv\":" << s.capture_no_cbv << ",\"capture_limited\":" << s.capture_limited
+      << ",\"capture_failed\":" << s.capture_failed << ",\"error\":\"" << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
       << ",\"staged_dropped\":" << s.staged_dropped << ",\"final_unstaged\":" << s.final_unstaged
       << ",\"final_mismatch\":" << s.final_mismatch
       << ",\"presented_frames\":[";
