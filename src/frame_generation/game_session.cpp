@@ -1,11 +1,15 @@
 #include "game_session.hpp"
 #include "camera_constants.hpp"
 #include "input_ring.hpp"
+#include "hudless_pass.hpp"
+#include "../temporal_present/bindings.hpp"
 #include "../reflex/frame_generation_policy.hpp"
 #include "../reflex/streamline.hpp"
 #include <wrl/client.h>
 #include <algorithm>
 #include <atomic>
+#include <memory>
+#include <stdexcept>
 #include <mutex>
 #include <ostream>
 
@@ -21,7 +25,19 @@ constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
     "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options"};
 
 struct Images {
+    ComPtr<ID3D12Resource> depth, motion, hudless;
+};
+// Graphics root parameter of the final-screen PS CBSystem (b3) in MHW's
+// root-CBV layouts (PS bN = parameter 2 + N); checked per frame.
+constexpr unsigned system_parameter = 5;
+enum class HudSkip : unsigned { disabled, no_cbv, no_restore, failed, count };
+constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{
+    "disabled", "no_cbv", "no_restore", "failed"};
+struct Staged {
+    bool valid{};
+    std::uint64_t frame{}, epoch{};
     ComPtr<ID3D12Resource> depth, motion;
+    SlotCamera camera;
 };
 struct Last {
     bool valid{};
@@ -40,6 +56,14 @@ struct Session {
     std::atomic<bool> armed{}, on{};
     InputRing<slot_count> ring;
     std::array<Images, slot_count> images;
+    std::array<bool, slot_count> slot_hudless{};
+    Staged staged;
+    std::unique_ptr<HudlessPass> hudless;
+    bool hudless_failed{};
+    std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
+        probe_ok{}, probe_fallback{}, probe_invalid{};
+    std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
+    HudlessPass::Probe last_probe{};
     std::array<SlotCamera, slot_count> cameras;
     D3D12_RESOURCE_DESC depth_desc{}, motion_desc{};
     bool created{}, create_failed{};
@@ -76,12 +100,34 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
     return b;
 }
 
-bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
+bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Resource *scene) {
     ComPtr<ID3D12Device> device;
     if (FAILED(depth->GetDevice(IID_PPV_ARGS(&device)))) return false;
     s.depth_desc = depth->GetDesc();
     s.motion_desc = motion->GetDesc();
     const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    // HUD-less is optional: any failure here leaves depth/motion-only FG.
+    const auto scene_desc = scene->GetDesc();
+    try {
+        s.hudless = std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
+        D3D12_RESOURCE_DESC h{};
+        h.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        h.Width = scene_desc.Width;
+        h.Height = scene_desc.Height;
+        h.DepthOrArraySize = h.MipLevels = 1;
+        h.SampleDesc.Count = 1;
+        h.Format = HudlessPass::format;
+        h.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        for (auto &i : s.images) {
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &h, tag_state, nullptr, IID_PPV_ARGS(&i.hudless))))
+                throw std::runtime_error("hudless image");
+            i.hudless->SetName(L"mhw-fg-hudless");
+        }
+    } catch (...) {
+        s.hudless.reset();
+        for (auto &i : s.images) i.hudless.Reset();
+        s.hudless_failed = true;
+    }
     for (auto &i : s.images) {
         auto d = s.depth_desc, m = s.motion_desc;
         d.Flags = m.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -109,8 +155,9 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
         sl::Extent extent{0, 0, s.output_width, s.output_height};
         sl::ResourceTag tags[]{
             {nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extent},
-            {nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent}};
-        if (s.sdk->tags(*token, viewport, tags, 2) == sl::Result::eOk) ++s.null_tags;
+            {nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extent},
+            {nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent}};
+        if (s.sdk->tags(*token, viewport, tags, 3) == sl::Result::eOk) ++s.null_tags;
     }
     const auto result = s.sdk->frame_generation_off(viewport, true);
     if (result != sl::Result::eOk) s.last_sdk_error = result;
@@ -152,21 +199,53 @@ void multiplier(unsigned total) noexcept {
     if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
 }
 
-void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint64_t frame, std::uint64_t epoch,
-            ID3D12Resource *depth, ID3D12Resource *motion, const SlotCamera &camera) noexcept {
+void stage(std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth, ID3D12Resource *motion,
+           const SlotCamera &camera) noexcept {
+    auto &s = session;
+    if (!s.armed.load()) return;
+    try {
+        std::lock_guard lock(s.mutex);
+        if (s.staged.valid) ++s.staged_dropped;  // previous frame's final draw never qualified
+        s.staged = {};
+        if (!depth || !motion) {
+            ++s.record_failed;
+            return;
+        }
+        s.staged = {true, frame, epoch, depth, motion, camera};
+        ++s.staged_count;
+    } catch (...) {
+        ++session.record_failed;
+    }
+}
+
+void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
+            std::uint64_t frame, std::uint64_t epoch) noexcept {
     auto &s = session;
     if (!s.armed.load()) return;
     try {
         std::lock_guard lock(s.mutex);
         if (!s.sdk || s.create_failed) return;
-        if (!list || !depth || !motion || !generation) {
+        if (!s.staged.valid) {
+            ++s.final_unstaged;
+            return;
+        }
+        const Staged staged = std::move(s.staged);
+        s.staged = {};
+        if (staged.frame != frame || staged.epoch != epoch) {
+            ++s.final_mismatch;
+            return;
+        }
+        const auto generation = roots.generation;
+        auto *depth = staged.depth.Get(), *motion = staged.motion.Get();
+        if (!list || !scene || !generation) {
             ++s.record_failed;
             return;
         }
         if (!s.created) {
-            s.created = create(s, depth, motion);
+            s.created = create(s, depth, motion, scene);
             if (!s.created) {
                 s.create_failed = true;
+                s.hudless.reset();
                 for (auto &i : s.images) i = {};
                 return;
             }
@@ -178,6 +257,17 @@ void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint
         const auto completed = s.fence ? s.fence->GetCompletedValue() : 0;
         const auto slot = s.ring.acquire(frame, epoch, completed);
         if (slot == none) return;
+        // The slot's previous pass is complete (fence-gated): collect its probe.
+        if (s.slot_hudless[slot] && s.hudless) {
+            const auto probe = s.hudless->probe(slot);
+            if (!probe.valid)
+                ++s.probe_invalid;
+            else {
+                ++(probe.parameters_ok ? s.probe_ok : s.probe_fallback);
+                s.last_probe = probe;
+            }
+        }
+        s.slot_hudless[slot] = false;
         auto &image = s.images[slot];
         std::array<D3D12_RESOURCE_BARRIER, 4> b{transition(image.depth.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
                                                transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
@@ -188,7 +278,33 @@ void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint
         list->CopyResource(image.motion.Get(), motion);
         for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
         list->ResourceBarrier(4, b.data());
-        s.cameras[slot] = camera;
+
+        // HUD-less colour from the HUD-free final scene, with the game's own
+        // CBSystem (brightness) bound to the final-screen draw.
+        const auto &system = roots.graphics.arguments[system_parameter];
+        if (!s.hudless)
+            ++s.hud_skips[static_cast<unsigned>(HudSkip::disabled)];
+        else if (system.kind != temporal_present::ArgumentKind::cbv || !system.address)
+            ++s.hud_skips[static_cast<unsigned>(HudSkip::no_cbv)];
+        else {
+            std::unique_ptr<temporal_present::RestoreBindings> restore;
+            try {
+                restore = std::make_unique<temporal_present::RestoreBindings>(list, roots);
+            } catch (...) {
+                ++s.hud_skips[static_cast<unsigned>(HudSkip::no_restore)];
+            }
+            if (restore) {
+                try {
+                    s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state, system.address);
+                    s.slot_hudless[slot] = true;
+                    ++s.hudless_recorded;
+                } catch (...) {
+                    ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
+                }
+                restore->apply();
+            }
+        }
+        s.cameras[slot] = staged.camera;
         if (s.ring.recorded(slot, reinterpret_cast<std::uintptr_t>(list), generation))
             ++s.recorded;
         else {
@@ -285,11 +401,16 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         sl::Resource motion{sl::ResourceType::eTex2d, image.motion.Get(), static_cast<std::uint32_t>(tag_state)};
         sl::Extent render{0, 0, frame.render_width, frame.render_height};
         sl::Extent output{0, 0, s.output_width, s.output_height};
+        // A slot without HUD-less clears that tag explicitly (null resource).
+        const bool with_hudless = s.slot_hudless[slot] && image.hudless;
+        sl::Resource hudless{sl::ResourceType::eTex2d, with_hudless ? image.hudless.Get() : nullptr,
+                             static_cast<std::uint32_t>(tag_state)};
         sl::ResourceTag tags[]{
             {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &render},
             {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &render},
-            {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &output}};
-        if (const auto r = s.sdk->tags(*token, viewport, tags, 3); r != sl::Result::eOk) {
+            {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &output},
+            {with_hudless ? &hudless : nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &output}};
+        if (const auto r = s.sdk->tags(*token, viewport, tags, 4); r != sl::Result::eOk) {
             s.last_sdk_error = r;
             s.ring.untag(slot);
             return turn_off(s, token, Off::tags);
@@ -313,6 +434,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
         ++s.tagged;
+        if (with_hudless) ++s.hudless_tagged;
         if (s.sample_count < s.samples.size() && (s.tagged <= 4 || (s.tagged & (s.tagged - 1)) == 0))
             s.samples[s.sample_count++] = {present_frame, entry.frame, c};
     } catch (...) {
@@ -350,6 +472,13 @@ void write(std::ostream &o) {
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
+      << ",\"hudless\":{\"available\":" << (s.hudless != nullptr) << ",\"failed\":" << s.hudless_failed
+      << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
+    for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
+    o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
+      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << "},\"staged\":" << s.staged_count
+      << ",\"staged_dropped\":" << s.staged_dropped << ",\"final_unstaged\":" << s.final_unstaged
+      << ",\"final_mismatch\":" << s.final_mismatch
       << ",\"presented_frames\":[";
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"

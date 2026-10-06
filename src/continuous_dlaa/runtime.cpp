@@ -661,19 +661,29 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
         return result;
     }
 #ifdef MHW_FG_GAME
-    // Same list, after the evaluation: copy this frame's converted depth and
-    // motion into an FG-owned slot (no-op unless frame generation is armed).
+    // Stage this frame's converted depth/motion and camera; the replaced final
+    // screen draw of the same frame records them with the HUD-less colour.
     {frame_generation::game::SlotCamera camera;const auto &h=consumer.projection.history;camera.view=h.view_matrix;
      for(unsigned i=0;i<16;++i)camera.projection[i]=std::bit_cast<float>(h.projection[i]);
      camera.jitter_x=frame.jitter_x;camera.jitter_y=frame.jitter_y;camera.reset=decision.reset;
      const auto images=pass->private_images();
-     frame_generation::game::record(list,state.generation,consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);}
+     frame_generation::game::stage(consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);}
 #endif
     history_telemetry.record(previous,consumer.projection.history,decision);
     history_depth=consumer.resources[3];previous=consumer.projection.history;lease.evaluated=true;++frames;last_skip=0;if(decision.reset)++reset_count;
     reconstruction.complete();
     return result;
 }
+#ifdef MHW_FG_GAME
+// stream_route final-scene observer: our barriers, copies and dispatch must
+// bypass this runtime's own hooks exactly like the DLSS replacement's work.
+void fg_final_scene(ID3D12GraphicsCommandList *list,const temporal_present::Bindings &roots,ID3D12Resource *scene,
+    std::uint64_t frame,std::uint64_t epoch) noexcept {
+    const bool outer=injected;injected=true;
+    frame_generation::game::record(list,roots,scene,frame,epoch);
+    injected=outer;
+}
+#endif
 ResolveResult replace_scoped(ID3D12GraphicsCommandList *list){
     ResolveResult result;injected=true;__try{result=dispatch_replace(list);}__finally{injected=false;}return result;
 }
@@ -895,6 +905,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!render_resolution::install(image,.5F,reason,true))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,reason))throw std::runtime_error(reason);
+#ifdef MHW_FG_GAME
+        sr::observe_final_scene(&fg_final_scene);
+#endif
 #else
         if(!obs::install(device,pb::system_method,reason))return false;
 #endif

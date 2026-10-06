@@ -6,11 +6,14 @@
 
 namespace sl { struct FrameToken; }
 namespace mhw::reflex { class Streamline; }
+namespace mhw::temporal_present { struct Bindings; }
 
 // In-game ordinary frame generation (opt-in target only). Process-lived state.
 //
-// Render side (game DIRECT list, inside the DLSS replacement scope): copy the
-// converted depth/motion of a reconstructed frame into an FG-owned slot.
+// Render side: the DLSS replacement stages a reconstructed frame's converted
+// depth/motion and camera; the replaced final-screen draw of the same frame
+// (game DIRECT list, before any UI) copies them into an FG-owned slot and
+// writes the HUD-less colour from the HUD-free final scene target.
 // Submission observer: mark the slot's list generation submitted or reset.
 // Owner thread, before PresentStart: tag the newest earlier slot with the
 // borrowed Reflex token, set camera constants and FG options. Any missing or
@@ -33,8 +36,13 @@ bool frame_generation_on() noexcept;
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;
 
-void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint64_t frame, std::uint64_t epoch,
-            ID3D12Resource *depth, ID3D12Resource *motion, const SlotCamera &camera) noexcept;
+// DLSS replacement thread, after a successful evaluation. No GPU work.
+void stage(std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth, ID3D12Resource *motion,
+           const SlotCamera &camera) noexcept;
+// Final-scene observer (stream_route::FinalSceneObserver contract): `scene` is
+// the HUD-free final target in RENDER_TARGET; state must match `roots` after.
+void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
+            std::uint64_t frame, std::uint64_t epoch) noexcept;
 void submitted(std::uint64_t list, std::uint64_t generation, std::uint64_t batch) noexcept;
 void reset(std::uint64_t list, std::uint64_t generation) noexcept;
 

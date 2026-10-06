@@ -721,6 +721,7 @@ void draw_after(unsigned slot,unsigned stage,bool returned){
  p.observations[stage][7]=returned;
  diagnostics.draw(p.stamp.frame,p.stamp.epoch,stage,p.observations[stage]);
 }
+std::atomic<FinalSceneObserver> final_scene_observer{};
 bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,const EffectBindings &b,std::uintptr_t rtv,bool &replaced){
  auto &p=plans[slot];auto &r=p.draws[stage];const bool overlay=stage>=4&&!r.dependency;const auto target=output_index(p,stage);
  Pipeline *effect_cache=draw_pipeline(p,stage);
@@ -785,6 +786,9 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
   !std::memcmp(&raster.vertex_buffer,&after.vertex_buffer,sizeof(raster.vertex_buffer))&&
   !std::memcmp(&raster.viewport,&after.viewport,sizeof(raster.viewport))&&!std::memcmp(&raster.scissor,&after.scissor,sizeof(raster.scissor));
  if(!replaced||!restored)throw std::runtime_error("stream effect recording or restore");
+ if(const auto observer=final_scene_observer.load();stage==2&&observer){
+  injecting=true;observer(b.list,roots,b.output,p.stamp.frame,p.stamp.epoch);injecting=false;
+  if(!obs::matches_current(b.list,roots))throw std::runtime_error("stream final-scene observer restore");}
  ++p.recorded_draws;++draws;if(stage==3)++haze_draws;if(r.dependency)++dependency_draws[r.dependency-1];if(stage>=4){++overlay_draws;
   if(!r.dependency&&r.vertex_stride!=16&&r.vertex_stride){++overlay_extended_draws;const auto &v=r.overlay_layout;
    overlay_extended_layout={v.stride,r.before.pipeline.input_count,unsigned(v.position_format),v.position,unsigned(v.uv_format),v.uv};}}
@@ -909,6 +913,7 @@ void copy_dispatch(pb::Frame *f){
   copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;--pending;
  }
 }
+void observe_final_scene(FinalSceneObserver observer) noexcept {final_scene_observer.store(observer);}
 bool draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,unsigned first,unsigned instance,std::uintptr_t caller) noexcept {
 #ifdef MHW_FG_SCENE_PROBE
  scene_api(list,false,{n,instances,first,0,instance},caller);

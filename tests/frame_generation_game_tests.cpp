@@ -1,5 +1,6 @@
 #include "frame_generation/camera_constants.hpp"
 #include "frame_generation/input_ring.hpp"
+#include "frame_generation/screen_transform.hpp"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -165,12 +166,36 @@ void ring_tests() {
     require(ring.slot(f).state == Ring::State::free && ring.counters().abandoned == 1, "abandon");
     require(ring.take(20, 10) == Ring::none && ring.counters().no_ready >= 1, "no ready");
 }
+
+void screen_tests() {
+    namespace sc = fg::screen;
+    // Neutral brightness (g = 1, the captured default) is saturate + sRGB.
+    require(sc::channel(0.0f, 1.0f) == 0.0f && near(sc::channel(1.0f, 1.0f), 1.0, 1e-6), "endpoints");
+    require(near(sc::channel(0.5f, 1.0f), 0.735356, 1e-5), "sRGB mid grey");
+    require(near(sc::channel(0.002f, 1.0f), 0.02584, 1e-5), "sRGB linear toe");
+    require(sc::channel(-1.0f, 1.0f) == 0.0f && near(sc::channel(7.0f, 1.0f), 1.0, 1e-6), "saturate before the curve");
+    // Brightness curve: k = min(0.05 g + 0.95, 1), c' = 1 - (1 - k c)^g.
+    require(near(sc::brightness(0.5f, 2.0f), 0.75, 1e-6), "g = 2");
+    require(near(sc::brightness(0.5f, 0.5f), 1.0 - std::sqrt(1.0 - 0.975 * 0.5), 1e-6), "g = 0.5 uses k < 1");
+    require(sc::brightness(1.0f, 0.5f) < 1.0f, "g < 1 never reaches white");
+    float last = -1.0f;
+    for (int i = 0; i <= 64; ++i) {
+        const float v = sc::channel(i / 64.0f, 1.4f);
+        require(v >= last && v >= 0.0f && v <= 1.0f, "monotone in range");
+        last = v;
+    }
+    // Implausible parameters fall back to the neutral curve.
+    require(!sc::gamma_plausible(0.0f) && !sc::gamma_plausible(std::nanf("")) && !sc::gamma_plausible(100.0f) &&
+                sc::gamma_plausible(1.0f), "gamma window");
+    require(sc::channel(0.5f, std::nanf("")) == sc::channel(0.5f, 1.0f), "fallback");
+}
 }  // namespace
 
 int main() {
     try {
         camera_tests();
         ring_tests();
+        screen_tests();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "failed: %s\n", e.what());
         return 1;

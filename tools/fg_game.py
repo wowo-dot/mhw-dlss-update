@@ -17,7 +17,7 @@ from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
 
-VERSIONS = ('0.7.0', '0.8.0')
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0')
 
 
 def log_path(run):
@@ -50,7 +50,7 @@ def status(rows):
     found = [r for r in rows if r.get('event') in ('fg_status', 'fg_stopped')]
     s = found[-1] if found else None
     session = (s or {}).get('session', {})
-    keys = ('armed', 'on', 'multiplier', 'generated', 'generated_changes', 'generated_limited', 'presented_frames',
+    keys = ('armed', 'on', 'hudless', 'staged', 'staged_dropped', 'final_unstaged', 'final_mismatch', 'multiplier', 'generated', 'generated_changes', 'generated_limited', 'presented_frames',
             'presents', 'tagged', 'recorded', 'mode_changes', 'record_failed', 'exceptions', 'last_sdk_error', 'off',
             'present_delta', 'camera_failures')
     return dict(event=(s or {}).get('event'), **{k: session.get(k) for k in keys},

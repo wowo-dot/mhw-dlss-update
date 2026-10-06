@@ -753,7 +753,7 @@ if(TARGET mhw_dlss_sdk_live)
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # In-game ordinary frame generation (v0.7.x): DLSS/Reflex sources plus the
         # FG session; default targets keep the Reflex-only synchronous contract.
-        add_library(mhw_fg_game_probe SHARED ${fg_ownership_sources} src/frame_generation/game_session.cpp
+        add_library(mhw_fg_game_probe SHARED ${fg_ownership_sources} src/frame_generation/game_session.cpp src/frame_generation/hudless_pass.cpp
             src/frame_generation/crash_log.cpp)
         target_compile_features(mhw_fg_game_probe PRIVATE cxx_std_20)
         target_include_directories(mhw_fg_game_probe PRIVATE src/projection_binding src/bridge_probe

@@ -4,7 +4,16 @@
 #include <d3d12.h>
 #include <iosfwd>
 #include <filesystem>
+namespace mhw::temporal_present { struct Bindings; }
 namespace mhw::scaled_temporal::stream_route {
+// Optional final-scene observer (frame generation build). Called on the
+// recording thread right after a replaced final-screen draw whose native state
+// was verified restored, before any UI draw: the final scene target is the
+// only RTV and still in RENDER_TARGET. The observer may record work on the list
+// but must leave state equal to the given bindings; that is verified after it.
+using FinalSceneObserver = void (*)(ID3D12GraphicsCommandList *, const temporal_present::Bindings &, ID3D12Resource *scene,
+                                    std::uint64_t frame, std::uint64_t epoch) noexcept;
+void observe_final_scene(FinalSceneObserver) noexcept;
 // Hook creation is queued; the owning continuous runtime applies it only after
 // every participant is prepared. This module never owns Reset/Execute/barriers.
 bool prepare(const temporal_bindings::Config &,unsigned width,unsigned height,std::string &);
