@@ -60,7 +60,12 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     // API hook. All temporal native targets fit in that pool's reach interval.
     require(pb::pool_state().attempted&&pb::pool_state().slot,"shared-hook-pool");
     events<<"{\"event\":\"reservation\",\"ready\":true,\"slot\":"<<pb::pool_state().slot<<",\"hooks_installed\":false}\n"<<std::flush;
+#ifdef MHW_FG_GAME
+    // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
+    require(mhw::ngx_startup::run(module,temporal_version,true,true),"coexistence-NGX-startup");
+#else
     require(mhw::ngx_startup::run(module,temporal_version,true),"coexistence-NGX-startup");
+#endif
     events<<"{\"event\":\"ready\",\"hooks_installed\":false}\n"<<std::flush;prepared=true;
 }
 void arm(ID3D12Device* device){

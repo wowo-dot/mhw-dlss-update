@@ -14,6 +14,9 @@ struct Config {
     std::filesystem::path runtime,data;
     std::uintptr_t backend_slot{}; // production renderer slot; zero only in the isolated fixture
     bool hook_pool_reserved{}; // only the same DLL's successful startup reservation
+    // Frame-generation builds: Streamline's own NGX initialization may load the
+    // provider first. Accepted only from this exact runtime path and hash.
+    bool shared_provider{};
 };
 // One startup transaction. Pinned caller retains the configuration and stream.
 // Only disable the hook; retain the trampoline and SDK/device until process exit.
@@ -25,5 +28,5 @@ bool supported() noexcept;
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
-bool run(HMODULE,const char *version,bool hook_pool_reserved=false) noexcept;
+bool run(HMODULE,const char *version,bool hook_pool_reserved=false,bool shared_provider=false) noexcept;
 }

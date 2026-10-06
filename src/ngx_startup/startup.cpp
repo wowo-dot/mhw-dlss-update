@@ -57,6 +57,15 @@ void graphics(ID3D12Device *expected){
     *out<<"{\"event\":\"graphics\",\"api\":\"D3D12\",\"backend\":"<<backend<<",\"device\":"<<native_device<<",\"swapchain\":"<<swap_address
         <<",\"width\":"<<desc.BufferDesc.Width<<",\"height\":"<<desc.BufferDesc.Height<<",\"swapchain_format\":"<<unsigned(desc.BufferDesc.Format)<<"}\n"<<std::flush;
 }
+// FG builds: Streamline may have loaded the provider from this exact runtime
+// folder first. Accept only that path with the pinned hash.
+bool shared_provider_verified() noexcept {
+    const auto provider=cfg.runtime/L"nvngx_dlss.dll";const auto module=GetModuleHandleW(provider.c_str());
+    if(!cfg.shared_provider||!module)return false;
+    wchar_t loaded[32768]{};const auto length=GetModuleFileNameW(module,loaded,32768);std::error_code error;
+    return length&&length<32768&&std::filesystem::equivalent(loaded,provider,error)&&!error&&
+        projection_binding::file_sha256(loaded)==provider_sha;
+}
 bool capabilities(const char *phase){
     NVSDK_NGX_Parameter *p{};const auto get=NVSDK_NGX_D3D12_GetCapabilityParameters(&p);
     int values[3]{};NVSDK_NGX_Result results[3]{NVSDK_NGX_Result_Fail,NVSDK_NGX_Result_Fail,NVSDK_NGX_Result_Fail};
@@ -87,7 +96,10 @@ void before(std::uint64_t app,const wchar_t *path,ID3D12Device *d,unsigned api,s
         require(caller==cfg.caller&&app==native_app&&api==0x12&&d&&path&&slots_zero,"startup-entry-contract");
         require(d->GetNodeCount()==1&&SUCCEEDED(d->GetDeviceRemovedReason()),"startup-device");
         const auto provider=cfg.runtime/L"nvngx_dlss.dll";
-        require(!GetModuleHandleW(provider.c_str()),"modern-provider-already-loaded");
+        if(GetModuleHandleW(provider.c_str())){
+            require(shared_provider_verified(),"modern-provider-already-loaded");
+            *out<<"{\"event\":\"provider_preloaded\",\"shared\":true,\"path_and_hash_verified\":true}\n"<<std::flush;
+        }
         const auto luid=d->GetAdapterLuid();
         device=d;const auto search=cfg.runtime.wstring();const wchar_t *paths[]{search.c_str()};
         NVSDK_NGX_FeatureCommonInfo info{};info.PathListInfo={paths,1};info.LoggingInfo={logger,NVSDK_NGX_LOGGING_LEVEL_ON,true};
@@ -128,7 +140,7 @@ bool install(const Config &config,std::ostream &log){
     require(cfg.runtime.is_absolute()&&cfg.data.is_absolute(),"startup-paths");
     require(projection_binding::file_sha256((cfg.runtime/L"nvngx_dlss.dll").wstring())==provider_sha,"startup-provider-sha256");
     require(zero_slots(),"native-init-already-observed");
-    require(!GetModuleHandleW((cfg.runtime/L"nvngx_dlss.dll").c_str()),"modern-provider-already-loaded");
+    require(!GetModuleHandleW((cfg.runtime/L"nvngx_dlss.dll").c_str())||shared_provider_verified(),"modern-provider-already-loaded");
     std::filesystem::create_directories(cfg.data);
     const auto status=MH_Initialize();
     require(status==(cfg.hook_pool_reserved?MH_ERROR_ALREADY_INITIALIZED:MH_OK),"startup-minhook-init");

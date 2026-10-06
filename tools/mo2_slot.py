@@ -2,6 +2,7 @@
 
   install --slot <slot dll> --dll <built dll> --run <new run folder>
           [--runtime-dir <Streamline runtime>] [--seed-from <previous run folder>]
+          [--ngx-runtime-dir <NGX runtime written to sdk-runtime-dir.txt>]
   restore --slot <slot dll> --run <run folder>
 
 The slot path and runtime directory are machine-local arguments, never
@@ -54,10 +55,13 @@ def install(a):
     if a.seed_from:
         for name in SEEDS:
             shutil.copyfile(a.seed_from / name, run / name)
+    if a.ngx_runtime_dir:  # Overrides the seeded NGX runtime folder.
+        (run / 'sdk-runtime-dir.txt').write_bytes(str(a.ngx_runtime_dir.resolve()).encode('utf-8'))
     shutil.copyfile(a.dll, run / a.dll.name)
     receipt = dict(schema=1, installed_utc=datetime.now(timezone.utc).isoformat(), slot=str(slot), dll=a.dll.name,
                    dll_sha256=sha(a.dll), previous=previous, git=git_identity(Path(__file__).resolve().parents[1]),
-                   output_dir=str(run), runtime_dir=str(a.runtime_dir) if a.runtime_dir else None,
+                   output_dir=str(run), runtime_dir=str(a.runtime_dir.resolve()) if a.runtime_dir else None,
+                   ngx_runtime_dir=str(a.ngx_runtime_dir.resolve()) if a.ngx_runtime_dir else None,
                    restore=f'python -B tools/mo2_slot.py restore --slot "{slot}" --run "{run}"')
     shutil.copyfile(a.dll, slot)
     files['output-dir'].write_bytes((str(run) + '\n').encode('utf-8'))
@@ -93,6 +97,7 @@ def main():
     p.add_argument('--dll', type=Path)
     p.add_argument('--runtime-dir', type=Path)
     p.add_argument('--seed-from', type=Path)
+    p.add_argument('--ngx-runtime-dir', type=Path)
     a = p.parse_args()
     if a.action == 'install' and not a.dll:
         p.error('install needs --dll')

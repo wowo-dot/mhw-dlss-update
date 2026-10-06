@@ -698,6 +698,17 @@ DWORD WINAPI worker(void*) noexcept {
         return success && hooks_clean && routes_clean && sdk_clean && swap_observed && stats.presents && !stats.faults && log ? 0 : 2;
 #endif
     } catch (const std::exception& e) {
+#ifdef MHW_FG_GAME
+        // Once Streamline has created the host chain under SDK pacing, the game
+        // renders into Streamline's buffers: unhooking or shutting it down here
+        // destroys them under the game. Keep presentation routed; FG Off only.
+        if (presentation && presentation->snapshot().swapchains) {
+            mhw::frame_generation::game::arm(false);
+            try { log << "{\"event\":\"worker_failed\",\"reason\":" << quoted(e.what())
+                << ",\"sdk_retained\":true,\"presentation_routed\":true,\"fg_off_requested\":true}\n" << std::flush; } catch (...) {}
+            return 3;
+        }
+#endif
         const bool clean = clean_hooks();
         std::lock_guard lock(sdk_mutex);
         const bool sdk_clean=close_sdk(); // cleanup emits records before this JSON object

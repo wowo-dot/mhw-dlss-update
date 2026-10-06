@@ -48,7 +48,7 @@ fs::path read_path(const fs::path &file){
     const fs::path p(wide);require(p.is_absolute()&&fs::is_directory(p),"config-directory");return fs::canonical(p).make_preferred();
 }
 }
-bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_reserved) noexcept {
+bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_reserved,bool shared_provider) noexcept {
     HMODULE pinned{};
     if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCWSTR>(&run),&pinned))return false;
     std::ofstream log;
@@ -72,7 +72,7 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
            <<"\",\"graphics_api\":\"D3D12\",\"swapchain_observed\":false,\"gpu_commands\":0,\"feature_creations\":0,\"hooks\":1}\n"<<std::flush;
         require(reinterpret_cast<std::uintptr_t>(GetProcAddress(GetModuleHandleW(nullptr),"NVSDK_NGX_D3D12_Init"))==base+startup::entry_rva,"client-export");
         wait_for_code(base,log);
-        startup::install({reinterpret_cast<void *>(base+startup::entry_rva),base+startup::caller_rva,base+0x51d8808,runtime,folder/(name+".sdk-data"),base+0x51c7050,hook_pool_reserved},log);
+        startup::install({reinterpret_cast<void *>(base+startup::entry_rva),base+startup::caller_rva,base+0x51d8808,runtime,folder/(name+".sdk-data"),base+0x51c7050,hook_pool_reserved,shared_provider},log);
         const auto began=GetTickCount64();while(!startup::done()&&GetTickCount64()-began<600000)Sleep(50);
         const bool disabled=startup::disable();const auto end=GetTickCount64();
         while(!startup::settled()&&GetTickCount64()-end<30000)Sleep(10);
