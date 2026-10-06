@@ -7,10 +7,19 @@ namespace {
 
 bool is_enabled_mode(const Mode mode) noexcept {
   return mode == Mode::capture_create ||
-         mode == Mode::capture_one_evaluate;
+         evaluate_limit(mode) != 0;
 }
 
 } // namespace
+
+ModeParseResult parse_local_capture_opt_in(ModeParseResult environment, std::string_view text) noexcept {
+  if (environment.recognized && environment.mode == Mode::capture_one_evaluate && text == "native-depth-probe\n")
+    return {Mode::native_depth_probe, true};
+  if (environment.recognized && environment.mode == Mode::capture_one_evaluate && text == "native-taa-fallback\n")
+    return {Mode::native_taa_fallback, true};
+  return environment.recognized && environment.mode == Mode::capture_one_evaluate && text == "capture-three-evaluates\n" ?
+      ModeParseResult{Mode::capture_three_evaluates, true} : ModeParseResult{Mode::disabled, false};
+}
 
 ExportId classify_export_name(const std::string_view name) noexcept {
   if (name == kD3d12InitExport) {
@@ -245,10 +254,37 @@ ModeParseResult parse_mode(const std::string_view text) noexcept {
   if (text == kCaptureCreateMode) {
     return {Mode::capture_create, true};
   }
+  if (text == "capture-three-evaluates") return {Mode::capture_three_evaluates, true};
+  if (text == "native-taa-fallback") return {Mode::native_taa_fallback, true};
+  if (text == "native-depth-probe") return {Mode::native_depth_probe, true};
   if (text == kCaptureOneEvaluateMode) {
     return {Mode::capture_one_evaluate, true};
   }
   return {Mode::disabled, false};
+}
+
+ModeParseResult parse_two_provider_mode(const std::string_view text) noexcept {
+  return parse_mode(text);
+}
+
+bool all_provider_routes_verified(
+    const std::span<const ProviderAdmission> providers) noexcept {
+  if (providers.size() != kProviders.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < providers.size(); ++index) {
+    const auto &provider = providers[index];
+    if (provider.provider != kProviders[index] || !provider.identity_verified ||
+        !provider.committed || provider.module == 0U || provider.core == 0U ||
+        provider.thread == 0U ||
+        provider.route_mask != kProviderRouteMaskComplete ||
+        provider.lookup_mask != kProviderLookupMaskComplete ||
+        provider.core != providers[0].core ||
+        provider.thread != providers[0].thread) {
+      return false;
+    }
+  }
+  return providers[0].module != providers[1].module;
 }
 
 bool identity_is_verified(const IdentityEvidence &evidence) noexcept {
@@ -318,9 +354,15 @@ OneShotLifecycle::OneShotLifecycle(
     state_ = LifecycleState::awaiting_verification;
     break;
   case Mode::capture_one_evaluate:
+  case Mode::capture_three_evaluates:
     configuration_valid_ = one_evaluate_token_ != 0U;
     state_ = configuration_valid_ ? LifecycleState::awaiting_verification
                                   : LifecycleState::inert;
+    break;
+  case Mode::native_taa_fallback:
+  case Mode::native_depth_probe:
+    configuration_valid_ = one_evaluate_token_ == fallback_generation_token(1U);
+    state_ = configuration_valid_ ? LifecycleState::awaiting_verification : LifecycleState::inert;
     break;
   default:
     configuration_valid_ = false;
@@ -335,13 +377,19 @@ TransitionResult OneShotLifecycle::commit(
     const std::uint64_t issued_token, const bool transition_applied,
     const bool capture_committed) noexcept {
   const LifecycleState before = state_;
+  if (transition_count_ != (std::numeric_limits<std::uint32_t>::max)()) ++transition_count_;
   if (event_count_ >= events_.size()) {
     overflowed_ = true;
-    state_ = LifecycleState::inert;
     if (dropped_event_count_ !=
         (std::numeric_limits<std::uint32_t>::max)()) {
       ++dropped_event_count_;
     }
+    if (reusable_fallback_mode(mode_)) {
+      state_ = next_state;
+      return {before, state_, decision, response, issued_token, transition_count_,
+              transition_applied, capture_committed, false};
+    }
+    state_ = LifecycleState::inert;
     return {before,
             state_,
             TransitionDecision::capacity_exhausted,
@@ -457,8 +505,7 @@ OneShotLifecycle::apply(const TransitionInput &input) noexcept {
     // Populate is conditional on the driver core completing the rest of its
     // feature-init loop. Creation capture is still useful when our exact Init
     // call was verified but that later, unrelated population pass was skipped.
-    if (state_ != LifecycleState::initialized &&
-        state_ != LifecycleState::populated) {
+    if (!create_lifecycle_ready(mode_, state_)) {
       return reject(input.operation, TransitionDecision::invalid_order);
     }
     if (!caller_is_verified_for(input.caller,
@@ -470,14 +517,24 @@ OneShotLifecycle::apply(const TransitionInput &input) noexcept {
                     TransitionDecision::create_captured_fail_closed,
                     BoundaryResponse::fail_closed, 0U, true, true);
     }
+    if (reusable_fallback_mode(mode_)) {
+      if (generation_ == kFallbackMaxGeneration)
+        return reject(input.operation, TransitionDecision::capacity_exhausted);
+      one_evaluate_token_ = fallback_generation_token(++generation_);
+    }
     return commit(input.operation, LifecycleState::evaluate_token_issued,
                   TransitionDecision::evaluate_token_issued,
                   BoundaryResponse::success_with_token,
                   one_evaluate_token_, true, true);
 
   case LifecycleOperation::capture_evaluate:
-    if (mode_ != Mode::capture_one_evaluate ||
-        state_ != LifecycleState::evaluate_token_issued) {
+    // This mode suppresses the producer. Any Evaluate is an invariant failure;
+    // never revive the feature by releasing/recreating after unexpected work.
+    if (mode_ == Mode::native_taa_fallback)
+      return reject(input.operation, TransitionDecision::invalid_order);
+    if (!evaluate_limit(mode_) || evaluate_count_ >= evaluate_limit(mode_) ||
+        (state_ != LifecycleState::evaluate_token_issued &&
+         !(mode_ == Mode::capture_three_evaluates && state_ == LifecycleState::evaluate_captured))) {
       return reject(input.operation, TransitionDecision::invalid_order);
     }
     if (input.caller.requested_export !=
@@ -490,12 +547,13 @@ OneShotLifecycle::apply(const TransitionInput &input) noexcept {
         input.presented_token != one_evaluate_token_) {
       return reject(input.operation, TransitionDecision::token_rejected);
     }
+    ++evaluate_count_;
     return commit(input.operation, LifecycleState::evaluate_captured,
                   TransitionDecision::evaluate_captured_fail_closed,
                   BoundaryResponse::fail_closed, 0U, true, true);
 
   case LifecycleOperation::release:
-    if (mode_ != Mode::capture_one_evaluate ||
+    if (!evaluate_limit(mode_) ||
         (state_ != LifecycleState::evaluate_token_issued &&
          state_ != LifecycleState::evaluate_captured)) {
       return reject(input.operation, TransitionDecision::invalid_order);

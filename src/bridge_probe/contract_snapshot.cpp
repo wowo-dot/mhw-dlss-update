@@ -232,6 +232,74 @@ std::string_view key_name(const EvaluateSignedKey key) noexcept {
   return {};
 }
 
+std::string_view key_name(const CapabilitySignedKey key) noexcept {
+  switch (key) {
+  case CapabilitySignedKey::available:
+    return "SuperSampling.Available";
+  case CapabilitySignedKey::available_encoded:
+    return "#\x01";
+  case CapabilitySignedKey::feature_init_result:
+    return "SuperSampling.FeatureInitResult";
+  case CapabilitySignedKey::needs_updated_driver:
+    return "SuperSampling.NeedsUpdatedDriver";
+  case CapabilitySignedKey::image_signal_processing_available:
+    return "ImageSignalProcessing.Available";
+  case CapabilitySignedKey::image_signal_processing_init_result:
+    return "ImageSignalProcessing.FeatureInitResult";
+  case CapabilitySignedKey::count:
+    return {};
+  }
+  return {};
+}
+
+std::string_view key_label(const CapabilitySignedKey key) noexcept {
+  return key == CapabilitySignedKey::available_encoded
+             ? "SuperSampling.Available[encoded-0x01]"
+             : key_name(key);
+}
+
+std::string_view key_name(const CapabilityUnsignedKey key) noexcept {
+  switch (key) {
+  case CapabilityUnsignedKey::min_driver_major:
+    return "SuperSampling.MinDriverVersionMajor";
+  case CapabilityUnsignedKey::min_driver_minor:
+    return "SuperSampling.MinDriverVersionMinor";
+  case CapabilityUnsignedKey::count:
+    return {};
+  }
+  return {};
+}
+
+CapabilityContractSnapshot
+capture_capability_contract(const GetterCallbacks &callbacks,
+                            const CapabilityScope scope) noexcept {
+  static_assert(kCapabilityQueryCount <= kContractQueryCapacity);
+  CaptureState state{};
+  CapabilityContractSnapshot snapshot{};
+  for (std::size_t index = 0; index < kCapabilitySignedKeyCount; ++index) {
+    const auto key = static_cast<CapabilitySignedKey>(index);
+    snapshot.signed_values[index].key = key;
+    if (scope == CapabilityScope::super_sampling &&
+        (key == CapabilitySignedKey::image_signal_processing_available ||
+         key == CapabilitySignedKey::image_signal_processing_init_result)) {
+      continue;
+    }
+    capture_value<CapabilitySignedKey, std::int32_t, SignedGetter,
+                  SignedGetterReply>(state, callbacks.context,
+                                     callbacks.get_signed, key,
+                                     snapshot.signed_values[index]);
+  }
+  for (std::size_t index = 0; index < kCapabilityUnsignedKeyCount; ++index) {
+    capture_value<CapabilityUnsignedKey, std::uint32_t, UnsignedGetter,
+                  UnsignedGetterReply>(
+        state, callbacks.context, callbacks.get_unsigned,
+        static_cast<CapabilityUnsignedKey>(index),
+        snapshot.unsigned_values[index]);
+  }
+  snapshot.summary = finish_capture(state, 0U);
+  return snapshot;
+}
+
 CreateContractSnapshot
 capture_create_contract(CaptureState &state,
                         const GetterCallbacks &callbacks) noexcept {
@@ -255,6 +323,26 @@ capture_create_contract(CaptureState &state,
   }
 
   snapshot.summary = finish_capture(state, starting_query_count);
+  return snapshot;
+}
+
+OptimalSettingsSnapshot
+capture_optimal_settings_contract(const GetterCallbacks &callbacks) noexcept {
+  CaptureState state{};
+  OptimalSettingsSnapshot snapshot{};
+  for (std::size_t i = 0; i < 2; ++i) {
+    capture_value<CreateUnsignedKey, std::uint32_t, UnsignedGetter,
+                  UnsignedGetterReply>(
+        state, callbacks.context, callbacks.get_unsigned,
+        static_cast<CreateUnsignedKey>(i), snapshot.unsigned_values[i]);
+  }
+  for (std::size_t i = 0; i < 2; ++i) {
+    capture_value<CreateSignedKey, std::int32_t, SignedGetter,
+                  SignedGetterReply>(
+        state, callbacks.context, callbacks.get_signed,
+        static_cast<CreateSignedKey>(i), snapshot.signed_values[i]);
+  }
+  snapshot.summary = finish_capture(state, 0U);
   return snapshot;
 }
 

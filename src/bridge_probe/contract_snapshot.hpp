@@ -55,6 +55,29 @@ enum class EvaluateSignedKey : std::uint8_t {
   count,
 };
 
+enum class CapabilitySignedKey : std::uint8_t {
+  available,
+  available_encoded,
+  feature_init_result,
+  needs_updated_driver,
+  image_signal_processing_available,
+  image_signal_processing_init_result,
+  count,
+};
+
+enum class CapabilityUnsignedKey : std::uint8_t {
+  min_driver_major,
+  min_driver_minor,
+  count,
+};
+
+inline constexpr std::size_t kCapabilitySignedKeyCount =
+    static_cast<std::size_t>(CapabilitySignedKey::count);
+inline constexpr std::size_t kCapabilityUnsignedKeyCount =
+    static_cast<std::size_t>(CapabilityUnsignedKey::count);
+inline constexpr std::size_t kCapabilityQueryCount =
+    kCapabilitySignedKeyCount + kCapabilityUnsignedKeyCount;
+
 inline constexpr std::size_t kCreateUnsignedKeyCount =
     static_cast<std::size_t>(CreateUnsignedKey::count);
 inline constexpr std::size_t kCreateSignedKeyCount =
@@ -81,6 +104,10 @@ std::string_view key_name(CreateSignedKey key) noexcept;
 std::string_view key_name(EvaluateResourceKey key) noexcept;
 std::string_view key_name(EvaluateFloatKey key) noexcept;
 std::string_view key_name(EvaluateSignedKey key) noexcept;
+std::string_view key_name(CapabilitySignedKey key) noexcept;
+std::string_view key_name(CapabilityUnsignedKey key) noexcept;
+// Keep the control byte in the NGX short-form key out of text logs.
+std::string_view key_label(CapabilitySignedKey key) noexcept;
 
 // getter_result is intentionally opaque. The capture engine preserves it
 // exactly and does not infer vendor success or presence from its value.
@@ -186,12 +213,46 @@ struct CreateContractSnapshot {
   CaptureSummary summary{};
 };
 
+// Inputs to the separate callback stored in DLSSOptimalSettingsCallback.
+// Input capture is separate from the optional diagnostic output publication.
+struct OptimalSettingsSnapshot {
+  std::array<CreateUnsignedCapture, 2> unsigned_values{};
+  std::array<CreateSignedCapture, 2> signed_values{};
+  CaptureSummary summary{};
+};
+OptimalSettingsSnapshot
+capture_optimal_settings_contract(const GetterCallbacks &callbacks) noexcept;
+
 struct EvaluateContractSnapshot {
   std::array<EvaluateResourceCapture, kEvaluateResourceKeyCount> resources{};
   std::array<EvaluateFloatCapture, kEvaluateFloatKeyCount> floats{};
   std::array<EvaluateSignedCapture, kEvaluateSignedKeyCount> signed_values{};
   CaptureSummary summary{};
 };
+
+struct CapabilityContractSnapshot {
+  std::array<ValueCapture<CapabilitySignedKey, std::int32_t>,
+             kCapabilitySignedKeyCount>
+      signed_values{};
+  std::array<ValueCapture<CapabilityUnsignedKey, std::uint32_t>,
+             kCapabilityUnsignedKeyCount>
+      unsigned_values{};
+  CaptureSummary summary{};
+};
+
+enum class CapabilityScope : std::uint8_t {
+  super_sampling,
+  game_requirements,
+};
+
+// Six scalar attempts at Populate, eight after GetParameters. ISP publication
+// follows DLSS in the core's feature loop, so query it only after that loop.
+// The runtime separately admits
+// each of four sources once and shares its getter-fault latch with all other
+// captures. This never consumes the Create/Evaluate query budget.
+CapabilityContractSnapshot capture_capability_contract(
+    const GetterCallbacks &callbacks,
+    CapabilityScope scope = CapabilityScope::super_sampling) noexcept;
 
 CreateContractSnapshot
 capture_create_contract(CaptureState &state,

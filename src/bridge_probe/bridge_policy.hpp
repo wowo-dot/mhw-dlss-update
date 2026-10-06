@@ -72,16 +72,65 @@ std::uint32_t provider_lookup_bit(ExportId export_id) noexcept;
 // unknown.
 ExportId expected_provider_lookup(std::uint32_t seen_mask) noexcept;
 
+enum class ProviderId : std::uint8_t { dlss, isp, count };
+inline constexpr std::array<ProviderId, 2> kProviders{ProviderId::dlss,
+                                                      ProviderId::isp};
+constexpr std::int32_t feature_id(const ProviderId provider) noexcept {
+  return provider == ProviderId::dlss  ? 1
+         : provider == ProviderId::isp ? 9
+                                       : -1;
+}
+constexpr std::string_view provider_name(const ProviderId provider) noexcept {
+  return provider == ProviderId::dlss  ? "dlss"
+         : provider == ProviderId::isp ? "isp"
+                                       : "invalid";
+}
+
+// DLSS Populate publishes a stateful function pointer, not only scalar
+// metadata. Once Init is synthetic it must never call the old Populate.
+constexpr bool forward_original_populate(ProviderId provider,
+                                         bool synthetic_lifecycle) noexcept {
+  return (provider == ProviderId::dlss || provider == ProviderId::isp) &&
+         (!synthetic_lifecycle || provider == ProviderId::isp);
+}
+
+// Read under the runtime's shared route lock. Neither provider may synthesize
+// Init success until two distinct modules completed the same core/thread's
+// independently verified resolver transactions.
+struct ProviderAdmission {
+  ProviderId provider{ProviderId::count};
+  std::uintptr_t module{};
+  std::uintptr_t core{};
+  std::uint32_t thread{};
+  std::uint32_t route_mask{};
+  std::uint32_t lookup_mask{};
+  bool identity_verified{};
+  bool committed{};
+};
+bool all_provider_routes_verified(
+    std::span<const ProviderAdmission> providers) noexcept;
+
 enum class Mode : std::uint8_t {
   disabled,
   capture_create,
   capture_one_evaluate,
+  capture_three_evaluates,
+  native_taa_fallback,
+  native_depth_probe,
 };
+constexpr bool reusable_fallback_mode(Mode mode) noexcept {
+  return mode==Mode::native_taa_fallback || mode==Mode::native_depth_probe;
+}
 
 inline constexpr std::string_view kDisabledMode = "disabled";
 inline constexpr std::string_view kCaptureCreateMode = "capture-create";
 inline constexpr std::string_view kCaptureOneEvaluateMode =
     "capture-one-evaluate";
+
+constexpr unsigned evaluate_limit(Mode mode) noexcept {
+  return mode == Mode::capture_three_evaluates ? 3U :
+      mode == Mode::capture_one_evaluate || reusable_fallback_mode(mode) ? 1U : 0U;
+}
 
 struct ModeParseResult {
   Mode mode{Mode::disabled};
@@ -91,6 +140,11 @@ struct ModeParseResult {
 // Parsing is deliberately exact: empty, misspelled, padded, or differently
 // cased values are unrecognized and therefore disabled.
 ModeParseResult parse_mode(std::string_view text) noexcept;
+ModeParseResult parse_local_capture_opt_in(ModeParseResult environment, std::string_view text) noexcept;
+
+// The two-provider runtime admits bounded Evaluate capture only for DLSS; its provider-mode
+// policy keeps ISP in capture-create. Empty/unknown text remains disabled.
+ModeParseResult parse_two_provider_mode(std::string_view text) noexcept;
 
 // Runtime code is responsible for producing this evidence. Keeping it as
 // neutral POD makes every required identity check independently unit-testable.
@@ -238,14 +292,33 @@ struct LifecycleEvent {
   bool capture_committed{};
 };
 
-inline constexpr std::size_t kLifecycleEventCapacity = 8U;
+inline constexpr std::size_t kLifecycleEventCapacity = 10U;
+
+// The high DWORD remains the DLSS feature index used by the pinned core.
+// Never wrap/reuse a low DWORD within this process.
+inline constexpr std::uint32_t kFallbackFirstToken = 0xB12DU;
+inline constexpr std::uint32_t kFallbackMaxGeneration = 0xFFFFFFFFU - kFallbackFirstToken + 1U;
+constexpr std::uint64_t fallback_generation_token(std::uint32_t generation) noexcept {
+  return generation != 0U && generation <= kFallbackMaxGeneration
+             ? (std::uint64_t{1} << 32U) | (kFallbackFirstToken + generation - 1U)
+             : 0U;
+}
+constexpr bool is_fallback_generation_token(std::uint64_t token) noexcept {
+  return (token >> 32U) == 1U && static_cast<std::uint32_t>(token) >= kFallbackFirstToken;
+}
+constexpr bool create_lifecycle_ready(Mode mode, LifecycleState state) noexcept {
+  return state == LifecycleState::initialized || state == LifecycleState::populated ||
+         (reusable_fallback_mode(mode) && state == LifecycleState::released);
+}
 
 // A single instance permits at most one Create capture and, only in the
 // explicit opt-in mode, at most one Evaluate capture. The verified Populate
 // callback may occur twice (capability and device parameter objects), and
 // Create may follow Init directly if the driver's later population pass is
 // skipped. Every rejected invariant makes the instance inert. The fixed event
-// ledger never allocates.
+// ledger never allocates. Explicit native fallback modes are reusable
+// exceptions: they issue generation tokens after Release and treat full event
+// storage as lost diagnostics, never as an operational failure.
 class OneShotLifecycle final {
 public:
   OneShotLifecycle() noexcept = default;
@@ -261,6 +334,7 @@ public:
     return populate_count_ < 2U;
   }
   bool overflowed() const noexcept { return overflowed_; }
+  std::uint32_t generation() const noexcept { return generation_; }
   std::uint32_t dropped_event_count() const noexcept {
     return dropped_event_count_;
   }
@@ -286,6 +360,9 @@ private:
   std::size_t event_count_{};
   std::uint32_t dropped_event_count_{};
   std::uint8_t populate_count_{};
+  unsigned evaluate_count_{};
+  std::uint32_t generation_{};
+  std::uint32_t transition_count_{};
   bool configuration_valid_{true};
   bool overflowed_{};
 };

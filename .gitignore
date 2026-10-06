@@ -9,6 +9,10 @@
 *.exp
 *.lib
 
+# Python analysis caches
+__pycache__/
+*.py[cod]
+
 # Runtime binaries and diagnostics
 *.dll
 *.exe

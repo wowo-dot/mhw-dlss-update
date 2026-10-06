@@ -186,6 +186,44 @@ GetterCallbacks callbacks_for(MockContext &context) noexcept {
 } // namespace
 
 int main() {
+  using mhw::bridge_probe::capture_optimal_settings_contract;
+  MockContext optimal_context{};
+  const auto optimal =
+      capture_optimal_settings_contract(callbacks_for(optimal_context));
+  if (!optimal.summary.complete || optimal.summary.queries_attempted != 4U ||
+      optimal_context.query_count != 4U ||
+      optimal.unsigned_values[0].value != 2560U ||
+      optimal.unsigned_values[1].value != 1440U) {
+    return fail("optimal-settings input capture failed");
+  }
+  const std::array<std::string_view, 4> optimal_keys{
+      "Width", "Height", "PerfQualityValue", "RTXValue"};
+  for (std::size_t i = 0; i < optimal_keys.size(); ++i) {
+    const auto kind =
+        i < 2 ? GetterKind::unsigned_value : GetterKind::signed_value;
+    if (optimal_context.queries[i].key != optimal_keys[i] ||
+        optimal_context.queries[i].kind != kind) {
+      return fail("optimal-settings callback crossed its four-input contract");
+    }
+  }
+  for (std::size_t fault = 0; fault < 4U; ++fault) {
+    MockContext fault_context{};
+    fault_context.fault_at = fault;
+    const auto result =
+        capture_optimal_settings_contract(callbacks_for(fault_context));
+    if (result.summary.complete || !result.summary.fault_latched ||
+        fault_context.query_count != fault + 1U ||
+        result.summary.stop_reason != CaptureStopReason::callback_fault) {
+      return fail("optimal-settings getter fault did not stop later queries");
+    }
+  }
+  const auto no_optimal_callbacks = capture_optimal_settings_contract({});
+  if (no_optimal_callbacks.summary.complete ||
+      no_optimal_callbacks.summary.queries_attempted != 0U ||
+      no_optimal_callbacks.summary.stop_reason !=
+          CaptureStopReason::callback_missing) {
+    return fail("missing optimal-settings getter was accepted");
+  }
   using mhw::bridge_probe::CreateSignedKey;
   using mhw::bridge_probe::CreateUnsignedKey;
   using mhw::bridge_probe::EvaluateFloatKey;

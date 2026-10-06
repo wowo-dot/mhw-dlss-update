@@ -1,0 +1,170 @@
+#include "startup.hpp"
+#include "../projection_binding/memory.hpp"
+#include <MinHook.h>
+#include <nvsdk_ngx.h>
+#include <dxgi.h>
+#include <wrl/client.h>
+#include <intrin.h>
+#include <atomic>
+#include <iomanip>
+#include <ostream>
+#include <stdexcept>
+
+namespace mhw::ngx_startup {
+namespace {
+using Fn=unsigned(__cdecl *)(std::uint64_t,const wchar_t *,ID3D12Device *,unsigned);
+using Microsoft::WRL::ComPtr;
+Config cfg;Fn original{};std::ostream *out{};
+std::atomic_uint count{},pending{},messages{},native_result{};
+std::atomic_bool finished{},allowed{},stopping{};
+bool installed{},initialized{};
+HMODULE pinned_provider{};
+ComPtr<ID3D12Device> device; // retained by the pinned diagnostic until process exit
+constexpr char provider_sha[]="be6e434a94ca32499515eb62ca0e6c274526055d568d0426e4c652dcdfb6ee6e";
+void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
+void NVSDK_CONV logger(const char *,NVSDK_NGX_Logging_Level,NVSDK_NGX_Feature){++messages;}
+bool zero_slots() noexcept {
+    for(unsigned i=0;i<7;++i){std::uint64_t value{};
+        if(!projection_binding::read(cfg.client_slots+i*8,value)||value)return false;}
+    return true;
+}
+HRESULT pin_swap(std::uintptr_t address,IDXGISwapChain **result) noexcept {
+    __try{return reinterpret_cast<IUnknown *>(address)->QueryInterface(IID_PPV_ARGS(result));}
+    __except(EXCEPTION_EXECUTE_HANDLER){return E_FAIL;}
+}
+HRESULT swap_desc(IDXGISwapChain *swap,DXGI_SWAP_CHAIN_DESC *desc) noexcept {
+    __try{return swap->GetDesc(desc);}__except(EXCEPTION_EXECUTE_HANDLER){return E_FAIL;}
+}
+void graphics(ID3D12Device *expected){
+    require(cfg.backend_slot&&expected,"startup-no-graphics");
+    std::uintptr_t backend{},native_device{},swap_address{},table{},qi{},desc_method{};
+    require(projection_binding::read(cfg.backend_slot,backend)&&backend&&backend<UINTPTR_MAX-0x42720&&
+        projection_binding::read(backend+0x18,native_device)&&native_device==reinterpret_cast<std::uintptr_t>(expected)&&
+        projection_binding::read(backend+0x1470,swap_address)&&swap_address&&projection_binding::read(swap_address,table)&&
+        table&&table<UINTPTR_MAX-13*8&&projection_binding::read(table,qi)&&projection_binding::read(table+12*8,desc_method),"startup-graphics-pointers");
+    const auto dxgi=GetModuleHandleW(L"dxgi.dll");require(dxgi!=nullptr,"startup-dxgi-module");
+    for(const auto address:{qi,desc_method}){HMODULE owner{};
+        MEMORY_BASIC_INFORMATION memory{};const bool queried=VirtualQuery(reinterpret_cast<void *>(address),&memory,sizeof(memory))==sizeof(memory);
+        const auto protection=memory.Protect&255;
+        require(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(address),&owner)&&owner==dxgi&&queried&&memory.State==MEM_COMMIT&&memory.Type==MEM_IMAGE&&
+            !(memory.Protect&(PAGE_GUARD|PAGE_NOACCESS))&&(protection==PAGE_EXECUTE_READ||protection==PAGE_EXECUTE_READWRITE||protection==PAGE_EXECUTE_WRITECOPY),"startup-swap-method");}
+    ComPtr<IDXGISwapChain> swap;
+    require(SUCCEEDED(pin_swap(swap_address,&swap))&&
+        reinterpret_cast<std::uintptr_t>(swap.Get())==swap_address,"startup-swap-identity");
+    DXGI_SWAP_CHAIN_DESC desc{};require(SUCCEEDED(swap_desc(swap.Get(),&desc))&&desc.BufferDesc.Width&&desc.BufferDesc.Height&&desc.BufferDesc.Format!=DXGI_FORMAT_UNKNOWN,"startup-swap-desc");
+    std::uintptr_t stable{};require(projection_binding::read(backend+0x1470,stable)&&stable==swap_address,"startup-swap-changed");
+    *out<<"{\"event\":\"graphics\",\"api\":\"D3D12\",\"backend\":"<<backend<<",\"device\":"<<native_device<<",\"swapchain\":"<<swap_address
+        <<",\"width\":"<<desc.BufferDesc.Width<<",\"height\":"<<desc.BufferDesc.Height<<",\"swapchain_format\":"<<unsigned(desc.BufferDesc.Format)<<"}\n"<<std::flush;
+}
+bool capabilities(const char *phase){
+    NVSDK_NGX_Parameter *p{};const auto get=NVSDK_NGX_D3D12_GetCapabilityParameters(&p);
+    int values[3]{};NVSDK_NGX_Result results[3]{NVSDK_NGX_Result_Fail,NVSDK_NGX_Result_Fail,NVSDK_NGX_Result_Fail};
+    const char *keys[]{NVSDK_NGX_Parameter_SuperSampling_Available,NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,
+                      NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult};
+    if(get==NVSDK_NGX_Result_Success&&p)for(unsigned i=0;i<3;++i)results[i]=p->Get(keys[i],&values[i]);
+    const auto destroy=p?NVSDK_NGX_D3D12_DestroyParameters(p):NVSDK_NGX_Result_Fail;
+    const auto provider=cfg.runtime/L"nvngx_dlss.dll";HMODULE loaded{};
+    const bool found=GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN,provider.c_str(),&loaded)!=0;
+    wchar_t path[32768]{};const auto length=found?GetModuleFileNameW(loaded,path,32768):0;
+    std::error_code error;
+    const bool identity=length&&length<32768&&std::filesystem::equivalent(path,provider,error)&&!error&&projection_binding::file_sha256(path)==provider_sha;
+    if(identity)pinned_provider=loaded;
+    // Finish all queries before emitting a complete record, including failures.
+    *out<<"{\"event\":\"capabilities\",\"phase\":\""<<phase<<"\",\"get_result\":"<<unsigned(get)
+        <<",\"get_values\":["<<unsigned(results[0])<<','<<unsigned(results[1])<<','<<unsigned(results[2])
+        <<"],\"values_u32\":["<<unsigned(values[0])<<','<<unsigned(values[1])<<','<<unsigned(values[2])<<']'
+        <<",\"destroy_result\":"<<unsigned(destroy)<<",\"modern_loaded\":"<<found<<",\"provider_identity_verified\":"<<identity
+        <<",\"log_messages\":"<<messages.load()<<"}\n"<<std::flush;
+    return get==NVSDK_NGX_Result_Success&&results[0]==1&&results[1]==1&&results[2]==1&&
+        values[0]==1&&values[1]==0&&values[2]==1&&destroy==1&&found&&identity;
+}
+void before(std::uint64_t app,const wchar_t *path,ID3D12Device *d,unsigned api,std::uintptr_t caller) noexcept {
+    try {
+        const bool slots_zero=zero_slots();
+        *out<<"{\"event\":\"native_enter\",\"caller\":"<<caller<<",\"device\":"<<reinterpret_cast<std::uintptr_t>(d)
+            <<",\"api\":"<<api<<",\"slots_zero\":"<<slots_zero<<",\"tick\":"<<GetTickCount64()<<"}\n"<<std::flush;
+        require(caller==cfg.caller&&app==native_app&&api==0x12&&d&&path&&slots_zero,"startup-entry-contract");
+        require(d->GetNodeCount()==1&&SUCCEEDED(d->GetDeviceRemovedReason()),"startup-device");
+        const auto provider=cfg.runtime/L"nvngx_dlss.dll";
+        require(!GetModuleHandleW(provider.c_str()),"modern-provider-already-loaded");
+        const auto luid=d->GetAdapterLuid();
+        device=d;const auto search=cfg.runtime.wstring();const wchar_t *paths[]{search.c_str()};
+        NVSDK_NGX_FeatureCommonInfo info{};info.PathListInfo={paths,1};info.LoggingInfo={logger,NVSDK_NGX_LOGGING_LEVEL_ON,true};
+        const auto result=NVSDK_NGX_D3D12_Init_with_ProjectID("956cdd19-7d3c-4660-b664-91c20d2bc9bd",NVSDK_NGX_ENGINE_TYPE_CUSTOM,
+            "0.1.0",cfg.data.c_str(),d,&info);
+        *out<<"{\"event\":\"public_init\",\"result\":"<<unsigned(result)<<",\"api\":21,\"adapter_luid_low\":"<<luid.LowPart
+            <<",\"adapter_luid_high\":"<<luid.HighPart<<",\"runtime_sha256\":\""<<provider_sha
+            <<"\",\"project_id\":\"956cdd19-7d3c-4660-b664-91c20d2bc9bd\",\"tick\":"<<GetTickCount64()<<"}\n"<<std::flush;
+        initialized=result==NVSDK_NGX_Result_Success;
+        require(initialized,"public-init-failed");
+        allowed=capabilities("before_native");
+    }catch(const std::exception &e){*out<<"{\"event\":\"rejected\",\"reason\":"<<std::quoted(e.what())<<"}\n"<<std::flush;}
+}
+void after(unsigned result) noexcept {
+    native_result=result;
+    try {
+        *out<<"{\"event\":\"native_return\",\"result\":"<<result<<",\"arguments_unchanged\":true,\"result_unchanged\":true,\"tick\":"<<GetTickCount64()<<"}\n"<<std::flush;
+        if(initialized){const bool valid=capabilities("after_native");allowed=allowed.load()&&valid;}
+    }catch(...){allowed=false;}
+    finished=true;
+}
+unsigned __cdecl hook(std::uint64_t app,const wchar_t *path,ID3D12Device *d,unsigned api){
+    pending.fetch_add(1);
+    const auto index=count.fetch_add(1);unsigned result{};
+    const bool observe=index==0&&!stopping.load();
+    // A reentrant/unexpected call never reinitializes the SDK or changes its result.
+    __try {
+        if(observe)before(app,path,d,api,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
+        result=original(app,path,d,api);
+        if(observe)after(result);
+    } __finally {pending.fetch_sub(1);}
+    return result;
+}
+}
+bool install(const Config &config,std::ostream &log){
+    require(!installed&&!original&&config.target&&config.caller&&config.client_slots,"startup-install-contract");
+    cfg=config;out=&log;log<<std::boolalpha;
+    require(cfg.runtime.is_absolute()&&cfg.data.is_absolute(),"startup-paths");
+    require(projection_binding::file_sha256((cfg.runtime/L"nvngx_dlss.dll").wstring())==provider_sha,"startup-provider-sha256");
+    require(zero_slots(),"native-init-already-observed");
+    require(!GetModuleHandleW((cfg.runtime/L"nvngx_dlss.dll").c_str()),"modern-provider-already-loaded");
+    std::filesystem::create_directories(cfg.data);
+    const auto status=MH_Initialize();
+    require(status==(cfg.hook_pool_reserved?MH_ERROR_ALREADY_INITIALIZED:MH_OK),"startup-minhook-init");
+    require(MH_CreateHook(cfg.target,reinterpret_cast<void *>(&hook),reinterpret_cast<void **>(&original))==MH_OK,"startup-hook-create");
+    // Write before enable: callback events may occur immediately after enabling.
+    log<<"{\"event\":\"installing\",\"tick\":"<<GetTickCount64()<<",\"sdk_initializations_limit\":1,\"gpu_commands\":0}\n"<<std::flush;
+    require(MH_EnableHook(cfg.target)==MH_OK,"startup-hook-enable");installed=true;return true;
+}
+bool done() noexcept{return finished.load();}
+bool disable() noexcept{
+    stopping=true;
+    if(installed){if(MH_DisableHook(cfg.target)!=MH_OK)return false;installed=false;}
+    return true; // keep the trampoline allocated; a suspended entry may still forward
+}
+bool settled() noexcept{return pending.load()==0;}
+bool supported() noexcept{return allowed.load();}
+unsigned calls() noexcept{return count.load();}
+bool write_graphics_snapshot() noexcept {
+    try{graphics(device.Get());return true;}catch(...){return false;}
+}
+namespace {
+bool reusable() noexcept {
+    return !installed&&stopping&&finished&&pending==0&&count==1&&allowed&&native_result==1&&initialized&&pinned_provider&&device;
+}
+HMODULE validate_initialization(ID3D12Device *expected,const std::filesystem::path &runtime) noexcept {
+    try {
+        if(!reusable()||!expected||expected!=device.Get())return nullptr;
+        const auto provider=runtime/L"nvngx_dlss.dll";
+        if(!std::filesystem::equivalent(provider,cfg.runtime/L"nvngx_dlss.dll")||
+           GetModuleHandleW(provider.c_str())!=pinned_provider||projection_binding::file_sha256(provider.wstring())!=provider_sha)return nullptr;
+        return pinned_provider;
+    }catch(...){return nullptr;}
+}
+const dlss_sdk::BorrowedInitialization retained_initialization{validate_initialization};
+}
+const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept {
+    return reusable()?&retained_initialization:nullptr;
+}
+}

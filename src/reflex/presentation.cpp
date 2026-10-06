@@ -1,0 +1,486 @@
+#include "presentation.hpp"
+#include "owned_interface.hpp"
+#include "resize_contract.hpp"
+#include "presentation_route.hpp"
+#include "presentation_ownership.hpp"
+#include <MinHook.h>
+#include <wrl/client.h>
+#include <atomic>
+#include <mutex>
+#include <stdexcept>
+#include <cstring>
+#include <intrin.h>
+#include <ostream>
+
+namespace mhw::reflex {
+namespace {
+using Microsoft::WRL::ComPtr;
+thread_local unsigned bypass_depth{};
+struct Bypass { Bypass() { ++bypass_depth; } ~Bypass() { --bypass_depth; } };
+struct NativePresent {
+    IUnknown* swap{}; unsigned calls{}; HRESULT result{E_FAIL}; NativePresent* previous{};
+};
+thread_local NativePresent* current_present{};
+struct Capture {
+    NativePresent value;
+    explicit Capture(IUnknown* swap) { value.swap = swap; value.previous = current_present; current_present = &value; }
+    ~Capture() { current_present = value.previous; }
+};
+HRESULT record_present(IUnknown* swap, HRESULT result) {
+    if (current_present && current_present->swap == swap) { ++current_present->calls; current_present->result = result; }
+    return result;
+}
+std::atomic<Presentation::State*> dispatch{};
+void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
+void api(sl::Result value, const char* why) { require(value == sl::Result::eOk, why); }
+template<class T> ComPtr<T> native(Streamline& sdk, IUnknown* proxy) {
+    void* value{}; api(sdk.native(proxy, &value), "presentation-native-interface");
+    require(value != nullptr, "presentation-native-null");
+    ComPtr<IUnknown> owned; owned.Attach(static_cast<IUnknown*>(value));
+    ComPtr<T> typed; require(SUCCEEDED(owned.As(&typed)), "presentation-native-type");
+    return typed;
+}
+bool image_function(void* address) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!address || VirtualQuery(address, &info, sizeof(info)) != sizeof(info)) return false;
+    const auto protection = info.Protect & 0xffU;
+    return info.Type == MEM_IMAGE && info.State == MEM_COMMIT &&
+        !(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+        (protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
+}
+using QueueFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
+using SwapFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+using HwndFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+using CoreFn = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+using BufferFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, REFIID, void**);
+using FullFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, BOOL, IDXGIOutput*);
+using DescFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, DXGI_SWAP_CHAIN_DESC*);
+using ResizeFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+using Present1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
+using IndexFn = UINT(STDMETHODCALLTYPE*)(IDXGISwapChain3*);
+using Resize1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
+HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
+HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
+HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2*, IUnknown*, IUnknown*, const DXGI_SWAP_CHAIN_DESC1*, IDXGIOutput*, IDXGISwapChain1**);
+HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain*, UINT, UINT);
+HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain*, UINT, REFIID, void**);
+HRESULT STDMETHODCALLTYPE full_hook(IDXGISwapChain*, BOOL, IDXGIOutput*);
+HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain*, DXGI_SWAP_CHAIN_DESC*);
+HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
+UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3*);
+HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
+}
+struct Presentation::State {
+    explicit State(Streamline& value) : sdk(value) {}
+    Streamline& sdk;
+    mutable std::mutex mutex;
+    std::atomic<unsigned> active{};
+    std::atomic<bool> accepting{};
+    PresentationStats stats;
+    PresentationObserver observer;
+    PresentationOwnership ownership;
+    std::uintptr_t diagnostic_image{};
+    unsigned diagnostic_image_bytes{};
+    PresentationContract contract{PresentationContract::synchronous_native};
+    std::atomic<std::uintptr_t> paced_host_swap{};
+    std::atomic<unsigned> paced_host_thread{};
+    std::uintptr_t creation_queue{};
+    unsigned device_nodes{};
+    std::array<PresentationHook, 12> heads{};
+    std::array<void*, 12> original{};
+    ComPtr<ID3D12Device> device, proxy_device;
+    ComPtr<IDXGIFactory2> factory, proxy_factory;
+    struct Queue { ComPtr<ID3D12CommandQueue> proxy; ID3D12CommandQueue* native{}; };
+    std::array<Queue, 16> queues{};
+    ComPtr<IDXGISwapChain3> swap, proxy_swap;
+    bool stopped{}, released{};
+
+    void record(OwnershipCall call) noexcept {
+        if(!diagnostic_image)return;
+        const auto error=GetLastError(); LARGE_INTEGER qpc{};
+        QueryPerformanceCounter(&qpc);
+        call.qpc=static_cast<std::uint64_t>(qpc.QuadPart);
+        call.thread=GetCurrentThreadId();ownership.record(call);
+        SetLastError(error);
+    }
+
+    void fault() noexcept { ++stats.faults; accepting.store(false); }
+    void add(unsigned index, IUnknown* object, unsigned slot, void* detour) {
+        auto** table = *reinterpret_cast<void***>(object);
+        auto* target = table[slot]; require(image_function(target), "presentation-native-code");
+        auto& head = heads[index];
+        if (head.created) { require(head.target == reinterpret_cast<std::uintptr_t>(target), "presentation-vtable-changed"); return; }
+        for (const auto& prior : heads) require(prior.target != reinterpret_cast<std::uintptr_t>(target), "presentation-aliased-method");
+        head.target = reinterpret_cast<std::uintptr_t>(target);
+        std::memcpy(head.original.data(), target, sizeof(head.original));
+        require(MH_CreateHook(target, detour, &original[index]) == MH_OK, "presentation-create-hook");
+        head.created = true;
+    }
+    void enable() {
+        for (auto& head : heads) if (head.created && !head.enabled) {
+            require(MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
+            head.enabled = true; // also cover partial application on failure
+        }
+        require(MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
+    }
+    ID3D12CommandQueue* proxy_queue(IUnknown* value) const noexcept {
+        for (const auto& q : queues) if (q.native && value == q.native) return q.proxy.Get();
+        return nullptr;
+    }
+    bool is_swap(IUnknown* value) const noexcept { return swap && value == swap.Get(); }
+    void retire_swap() noexcept { paced_host_swap.store(0); paced_host_thread.store(0); creation_queue = 0; swap.Reset(); proxy_swap.Reset(); }
+    void describe() {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        require(swap && SUCCEEDED(swap->GetDesc(&desc)), "presentation-swap-description");
+        stats.width = desc.BufferDesc.Width; stats.height = desc.BufferDesc.Height;
+        stats.format = static_cast<unsigned>(desc.BufferDesc.Format); stats.buffers = desc.BufferCount;
+    }
+    template<class T> HRESULT publish(ComPtr<T>& created, T** result, HRESULT hr, IUnknown* queue) {
+        if (FAILED(hr) || !created) return hr;
+        auto host = native<T>(sdk, created.Get());
+        ComPtr<IDXGISwapChain3> next_native, next_proxy;
+        require(SUCCEEDED(host.As(&next_native)) && SUCCEEDED(created.As(&next_proxy)), "presentation-swap3");
+        require(next_native.Get() != next_proxy.Get(), "presentation-proxy-required");
+        // Retire the previous chain while SL is live; its destruction callback
+        // runs through the proxy. No backbuffer is retained by this bridge.
+        retire_swap();
+        swap = next_native; proxy_swap = next_proxy;
+        creation_queue = reinterpret_cast<std::uintptr_t>(queue);
+        paced_host_swap.store(reinterpret_cast<std::uintptr_t>(swap.Get()));
+        paced_host_thread.store(GetCurrentThreadId());
+        add(4, swap.Get(), 8, reinterpret_cast<void*>(&present_hook));
+        add(5, swap.Get(), 9, reinterpret_cast<void*>(&buffer_hook));
+        add(6, swap.Get(), 10, reinterpret_cast<void*>(&full_hook));
+        add(7, swap.Get(), 12, reinterpret_cast<void*>(&desc_hook));
+        add(8, swap.Get(), 13, reinterpret_cast<void*>(&resize_hook));
+        add(9, swap.Get(), 22, reinterpret_cast<void*>(&present1_hook));
+        add(10, swap.Get(), 36, reinterpret_cast<void*>(&index_hook));
+        add(11, swap.Get(), 39, reinterpret_cast<void*>(&resize1_hook));
+        enable(); describe(); ++stats.swapchains;
+        stats.native_swapchain = reinterpret_cast<std::uintptr_t>(swap.Get());
+        stats.proxy_swapchain = reinterpret_cast<std::uintptr_t>(proxy_swap.Get());
+        *result = host.Detach(); // one new owned native reference for the host
+        return hr;
+    }
+};
+namespace {
+// active starts before accepting is read. Stop disables and drains callbacks
+// before touching SDK state. TLS forwarding does not acquire the route mutex.
+struct Call {
+    Presentation::State& s;
+    explicit Call(Presentation::State& value) : s(value) { s.active.fetch_add(1); }
+    ~Call() { s.active.fetch_sub(1); }
+};
+template<class Fn> Fn original(Presentation::State& s, unsigned index) { return reinterpret_cast<Fn>(s.original[index]); }
+HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUEUE_DESC* desc, REFIID iid, void** out) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    auto& s = *dispatch.load(); Call call(s);
+    if (!bypass_depth && s.accepting.load() && self == s.device.Get() && desc && out && iid == __uuidof(ID3D12CommandQueue)) {
+        std::lock_guard lock(s.mutex);
+        if (s.accepting.load()) {
+            Bypass bypass;
+            try {
+                auto slot = s.queues.begin(); while (slot != s.queues.end() && slot->proxy) ++slot;
+                require(slot != s.queues.end(), "presentation-queue-capacity");
+                ComPtr<ID3D12CommandQueue> proxy;
+                const auto hr = s.proxy_device->CreateCommandQueue(desc, iid, reinterpret_cast<void**>(proxy.GetAddressOf()));
+                if (FAILED(hr)) { *out = nullptr; return hr; }
+                auto host = native<ID3D12CommandQueue>(s.sdk, proxy.Get());
+                require(host.Get() != proxy.Get(), "presentation-queue-proxy");
+                slot->native = host.Get(); slot->proxy = proxy;
+                *out = host.Detach(); ++s.stats.queues;
+                s.record({0,0,0,static_cast<std::uint32_t>(hr),0,0,caller,reinterpret_cast<std::uintptr_t>(self),
+                    reinterpret_cast<std::uintptr_t>(*out),{static_cast<unsigned>(desc->Type),static_cast<unsigned>(desc->Priority),
+                    static_cast<unsigned>(desc->Flags),desc->NodeMask}});
+                return hr;
+            } catch (...) { s.fault(); }
+        }
+    }
+    return original<QueueFn>(s, 0)(self, desc, iid, out);
+}
+HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    auto& s = *dispatch.load(); Call call(s);
+    if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
+        std::lock_guard lock(s.mutex);
+        if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
+            Bypass bypass;
+            try {
+                OwnershipCall v{1,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
+                    {reinterpret_cast<std::uintptr_t>(queue),desc->BufferDesc.Width,desc->BufferDesc.Height,
+                    static_cast<unsigned>(desc->BufferDesc.Format),desc->BufferCount,desc->Flags,
+                    static_cast<unsigned>(desc->SwapEffect),static_cast<unsigned>(desc->Windowed)}};
+                s.retire_swap(); ComPtr<IDXGISwapChain> made;
+                const auto hr=s.proxy_factory->CreateSwapChain(proxy,desc,&made);
+                const auto result=s.publish(made,out,hr,queue);
+                v.result=static_cast<std::uint32_t>(result);v.returned=SUCCEEDED(result)?reinterpret_cast<std::uintptr_t>(*out):0;s.record(v);
+                return result;
+            }
+            catch (...) { s.retire_swap(); s.fault(); }
+        }
+    }
+    return original<SwapFn>(s, 1)(self, queue, desc, out);
+}
+HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    auto& s = *dispatch.load(); Call call(s);
+    if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
+        std::lock_guard lock(s.mutex);
+        if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
+            Bypass bypass;
+            try {
+                OwnershipCall v{2,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
+                    {reinterpret_cast<std::uintptr_t>(queue),desc->Width,desc->Height,static_cast<unsigned>(desc->Format),
+                    desc->BufferCount,desc->Flags,static_cast<unsigned>(desc->SwapEffect),full?static_cast<unsigned>(full->Windowed):1}};
+                s.retire_swap(); ComPtr<IDXGISwapChain1> made;
+                const auto hr=s.proxy_factory->CreateSwapChainForHwnd(proxy,hwnd,desc,full,restrict,&made);
+                const auto result=s.publish(made,out,hr,queue);
+                v.result=static_cast<std::uint32_t>(result);v.returned=SUCCEEDED(result)?reinterpret_cast<std::uintptr_t>(*out):0;s.record(v);
+                return result;
+            }
+            catch (...) { s.retire_swap(); s.fault(); }
+        }
+    }
+    return original<HwndFn>(s, 2)(self, queue, hwnd, desc, full, restrict, out);
+}
+HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
+    IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    auto& s = *dispatch.load(); Call call(s);
+    if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
+        std::lock_guard lock(s.mutex);
+        if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
+            Bypass bypass;
+            try {
+                OwnershipCall v{3,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
+                    {reinterpret_cast<std::uintptr_t>(queue),desc->Width,desc->Height,static_cast<unsigned>(desc->Format),
+                    desc->BufferCount,desc->Flags,static_cast<unsigned>(desc->SwapEffect),1}};
+                s.retire_swap(); ComPtr<IDXGISwapChain1> made;
+                const auto hr=s.proxy_factory->CreateSwapChainForCoreWindow(proxy,window,desc,restrict,&made);
+                const auto result=s.publish(made,out,hr,queue);
+                v.result=static_cast<std::uint32_t>(result);v.returned=SUCCEEDED(result)?reinterpret_cast<std::uintptr_t>(*out):0;s.record(v);
+                return result;
+            }
+            catch (...) { s.retire_swap(); s.fault(); }
+        }
+    }
+    return original<CoreFn>(s, 3)(self, queue, window, desc, restrict, out);
+}
+template<class Routed, class Forward>
+auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& forward) {
+    auto& s = *dispatch.load(); Call call(s);
+    // The SDK worker can use the very same physical chain as the host. Its
+    // native indices/buffers must never be replaced with logical SDK ones.
+    // The paced foundation is explicitly single-host-thread; a game adapter
+    // must establish its API owners before extending this contract.
+    if (s.contract == PresentationContract::sdk_paced &&
+        !paced_host_call(reinterpret_cast<std::uintptr_t>(self), s.paced_host_swap.load(),
+            GetCurrentThreadId(), s.paced_host_thread.load())) return forward(s);
+    if (!bypass_depth && s.accepting.load()) {
+        std::lock_guard lock(s.mutex);
+        if (s.accepting.load() && s.is_swap(self)) {
+            Bypass bypass;const auto value=routed(s,diagnostic);
+            diagnostic.object=reinterpret_cast<std::uintptr_t>(self);
+            diagnostic.result=static_cast<std::uint32_t>(value);s.record(diagnostic);
+            return value;
+        }
+    }
+    return forward(s);
+}
+HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT flags) {
+    return route(self, {4,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
+        const auto before = GetLastError();
+        const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
+        SetLastError(before);
+        Capture capture(self);
+        const auto hr = s.proxy_swap->Present(interval, flags);
+        if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
+        const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
+        if (decision.fault) s.fault();
+        if (decision.forward_native) record_present(self, original<PresentFn>(s, 4)(self, interval, flags));
+        if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
+        if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
+        const auto result = s.contract == PresentationContract::sdk_paced ? decision.result : capture.value.result;
+        v.args[2]=ticket;v.args[3]=capture.value.calls;
+        const auto error = GetLastError();
+        if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
+        SetLastError(error);
+        // SL's after-hook may overwrite an occlusion/status HRESULT. Preserve
+        // the actual native result and never present twice after an SDK error.
+        return result;
+    }, [&](auto& s) { return record_present(self, original<PresentFn>(s, 4)(self, interval, flags)); });
+}
+HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID iid, void** out) {
+    return route(self,{5,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{index,iid==__uuidof(ID3D12Resource)}}, [&](auto& s,auto& v) {
+        const auto hr=s.proxy_swap->GetBuffer(index,iid,out);v.returned=SUCCEEDED(hr)&&out?reinterpret_cast<std::uintptr_t>(*out):0;return hr;},
+        [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); });
+}
+HRESULT STDMETHODCALLTYPE full_hook(IDXGISwapChain* self, BOOL full, IDXGIOutput* target) {
+    return route(self,{6,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{static_cast<unsigned>(full),reinterpret_cast<std::uintptr_t>(target)}}, [&](auto& s,auto&) { return s.proxy_swap->SetFullscreenState(full, target); },
+        [&](auto& s) { return original<FullFn>(s, 6)(self, full, target); });
+}
+HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* desc) {
+    return route(self,{7,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto& v) {
+        const auto hr=s.proxy_swap->GetDesc(desc);
+        if(SUCCEEDED(hr)&&desc)v.args={desc->BufferDesc.Width,desc->BufferDesc.Height,static_cast<unsigned>(desc->BufferDesc.Format),
+            desc->BufferCount,desc->Flags,static_cast<unsigned>(desc->Windowed)};
+        return hr;},
+        [&](auto& s) { return original<DescFn>(s, 7)(self, desc); });
+}
+HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags) {
+    return route(self,{8,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
+        const auto hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
+        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+        return hr;
+    }, [&](auto& s) { return original<ResizeFn>(s, 8)(self, count, w, h, format, flags); });
+}
+HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
+    return route(self,{9,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
+        const auto before = GetLastError();
+        const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
+        SetLastError(before);
+        Capture capture(self);
+        const auto hr = s.proxy_swap->Present1(interval, flags, params);
+        if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
+        const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
+        if (decision.fault) s.fault();
+        if (decision.forward_native) record_present(self, original<Present1Fn>(s, 9)(self, interval, flags, params));
+        if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
+        if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
+        const auto result = s.contract == PresentationContract::sdk_paced ? decision.result : capture.value.result;
+        v.args[2]=ticket;v.args[3]=capture.value.calls;
+        const auto error = GetLastError();
+        if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
+        SetLastError(error);
+        return result;
+    }, [&](auto& s) { return record_present(self, original<Present1Fn>(s, 9)(self, interval, flags, params)); });
+}
+UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
+    return route(self,{10,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto&) { return s.proxy_swap->GetCurrentBackBufferIndex(); },
+        [&](auto& s) { return original<IndexFn>(s, 10)(self); });
+}
+HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags,
+    const UINT* masks, IUnknown* const* queues) {
+    return route(self,{11,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
+        HRESULT hr{};
+        if (s.contract == PresentationContract::sdk_paced) {
+            // SDK 2.12 FG ResizeBuffers1 raised E_ABORT in the owned fixture.
+            // Use the equivalent SDK ResizeBuffers route only when queue/node
+            // assignment cannot change. General queue reassignment stays
+            // unsupported in this FG foundation; never silently drop it.
+            if (!count || count > 16 || !masks || !queues) return DXGI_ERROR_INVALID_CALL;
+            std::array<std::uintptr_t, 16> labels{};
+            for (unsigned i = 0; i < count; ++i) labels[i] = reinterpret_cast<std::uintptr_t>(queues[i]);
+            if (!simple_resize_equivalent(count, s.device_nodes, s.creation_queue,
+                {masks, count}, {labels.data(), count})) return DXGI_ERROR_INVALID_CALL;
+            hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
+        } else {
+            // Accepted Reflex-only path preserves the native queue arguments.
+            hr = s.proxy_swap->ResizeBuffers1(count, w, h, format, flags, masks, queues);
+        }
+        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+        return hr;
+    }, [&](auto& s) { return original<Resize1Fn>(s, 11)(self, count, w, h, format, flags, masks, queues); });
+}
+}
+Presentation::Presentation(Streamline& sdk) : state_(new State(sdk)) {
+    State* expected{}; require(dispatch.compare_exchange_strong(expected, state_), "one-presentation-dispatch-per-process");
+}
+void Presentation::install(ID3D12Device* device, IDXGIFactory2* factory, PresentationContract contract) {
+    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass;
+    require(device && factory && !s.device && !s.stopped &&
+        (contract == PresentationContract::synchronous_native || contract == PresentationContract::sdk_paced),
+        "presentation-install-arguments");
+    s.contract = contract;
+    s.device_nodes = device->GetNodeCount();
+    s.device = device; s.factory = factory;
+    s.proxy_device = s.device; s.proxy_factory = s.factory;
+    api(upgrade_owned(s.proxy_device, [&](void** out) { return s.sdk.upgrade(out); }), "presentation-upgrade-device");
+    api(upgrade_owned(s.proxy_factory, [&](void** out) { return s.sdk.upgrade(out); }), "presentation-upgrade-factory");
+    require(native<ID3D12Device>(s.sdk, s.proxy_device.Get()).Get() == device, "presentation-device-identity");
+    require(native<IDXGIFactory2>(s.sdk, s.proxy_factory.Get()).Get() == factory, "presentation-factory-identity");
+    const auto initialized = MH_Initialize();
+    require(initialized == MH_OK || initialized == MH_ERROR_ALREADY_INITIALIZED, "presentation-hook-initialize");
+    s.add(0, device, 8, reinterpret_cast<void*>(&queue_hook));
+    s.add(1, factory, 10, reinterpret_cast<void*>(&swap_hook));
+    s.add(2, factory, 15, reinterpret_cast<void*>(&hwnd_hook));
+    s.add(3, factory, 16, reinterpret_cast<void*>(&core_hook));
+    s.stats.native_device = reinterpret_cast<std::uintptr_t>(device);
+    s.accepting.store(true); s.enable();
+}
+PresentationStats Presentation::snapshot() const {
+    auto& s = *state_; std::lock_guard lock(s.mutex);
+    auto stats = s.stats; stats.routing = s.accepting.load(); stats.restored = s.stopped;
+    stats.pending_calls = s.active.load();
+    for (const auto& head : s.heads) if (head.enabled) ++stats.installed_hooks;
+    return stats;
+}
+void Presentation::observe(PresentationObserver observer) {
+    auto& s = *state_; std::lock_guard lock(s.mutex);
+    require(s.accepting.load() && !s.stopped && observer.context && observer.begin && observer.end,
+        "presentation-observer-arguments");
+    require(!s.observer.context, "presentation-observer-already-set");
+    s.observer = observer;
+}
+void Presentation::ownership(std::uintptr_t image,unsigned bytes) {
+    auto& s=*state_;std::lock_guard lock(s.mutex);
+    require(image && bytes && image<=UINTPTR_MAX-bytes && !s.device && !s.stopped && !s.diagnostic_image,"ownership-before-install");
+    s.diagnostic_image=image;s.diagnostic_image_bytes=bytes;
+}
+void Presentation::ownership_running() {
+    auto& s=*state_;std::lock_guard lock(s.mutex);
+    require(s.diagnostic_image && s.accepting.load() && !s.stopped && !s.ownership.phase,"ownership-running-once");
+    s.ownership.phase=1;
+}
+void Presentation::write_ownership(std::ostream& out) const {
+    auto& s=*state_;std::lock_guard lock(s.mutex);if(!s.diagnostic_image)return;
+    const auto& t=s.ownership;LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);
+    const auto rva=[&](std::uint64_t at){return at>=s.diagnostic_image && at-s.diagnostic_image<s.diagnostic_image_bytes?at-s.diagnostic_image:0;};
+    out<<"{\"event\":\"ownership_summary\",\"schema\":1,\"image\":"<<s.diagnostic_image<<",\"image_bytes\":"<<s.diagnostic_image_bytes
+       <<",\"qpc_frequency\":"<<frequency.QuadPart<<",\"calls\":"<<t.calls<<",\"buckets\":"<<t.bucket_count<<",\"samples\":"<<t.sample_count
+       <<",\"bucket_limit\":"<<t.bucket_limit<<",\"sample_limit\":"<<t.sample_limit<<",\"dropped_buckets\":"<<t.dropped_buckets
+       <<",\"dropped_samples\":"<<t.dropped_samples<<",\"phase\":"<<t.phase<<",\"drained\":"<<(s.stopped && !s.active.load())
+       <<",\"pointers_owned\":false,\"known_bucket_counts_exact\":true,\"sampling\":\"first-four-then-powers-of-two-to-65536\"}\n";
+    for(unsigned i=0;i<t.bucket_count;++i){const auto& b=t.buckets[i];
+        out<<"{\"event\":\"ownership_bucket\",\"method\":"<<b.method<<",\"phase\":"<<b.phase<<",\"thread\":"<<b.thread
+           <<",\"caller\":"<<b.caller<<",\"caller_rva\":"<<rva(b.caller)<<",\"count\":"<<b.count<<"}\n";}
+    for(unsigned i=0;i<t.sample_count;++i){const auto& v=t.samples[i];
+        out<<"{\"event\":\"ownership_sample\",\"method\":"<<v.method<<",\"phase\":"<<v.phase<<",\"thread\":"<<v.thread
+           <<",\"caller\":"<<v.caller<<",\"caller_rva\":"<<rva(v.caller)<<",\"sequence\":"<<v.sequence<<",\"qpc\":"<<v.qpc
+           <<",\"object\":"<<v.object<<",\"returned\":"<<v.returned<<",\"result\":"<<v.result<<",\"args\":[";
+        for(unsigned n=0;n<v.args.size();++n){if(n)out<<',';out<<v.args[n];}out<<"]}\n";}
+    out<<std::flush;
+}
+bool Presentation::stop() noexcept {
+    auto& s = *state_; bool ok = true;
+    // First synchronize with dynamic hook installation in a creation callback.
+    { std::lock_guard lock(s.mutex); s.accepting.store(false); }
+    // No route mutex while MinHook suspends threads or callbacks drain.
+    for (auto& head : s.heads) if (head.enabled) {
+        const auto status = MH_DisableHook(reinterpret_cast<void*>(head.target));
+        if (status == MH_OK || status == MH_ERROR_DISABLED) head.enabled = false; else ok = false;
+    }
+    const auto began = GetTickCount64();
+    while (s.active.load() && GetTickCount64() - began < 30000) Sleep(1);
+    if (s.active.load()) return false;
+    std::lock_guard lock(s.mutex);
+    for (auto& head : s.heads) if (head.created) {
+        head.restored = std::memcmp(reinterpret_cast<void*>(head.target), head.original.data(), sizeof(head.original)) == 0;
+        ok = head.restored && ok;
+    }
+    s.stopped = ok; return ok;
+}
+bool Presentation::release_after_shutdown() noexcept {
+    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass;
+    if (!s.stopped || s.active.load() || s.sdk.initialized()) return false;
+    s.swap.Reset(); s.proxy_swap.Reset();
+    for (auto& q : s.queues) { q.proxy.Reset(); q.native = nullptr; }
+    s.proxy_factory.Reset(); s.factory.Reset(); s.proxy_device.Reset(); s.device.Reset();
+    s.released = true; return true;
+}
+const std::array<PresentationHook, 12>& Presentation::hooks() const noexcept { return state_->heads; }
+}

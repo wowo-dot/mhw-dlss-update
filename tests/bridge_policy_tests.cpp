@@ -83,6 +83,7 @@ bool advance_to_populated(OneShotLifecycle &lifecycle) noexcept {
 } // namespace
 
 int main() {
+  using namespace mhw::bridge_probe;
   using mhw::bridge_probe::InitValidationEvidence;
   using mhw::bridge_probe::LifecycleEvent;
   using mhw::bridge_probe::ModeParseResult;
@@ -119,6 +120,136 @@ int main() {
   static_assert(std::is_trivially_copyable_v<TransitionInput>);
   static_assert(std::is_trivially_copyable_v<TransitionResult>);
   static_assert(std::is_trivially_copyable_v<LifecycleEvent>);
+
+  const auto create_mode = parse_two_provider_mode("capture-create");
+  const auto disabled_mode = parse_two_provider_mode("disabled");
+  const auto evaluate_mode = parse_two_provider_mode("capture-one-evaluate");
+  if (!create_mode.recognized || create_mode.mode != Mode::capture_create ||
+      !disabled_mode.recognized || disabled_mode.mode != Mode::disabled ||
+      !evaluate_mode.recognized || evaluate_mode.mode != Mode::capture_one_evaluate) {
+    return fail("two-provider supported modes were rejected");
+  }
+  for (const auto text : {"capture-one-evaluate ", "", "capture-create ",
+                          "CAPTURE-CREATE", "unknown"}) {
+    const auto parsed = parse_two_provider_mode(text);
+    if (parsed.recognized || parsed.mode != Mode::disabled) {
+      return fail("unsupported two-provider mode did not stay disabled");
+    }
+  }
+  static_assert(feature_id(ProviderId::dlss) == 1);
+  static_assert(feature_id(ProviderId::isp) == 9);
+  static_assert(!forward_original_populate(ProviderId::dlss, true));
+  static_assert(forward_original_populate(ProviderId::dlss, false));
+  static_assert(forward_original_populate(ProviderId::isp, true));
+  static_assert(!forward_original_populate(ProviderId::count, true));
+  const std::array<ProviderAdmission, 2> complete_providers{
+      {{ProviderId::dlss, 0x100000U, 0x300000U, 42U, kProviderRouteMaskComplete,
+        kProviderLookupMaskComplete, true, true},
+       {ProviderId::isp, 0x200000U, 0x300000U, 42U, kProviderRouteMaskComplete,
+        kProviderLookupMaskComplete, true, true}}};
+  if (!all_provider_routes_verified(complete_providers) ||
+      all_provider_routes_verified({}) ||
+      all_provider_routes_verified(std::span(complete_providers).first(1))) {
+    return fail("two-provider admission count failed");
+  }
+  // A finished DLSS route must not admit Init while any ISP route or guard
+  // is missing (and vice versa). Unknown extra mask bits also fail closed.
+  for (std::size_t provider = 0; provider < complete_providers.size();
+       ++provider) {
+    for (unsigned bit = 0; bit < 32U; ++bit) {
+      auto lookup = complete_providers;
+      lookup[provider].lookup_mask ^= 1U << bit;
+      auto route = complete_providers;
+      route[provider].route_mask ^= 1U << bit;
+      if (all_provider_routes_verified(lookup) ||
+          all_provider_routes_verified(route)) {
+        return fail(
+            "partial or drifted provider masks admitted initialization");
+      }
+    }
+    for (unsigned missing = 0; missing < 8U; ++missing) {
+      auto evidence = complete_providers;
+      auto &entry = evidence[provider];
+      switch (missing) {
+      case 0:
+        entry.identity_verified = false;
+        break;
+      case 1:
+        entry.committed = false;
+        break;
+      case 2:
+        entry.module = 0;
+        break;
+      case 3:
+        entry.core = 0;
+        break;
+      case 4:
+        entry.thread = 0;
+        break;
+      case 5:
+        entry.core ^= 0x100U;
+        break;
+      case 6:
+        ++entry.thread;
+        break;
+      case 7:
+        entry.provider = ProviderId::count;
+        break;
+      }
+      if (all_provider_routes_verified(evidence)) {
+        return fail(
+            "missing or mismatched provider identity admitted initialization");
+      }
+    }
+  }
+  auto alias = complete_providers;
+  alias[1].module = alias[0].module;
+  auto duplicate = complete_providers;
+  duplicate[1].provider = ProviderId::dlss;
+  auto swapped = complete_providers;
+  std::swap(swapped[0], swapped[1]);
+  if (all_provider_routes_verified(alias) ||
+      all_provider_routes_verified(duplicate) ||
+      all_provider_routes_verified(swapped)) {
+    return fail("aliased, duplicated or misidentified provider was admitted");
+  }
+
+  // Capturing one provider's Create must not consume the other's
+  // capture or cleanup state. Neither capture-create path may issue a token.
+  for (std::size_t first = 0; first < 2U; ++first) {
+    std::array<OneShotLifecycle, 2> lifecycles{
+        OneShotLifecycle(Mode::capture_create),
+        OneShotLifecycle(Mode::capture_create)};
+    auto &a = lifecycles[first];
+    auto &b = lifecycles[1U - first];
+    if (!advance_to_populated(a) || !advance_to_populated(b)) {
+      return fail("independent provider initialization failed");
+    }
+    const auto first_capture = a.apply(make_input(
+        LifecycleOperation::capture_create, ExportId::d3d12_create_feature));
+    if (!first_capture.capture_committed || first_capture.issued_token != 0U ||
+        first_capture.response != BoundaryResponse::fail_closed ||
+        b.state() != LifecycleState::populated ||
+        !b.populate_budget_available()) {
+      return fail(
+          "one provider's failed Create affected its peer or issued a handle");
+    }
+    const auto first_shutdown = a.apply(
+        make_input(LifecycleOperation::shutdown, ExportId::d3d12_shutdown));
+    const auto second_capture = b.apply(make_input(
+        LifecycleOperation::capture_create, ExportId::d3d12_create_feature));
+    const auto second_shutdown = b.apply(
+        make_input(LifecycleOperation::shutdown, ExportId::d3d12_shutdown));
+    if (first_shutdown.response != BoundaryResponse::success ||
+        !second_capture.capture_committed ||
+        second_capture.issued_token != 0U ||
+        second_capture.response != BoundaryResponse::fail_closed ||
+        second_shutdown.response != BoundaryResponse::success ||
+        a.state() != LifecycleState::inert ||
+        b.state() != LifecycleState::inert) {
+      return fail("provider cleanup or capture ownership was not independent");
+    }
+  }
 
   InitValidationEvidence valid_init{true,
                                     true,
@@ -504,6 +635,46 @@ int main() {
   }
 
   constexpr std::uint64_t one_evaluate_token = 0x8A31F04C620D975BULL;
+  if (parse_mode("native-taa-fallback").mode != Mode::native_taa_fallback ||
+      mhw::bridge_probe::evaluate_limit(Mode::native_taa_fallback) != 1 ||
+      mhw::bridge_probe::parse_local_capture_opt_in({Mode::capture_one_evaluate, true}, "native-taa-fallback\n").mode != Mode::native_taa_fallback ||
+      mhw::bridge_probe::parse_local_capture_opt_in({Mode::disabled, true}, "native-taa-fallback\n").recognized ||
+      mhw::bridge_probe::parse_local_capture_opt_in({Mode::capture_one_evaluate, true}, "native-taa-fallback\r\n").recognized)
+    return fail("fallback mode requires exact opt-in and retains only one unexpected-Evaluate diagnostic slot");
+  {
+    OneShotLifecycle fallback(Mode::native_taa_fallback, fallback_generation_token(1));
+    if (!advance_to_populated(fallback)) return fail("fallback lifecycle verification");
+    if (!is_applied(fallback.apply(make_input(LifecycleOperation::capture_create, ExportId::d3d12_create_feature)),
+                    LifecycleState::evaluate_token_issued, TransitionDecision::evaluate_token_issued, BoundaryResponse::success_with_token))
+      return fail("fallback mode must issue a diagnostic token after runtime hook admission");
+  }
+  if (!mhw::bridge_probe::parse_local_capture_opt_in({Mode::capture_one_evaluate, true}, "capture-three-evaluates\n").recognized ||
+      mhw::bridge_probe::parse_local_capture_opt_in({Mode::disabled, true}, "capture-three-evaluates\n").recognized ||
+      mhw::bridge_probe::parse_local_capture_opt_in({Mode::capture_one_evaluate, false}, "capture-three-evaluates\n").recognized)
+    return fail("local opt-in requires recognized enabled environment");
+  for (const auto text : {"", "capture-three-evaluates", "capture-three-evaluates\r\n", "capture-four-evaluates\n"})
+    if (mhw::bridge_probe::parse_local_capture_opt_in({Mode::capture_one_evaluate, true}, text).recognized)
+      return fail("malformed explicit opt-in rejected");
+  if (parse_mode("capture-three-evaluates").mode != Mode::capture_three_evaluates)
+    return fail("three-Evaluate opt-in parsing");
+  for (unsigned stop = 0; stop <= 3; ++stop) {
+    OneShotLifecycle three(Mode::capture_three_evaluates, one_evaluate_token);
+    if (!advance_to_populated(three) ||
+        !three.apply(make_input(LifecycleOperation::populate, ExportId::populate_parameters)).transition_applied ||
+        !three.apply(make_input(LifecycleOperation::capture_create, ExportId::d3d12_create_feature)).capture_committed)
+      return fail("three-Evaluate full prerequisites");
+    for (unsigned i = 0; i < stop; ++i)
+      if (!three.apply(make_input(LifecycleOperation::capture_evaluate, ExportId::d3d12_evaluate_feature, one_evaluate_token)).capture_committed)
+        return fail("three-Evaluate accepted count");
+    auto fourth = three;
+    if (stop == 3 && fourth.apply(make_input(LifecycleOperation::capture_evaluate,
+        ExportId::d3d12_evaluate_feature, one_evaluate_token)).capture_committed) return fail("fourth Evaluate rejected");
+    if (!three.apply(make_input(LifecycleOperation::release, ExportId::d3d12_release_feature, one_evaluate_token)).transition_applied ||
+        !three.apply(make_input(LifecycleOperation::shutdown, ExportId::d3d12_shutdown)).transition_applied || three.overflowed())
+      return fail("release/shutdown fits ledger after any bounded capture count");
+    if (three.apply(make_input(LifecycleOperation::capture_evaluate, ExportId::d3d12_evaluate_feature, one_evaluate_token)).capture_committed)
+      return fail("no capture after shutdown");
+  }
   OneShotLifecycle one_evaluate(Mode::capture_one_evaluate,
                                 one_evaluate_token);
   if (!advance_to_populated(one_evaluate)) {
