@@ -16,6 +16,8 @@
 #endif
 #ifdef MHW_FG_GAME
 #include "../frame_generation/game_session.hpp"
+#include "../frame_generation/crash_log.hpp"
+#include <cstdio>
 #endif
 #ifdef MHW_REFLEX_FRAME_PROBE
 #include "live_frames.hpp"
@@ -394,6 +396,23 @@ void load_creation_api(unsigned kind, const wchar_t* name, const char* symbol) {
         << ",\"loaded_from_system32\":true,\"module\":" << reinterpret_cast<std::uintptr_t>(creation_modules[kind])
         << ",\"target\":" << reinterpret_cast<std::uintptr_t>(targets[kind]) << "}\n" << std::flush;
 }
+#ifdef MHW_FG_GAME
+// Swap-chain view the host received through the routed calls (diagnostic).
+int fg_buffers_json(char* out, int size) noexcept {
+    mhw::frame_generation::PresentationBuffers b{};
+    if (!mhw::reflex::scene_presentation_buffers(b)) return 0;
+    return std::snprintf(out, static_cast<size_t>(size),
+        "{\"generation\":%llu,\"known_mask\":%u,\"game_index\":%u,\"game_index_max\":%u,\"game_index_calls\":%llu,"
+        "\"out_of_range\":%llu,\"conflicts\":%llu,\"foreign\":%llu}",
+        static_cast<unsigned long long>(b.generation), b.known_mask, b.game_index, b.game_index_max,
+        static_cast<unsigned long long>(b.game_index_calls), static_cast<unsigned long long>(b.out_of_range),
+        static_cast<unsigned long long>(b.conflicts), static_cast<unsigned long long>(b.foreign));
+}
+void log_fg_buffers(std::ostream& out, const char* phase) {
+    char text[512]{}; const int n = fg_buffers_json(text, sizeof text);
+    out << "{\"event\":\"fg_buffers\",\"phase\":\"" << phase << "\",\"buffers\":" << (n > 0 ? text : "null") << "}\n" << std::flush;
+}
+#endif
 DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -429,6 +448,9 @@ DWORD WINAPI worker(void*) noexcept {
         HANDLE file = CreateFileW((output/name).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         require(file != INVALID_HANDLE_VALUE, "preserve-existing-log"); CloseHandle(file);
         log.open(output/name, std::ios::binary | std::ios::app); require(bool(log), "log"); log << std::boolalpha;
+#ifdef MHW_FG_GAME
+        const bool crash_log_installed = mhw::frame_generation::crash_log::install(output/(name+".crash.jsonl"), fg_buffers_json);
+#endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
         log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.7.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":true,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
@@ -506,6 +528,10 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_FRAME_PROBE
             require(driver_mode("startup_off",false),"driver-startup-Off");
             log << "{\"event\":\"frames_ready\",\"mode\":0,\"target_mode\":1,\"sleep_calls\":0,\"markers\":0,\"armed\":false,\"duration_seconds\":" << capture_seconds << "}\n" << std::flush;
+#ifdef MHW_FG_GAME
+            log << "{\"event\":\"fg_crash_log\",\"installed\":" << crash_log_installed << "}\n";
+            log_fg_buffers(log, "frames_ready");
+#endif
             const auto wait_start=GetTickCount64();
             while(!std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file) && GetTickCount64()-wait_start<600000) {
                 const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;Sleep(100);
@@ -586,6 +612,7 @@ DWORD WINAPI worker(void*) noexcept {
                         mhw::reflex::temporal::sample();
 #ifdef MHW_FG_GAME
                         log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
+                        log_fg_buffers(log, "status");
 #endif
 #endif
                         if(last==started)require(driver_mode("running_on",true),"driver-On-not-enabled");

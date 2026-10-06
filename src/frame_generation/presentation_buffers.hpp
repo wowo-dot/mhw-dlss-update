@@ -16,7 +16,7 @@ struct PresentationBuffers {
     // Last host GetCurrentBackBufferIndex result in this generation, and the
     // Present count at which it was observed (presents-1 means this frame).
     std::uint64_t game_index_calls{},game_index_present{};
-    unsigned game_index{none};
+    unsigned game_index{none},game_index_max{none};
     // Bridge query at routed Present entry, before the SDK/native Present.
     std::uint64_t presents{};
     unsigned present_index{none};
@@ -53,6 +53,7 @@ public:
     void game_index(std::uint64_t swap,unsigned index) noexcept {
         if(!swap||swap!=v_.swap){++v_.foreign;return;}
         ++v_.game_index_calls;v_.game_index=index;v_.game_index_present=v_.presents;
+        if(v_.game_index_max==PresentationBuffers::none||index>v_.game_index_max)v_.game_index_max=index;
     }
     void present(std::uint64_t swap,unsigned index) noexcept {
         if(!swap||swap!=v_.swap){++v_.foreign;return;}
