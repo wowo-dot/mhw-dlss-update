@@ -1,6 +1,8 @@
-"""Controls and summary for the in-game frame generation build (v0.7.x).
+"""Controls and summary for the in-game frame generation build (v0.7 and later).
 
   arm     --run <folder>   start Reflex frames, DLSS and FG (generation-checked)
+  multiplier --run <folder> --x N   live frame multiplier (2 = ordinary FG .. 8,
+                           limited by the GPU's reported capability; v0.8+)
   stop    --run <folder>   FG Off; Streamline, DLSS and Reflex stay live
   status  --run <folder>   latest FG session counters
   summary --run <folder>   write summary.json from the run's logs
@@ -15,7 +17,7 @@ from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
 
-VERSION = '0.7.0'
+VERSIONS = ('0.7.0', '0.8.0')
 
 
 def log_path(run):
@@ -34,7 +36,7 @@ def rows_of(path, limit=64 * 1024 * 1024):
 
 def identity(rows):
     h = rows[0]
-    check(h.get('event') == 'start' and h.get('version') == VERSION and h.get('experiment') == 'frame-generation-game' and
+    check(h.get('event') == 'start' and h.get('version') in VERSIONS and h.get('experiment') == 'frame-generation-game' and
           h.get('fg_plugin_loaded') is True and h.get('host_sha256') == HOST_SHA, 'FG game build identity')
     return h
 
@@ -48,10 +50,27 @@ def status(rows):
     found = [r for r in rows if r.get('event') in ('fg_status', 'fg_stopped')]
     s = found[-1] if found else None
     session = (s or {}).get('session', {})
-    keys = ('armed', 'on', 'presents', 'tagged', 'recorded', 'mode_changes', 'record_failed', 'exceptions',
-            'last_sdk_error', 'off', 'present_delta', 'camera_failures')
+    keys = ('armed', 'on', 'multiplier', 'generated', 'generated_changes', 'generated_limited', 'presented_frames',
+            'presents', 'tagged', 'recorded', 'mode_changes', 'record_failed', 'exceptions', 'last_sdk_error', 'off',
+            'present_delta', 'camera_failures')
     return dict(event=(s or {}).get('event'), **{k: session.get(k) for k in keys},
                 ring=session.get('ring'), sdk_state=session.get('state'))
+
+
+def request_multiplier(rows, path, total):
+    check(2 <= total <= 8, 'multiplier 2..8')
+    check(rows[0].get('version') != '0.7.0', 'build supports live multiplier')
+    check(any(r.get('event') == 'fg_armed' for r in rows), 'FG armed')
+    check(not any(r.get('event') in ('fg_stopped', 'failed', 'worker_failed') for r in rows), 'FG session live')
+    n = 1
+    while Path(f'{path}.mfg-{n}').exists():
+        n += 1
+    # Write then rename so the worker never reads a partial request.
+    staged = Path(f'{path}.mfg-{n}.tmp')
+    with staged.open('x', encoding='ascii') as f:
+        f.write(f"{rows[0]['creation']} {total}\n")
+    staged.rename(f'{path}.mfg-{n}')
+    return dict(action='multiplier', request=n, multiplier=total, request_sent=True, acknowledged=False)
 
 
 def summary(rows, raw):
@@ -67,6 +86,7 @@ def summary(rows, raw):
                      presentation_installed=bool(one('presentation_installed')), frames_ready=bool(one('frames_ready')),
                      swapchain=one('swapchain_snapshot')),
         armed=one('fg_armed'),
+        multiplier_requests=[r for r in rows if r.get('event') == 'fg_multiplier'],
         failures=[r for r in rows if r.get('event') in ('failed', 'worker_failed', 'runtime_rejection')],
         frame_heartbeats=len([r for r in rows if r.get('event') == 'frame_heartbeat']),
         status_samples=len(statuses),
@@ -79,14 +99,17 @@ def summary(rows, raw):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('arm', 'stop', 'status', 'summary'))
+    p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'summary'))
     p.add_argument('--run', type=Path, required=True)
+    p.add_argument('--x', type=int, help='total frame multiplier for the multiplier action')
     a = p.parse_args()
     path = log_path(a.run)
     rows, raw = rows_of(path)
     identity(rows)
     if a.action in ('arm', 'stop'):
         result = control(rows, path, a.action)
+    elif a.action == 'multiplier':
+        result = request_multiplier(rows, path, a.x or 0)
     elif a.action == 'status':
         result = status(rows)
     else:

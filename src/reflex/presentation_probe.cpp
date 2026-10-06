@@ -17,9 +17,12 @@
 #ifdef MHW_FG_GAME
 #include "../frame_generation/game_session.hpp"
 #include "../frame_generation/crash_log.hpp"
+#include "frame_generation_policy.hpp"
 #include <cstdio>
 #include <memory>
-namespace { bool fg_plugin = true; } // "<dll>.fg-mode" = off disables DLSS-G (A/B diagnostic)
+// "<dll>.fg-mode": "off" runs without DLSS-G (A/B diagnostic); "2x".."8x" sets
+// the starting frame multiplier (default 2x). Live changes: "<log>.mfg-<n>".
+namespace { bool fg_plugin = true; unsigned fg_multiplier = 2; }
 #endif
 #ifdef MHW_REFLEX_FRAME_PROBE
 #include "live_frames.hpp"
@@ -471,6 +474,7 @@ DWORD WINAPI worker(void*) noexcept {
             auto mode_file = dll; mode_file += L".fg-mode";
             std::ifstream mode_in(mode_file); std::string mode_text; mode_in >> mode_text;
             fg_plugin = mode_text != "off";
+            if (const auto m = mhw::reflex::parse_multiplier(mode_text)) fg_multiplier = m;
         }
 #endif
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
@@ -503,7 +507,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.7.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.8.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -614,6 +618,7 @@ DWORD WINAPI worker(void*) noexcept {
                 {
                     const auto chain = presentation->snapshot();
                     mhw::frame_generation::game::configure(sdk, chain.width, chain.height);
+                    mhw::frame_generation::game::multiplier(fg_multiplier);
                     mhw::frame_generation::game::arm(true);
                     sl::DLSSGState fg_state{};
                     const auto fg_state_result = sdk.frame_generation_state(sl::ViewportHandle{0}, fg_state);
@@ -626,6 +631,9 @@ DWORD WINAPI worker(void*) noexcept {
                 const auto started=GetTickCount64();auto last=started;
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
+#endif
+#ifdef MHW_FG_GAME
+                unsigned multiplier_requests{};
 #endif
                 while(!std::filesystem::exists(stop_file) && GetTickCount64()-started<capture_seconds*1000ULL) {
                     const auto frames=live_frames->snapshot();const auto stats=presentation->snapshot();
@@ -650,6 +658,19 @@ DWORD WINAPI worker(void*) noexcept {
                             log<<"{\"event\":\"scene_capture_requested\",\"request\":"<<request<<",\"generation_checked\":true"
                                <<",\"presentation_buffers_read\":"<<buffers_read<<",\"presentation_generation\":"<<buffers.generation
                                <<",\"presentation_known_mask\":"<<buffers.known_mask<<"}\n"<<std::flush;
+                        }
+                    }
+#endif
+#ifdef MHW_FG_GAME
+                    {   // Sequenced, generation-checked multiplier requests: "<creation> <total>".
+                        const auto marker=output/(name+".mfg-"+std::to_string(multiplier_requests+1));
+                        if(std::filesystem::exists(marker)&&std::filesystem::file_size(marker)<=64){
+                            std::ifstream input(marker);std::uint64_t generation{};unsigned total{};input>>generation>>total;
+                            const bool accepted=bool(input)&&generation==creation&&mhw::reflex::generated_frames_for(total,0);
+                            if(accepted)mhw::frame_generation::game::multiplier(total);
+                            ++multiplier_requests;
+                            log<<"{\"event\":\"fg_multiplier\",\"request\":"<<multiplier_requests<<",\"multiplier\":"<<total
+                               <<",\"accepted\":"<<accepted<<"}\n"<<std::flush;
                         }
                     }
 #endif

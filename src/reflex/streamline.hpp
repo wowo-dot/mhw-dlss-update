@@ -30,6 +30,10 @@ public:
     // Ordinary FG only: one generated frame. Caller must qualify support,
     // tag the matching frame's inputs and retain them until SDK consumption.
     sl::Result frame_generation_ordinary(const sl::ViewportHandle& viewport, bool retain = false) const;
+    // FG On with a caller-qualified generated-frame count (1 = ordinary).
+    // Valid while On to change the count; same tagging contract as above.
+    sl::Result frame_generation_generate(const sl::ViewportHandle& viewport, unsigned generated_frames,
+                                         bool retain = false) const;
     // Fixed-count MFG only, bounded by this viewport's reported capability.
     // State and option calls must run on the serialized presentation owner.
     sl::Result frame_generation_multi(const sl::ViewportHandle& viewport, unsigned generated_frames) const;

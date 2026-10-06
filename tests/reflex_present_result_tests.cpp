@@ -15,6 +15,15 @@ int main() {
             "fixed MFG counts admitted within reported capability");
         require(!generated_frames_supported(6, 5), "unsupported multiplier rejected");
         require(!generated_frames_supported(0, 5) && !generated_frames_supported(1, 0), "missing mode/capability rejected");
+        require(generated_frames_for(2, 5) == 1 && generated_frames_for(4, 5) == 3 && generated_frames_for(6, 5) == 5,
+            "multiplier maps to generated frames within capability");
+        require(generated_frames_for(8, 5) == 5 && generated_frames_for(4, 1) == 1, "multiplier limited to capability");
+        require(generated_frames_for(4, 0) == 1, "unknown capability admits ordinary FG only");
+        require(generated_frames_for(1, 5) == 0 && generated_frames_for(0, 5) == 0 && generated_frames_for(9, 5) == 0,
+            "out-of-range multiplier unusable");
+        require(parse_multiplier("2x") == 2 && parse_multiplier("6X") == 6 && parse_multiplier("8x") == 8, "multiplier text");
+        require(!parse_multiplier("off") && !parse_multiplier("1x") && !parse_multiplier("9x") && !parse_multiplier("") &&
+            !parse_multiplier("4") && !parse_multiplier("10x"), "non-multiplier text rejected");
         require(paced_host_call(0x1234, 0x1234, 7, 7), "owned logical chain routes on host thread");
         require(!paced_host_call(0x1234, 0x1234, 8, 7), "SDK worker on same physical chain stays native");
         require(!paced_host_call(0x5678, 0x1234, 7, 7), "another physical chain stays native");

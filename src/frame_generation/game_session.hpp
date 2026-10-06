@@ -29,6 +29,9 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 // at the next Present (Streamline itself stays alive until process exit).
 void arm(bool armed) noexcept;
 bool frame_generation_on() noexcept;
+// Any thread. Total frame multiplier (2 = ordinary FG), applied at the next
+// tagged Present and limited to the reported capability. Other values ignored.
+void multiplier(unsigned total) noexcept;
 
 void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint64_t frame, std::uint64_t epoch,
             ID3D12Resource *depth, ID3D12Resource *motion, const SlotCamera &camera) noexcept;

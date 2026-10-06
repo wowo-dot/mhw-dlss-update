@@ -159,8 +159,13 @@ sl::Result Streamline::frame_generation_state(const sl::ViewportHandle& viewport
     return frame_generation_state_ ? frame_generation_state_(viewport, value, nullptr) : sl::Result::eErrorNotInitialized;
 }
 sl::Result Streamline::frame_generation_ordinary(const sl::ViewportHandle& viewport, bool retain) const {
+    return frame_generation_generate(viewport, 1, retain);
+}
+sl::Result Streamline::frame_generation_generate(const sl::ViewportHandle& viewport, unsigned generated_frames,
+                                                 bool retain) const {
     if (!frame_generation_options_) return sl::Result::eErrorNotInitialized;
-    sl::DLSSGOptions value{}; value.mode = sl::DLSSGMode::eOn; value.numFramesToGenerate = 1;
+    if (generated_frames == 0) return sl::Result::eErrorInvalidParameter;
+    sl::DLSSGOptions value{}; value.mode = sl::DLSSGMode::eOn; value.numFramesToGenerate = generated_frames;
     if (retain) value.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     return frame_generation_options_(viewport, value);
 }

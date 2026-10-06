@@ -1,8 +1,10 @@
 #include "game_session.hpp"
 #include "camera_constants.hpp"
 #include "input_ring.hpp"
+#include "../reflex/frame_generation_policy.hpp"
 #include "../reflex/streamline.hpp"
 #include <wrl/client.h>
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <ostream>
@@ -48,6 +50,10 @@ struct Session {
     bool state_valid{};
     std::uint64_t presents{}, tagged{}, recorded{}, record_failed{}, size_mismatch{}, state_failed{}, mode_changes{},
         null_tags{}, unpresented{}, exceptions{};
+    std::atomic<unsigned> requested_multiplier{2};
+    unsigned applied_generated{};  // 0 while Off
+    std::uint64_t generated_changes{}, generated_limited{};
+    std::array<std::uint64_t, 8> presented_frames{};  // numFramesActuallyPresented per Present: 0..6, other
     std::array<std::uint64_t, static_cast<unsigned>(Off::count)> off{};
     std::array<std::uint64_t, 7> camera_failures{};
     std::array<std::uint64_t, 4> present_delta{};  // present frame - slot frame: 1, 2, 3, other
@@ -109,7 +115,26 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     const auto result = s.sdk->frame_generation_off(viewport, true);
     if (result != sl::Result::eOk) s.last_sdk_error = result;
     s.on.store(false);
+    s.applied_generated = 0;
     ++s.mode_changes;
+}
+
+// Owner thread, under the session lock: generated frames for the requested
+// multiplier. The capability comes from the last state read on this thread.
+unsigned wanted_generated(Session &s) {
+    if (!s.state_valid) {
+        sl::DLSSGState state{};
+        if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
+            s.state = state;
+            s.state_valid = true;
+        }
+    }
+    const auto multiplier = s.requested_multiplier.load();
+    const auto maximum = s.state_valid ? s.state.numFramesToGenerateMax : 0;
+    auto generated = reflex::generated_frames_for(multiplier, maximum);
+    if (!generated) generated = 1;
+    if (generated + 1 != multiplier) ++s.generated_limited;
+    return generated;
 }
 
 }  // namespace
@@ -123,6 +148,9 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
 bool frame_generation_on() noexcept { return session.on.load(); }
+void multiplier(unsigned total) noexcept {
+    if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
+}
 
 void record(ID3D12GraphicsCommandList *list, std::uint64_t generation, std::uint64_t frame, std::uint64_t epoch,
             ID3D12Resource *depth, ID3D12Resource *motion, const SlotCamera &camera) noexcept {
@@ -266,8 +294,8 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             s.ring.untag(slot);
             return turn_off(s, token, Off::tags);
         }
-        if (!s.on.load()) {
-            if (const auto r = s.sdk->frame_generation_ordinary(viewport, true); r != sl::Result::eOk) {
+        if (const auto generated = wanted_generated(s); !s.on.load() || generated != s.applied_generated) {
+            if (const auto r = s.sdk->frame_generation_generate(viewport, generated, true); r != sl::Result::eOk) {
                 s.last_sdk_error = r;
                 // The SDK already holds the tags for this frame; keep the slot
                 // until its consumption fence like any other tagged frame.
@@ -275,8 +303,12 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
                 ++s.off[static_cast<unsigned>(Off::options)];
                 return;
             }
+            if (s.on.load())
+                ++s.generated_changes;
+            else
+                ++s.mode_changes;
             s.on.store(true);
-            ++s.mode_changes;
+            s.applied_generated = generated;
         }
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
@@ -299,6 +331,7 @@ static void finish_pending(Session &s, bool presented) {
     if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
         s.state = state;
         s.state_valid = true;
+        ++s.presented_frames[std::min<std::uint32_t>(state.numFramesActuallyPresented, 7)];
         s.fence = static_cast<ID3D12Fence *>(state.inputsProcessingCompletionFence);
         s.ring.presented(s.pending, state.lastPresentInputsProcessingCompletionFenceValue);
     } else {
@@ -314,7 +347,12 @@ void write(std::ostream &o) {
     auto &s = session;
     std::lock_guard lock(s.mutex);
     const auto &r = s.ring.counters();
-    o << "{\"schema\":1,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
+    o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
+      << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
+      << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
+      << ",\"presented_frames\":[";
+    for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
+    o << "]"
       << ",\"created\":" << s.created << ",\"create_failed\":" << s.create_failed << ",\"output\":[" << s.output_width << ','
       << s.output_height << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
       << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged
