@@ -18,6 +18,8 @@
 #include "../frame_generation/game_session.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include <cstdio>
+#include <memory>
+namespace { bool fg_plugin = true; } // "<dll>.fg-mode" = off disables DLSS-G (A/B diagnostic)
 #endif
 #ifdef MHW_REFLEX_FRAME_PROBE
 #include "live_frames.hpp"
@@ -235,7 +237,8 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
                 owner = GetCurrentThreadId();
 #ifdef MHW_FG_GAME
                 // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
-                sdk.initialize(runtime, output / L"sdk-logs", mhw::reflex::StreamlineFeatures::reflex_and_frame_generation);
+                sdk.initialize(runtime, output / L"sdk-logs", fg_plugin ? mhw::reflex::StreamlineFeatures::reflex_and_frame_generation
+                                                                         : mhw::reflex::StreamlineFeatures::reflex_only);
 #else
                 sdk.initialize(runtime, output / L"sdk-logs");
 #endif
@@ -250,7 +253,7 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
                 api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
                 api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
 #ifdef MHW_FG_GAME
-                {
+                if (fg_plugin) {
                     const auto fg_support = sdk.supported(sl::kFeatureDLSS_G, info);
                     sl::FeatureRequirements fg_requirements{};
                     const auto fg_requirements_result = sdk.requirements(sl::kFeatureDLSS_G, fg_requirements);
@@ -264,7 +267,7 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
 #endif
                 api(sdk.attach(device_pin.Get()), "attach-native-device");
 #ifdef MHW_FG_GAME
-                api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
+                if (fg_plugin) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
 #endif
                 api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
                 sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
@@ -301,7 +304,8 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
 #endif
 #ifdef MHW_FG_GAME
                 // Streamline owns pacing, generated presentation and the host-visible buffers.
-                presentation->install(device_pin.Get(), factory_pin.Get(), mhw::reflex::PresentationContract::sdk_paced);
+                presentation->install(device_pin.Get(), factory_pin.Get(), fg_plugin ? mhw::reflex::PresentationContract::sdk_paced
+                                                                                      : mhw::reflex::PresentationContract::synchronous_native);
 #else
                 presentation->install(device_pin.Get(), factory_pin.Get());
 #endif
@@ -397,16 +401,51 @@ void load_creation_api(unsigned kind, const wchar_t* name, const char* symbol) {
         << ",\"target\":" << reinterpret_cast<std::uintptr_t>(targets[kind]) << "}\n" << std::flush;
 }
 #ifdef MHW_FG_GAME
+std::atomic<bool> boot_monitor_stop{};
+// Diagnostic boot timeline: text table 0 (message table array at host
+// +0x5012DC0), the UI object's state at [[engine+0xAF800]+0x51ACC], and the
+// swap-chain view, sampled every 20 ms and written when anything changes.
+void boot_monitor(std::filesystem::path path) noexcept {
+    try {
+        std::ofstream out(path, std::ios::binary); if (!out) return;
+        const auto began = GetTickCount64();
+        std::uint64_t last_key = ~0ULL; std::uintptr_t last_table{}, last_ui{};
+        while (!boot_monitor_stop.load() && GetTickCount64() - began < 180000) {
+            std::uintptr_t table{}, engine{}, ui{}; unsigned state = ~0U, state_b = ~0U;
+            pb::read(image + 0x5012DC0, table);
+            if (pb::read(image + 0x51c4148, engine) && engine && pb::read(engine + 0xAF800, ui) && ui) {
+                pb::read(ui + 0x51ACC, state); pb::read(ui + 0x51AB0, state_b);
+            }
+            mhw::frame_generation::PresentationBuffers b{}; mhw::reflex::scene_presentation_buffers(b);
+            const std::uint64_t key = (std::uint64_t(state) << 32) ^ (std::uint64_t(state_b) << 16) ^ (table != 0) ^
+                (b.generation << 8) ^ (b.present_other << 20) ^ (std::uint64_t(ui != 0) << 1);
+            if (key != last_key || (table != 0) != (last_table != 0) || ui != last_ui) {
+                out << "{\"t_ms\":" << GetTickCount64() - began << ",\"table0\":" << (table != 0) << ",\"ui\":" << (ui != 0)
+                    << ",\"state\":" << static_cast<int>(state) << ",\"state_b\":" << static_cast<int>(state_b)
+                    << ",\"generation\":" << b.generation << ",\"present_calls\":" << b.present_calls
+                    << ",\"present_other\":" << b.present_other << "}\n" << std::flush;
+                last_key = key; last_table = table; last_ui = ui;
+            }
+            Sleep(20);
+        }
+    } catch (...) {}
+}
 // Swap-chain view the host received through the routed calls (diagnostic).
 int fg_buffers_json(char* out, int size) noexcept {
     mhw::frame_generation::PresentationBuffers b{};
     if (!mhw::reflex::scene_presentation_buffers(b)) return 0;
     return std::snprintf(out, static_cast<size_t>(size),
         "{\"generation\":%llu,\"known_mask\":%u,\"game_index\":%u,\"game_index_max\":%u,\"game_index_calls\":%llu,"
-        "\"out_of_range\":%llu,\"conflicts\":%llu,\"foreign\":%llu}",
+        "\"out_of_range\":%llu,\"conflicts\":%llu,\"foreign\":%llu,\"present_calls\":%llu,\"present_ok\":%llu,"
+        "\"present_other\":%llu,\"first_results\":[%u,%u,%u,%u],\"first_result_at\":[%llu,%llu,%llu,%llu]}",
         static_cast<unsigned long long>(b.generation), b.known_mask, b.game_index, b.game_index_max,
         static_cast<unsigned long long>(b.game_index_calls), static_cast<unsigned long long>(b.out_of_range),
-        static_cast<unsigned long long>(b.conflicts), static_cast<unsigned long long>(b.foreign));
+        static_cast<unsigned long long>(b.conflicts), static_cast<unsigned long long>(b.foreign),
+        static_cast<unsigned long long>(b.present_calls), static_cast<unsigned long long>(b.present_ok),
+        static_cast<unsigned long long>(b.present_other), b.present_results[0], b.present_results[1], b.present_results[2],
+        b.present_results[3], static_cast<unsigned long long>(b.present_result_at[0]),
+        static_cast<unsigned long long>(b.present_result_at[1]), static_cast<unsigned long long>(b.present_result_at[2]),
+        static_cast<unsigned long long>(b.present_result_at[3]));
 }
 void log_fg_buffers(std::ostream& out, const char* phase) {
     char text[512]{}; const int n = fg_buffers_json(text, sizeof text);
@@ -426,6 +465,14 @@ DWORD WINAPI worker(void*) noexcept {
         const std::filesystem::path dll(dll_name);
         auto data = dll; data += L".output-dir"; output = path_setting(data);
         auto provider = dll; provider += L".runtime-dir"; runtime = path_setting(provider);
+#ifdef MHW_FG_GAME
+        {   // Diagnostic A/B switch: "<dll>.fg-mode" containing "off" runs this
+            // binary without the DLSS-G plugin (Reflex-only, synchronous routing).
+            auto mode_file = dll; mode_file += L".fg-mode";
+            std::ifstream mode_in(mode_file); std::string mode_text; mode_in >> mode_text;
+            fg_plugin = mode_text != "off";
+        }
+#endif
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
         for (const auto& path : {output, runtime}) {
             const auto text = path.wstring();
@@ -450,10 +497,13 @@ DWORD WINAPI worker(void*) noexcept {
         log.open(output/name, std::ios::binary | std::ios::app); require(bool(log), "log"); log << std::boolalpha;
 #ifdef MHW_FG_GAME
         const bool crash_log_installed = mhw::frame_generation::crash_log::install(output/(name+".crash.jsonl"), fg_buffers_json);
+        if (const auto monitor = CreateThread(nullptr, 0, [](void* p) -> DWORD {
+                std::unique_ptr<std::filesystem::path> path(static_cast<std::filesystem::path*>(p)); boot_monitor(*path); return 0; },
+                new std::filesystem::path(output/(name+".boot.jsonl")), 0, nullptr)) CloseHandle(monitor);
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.7.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":true,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.7.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)

@@ -332,6 +332,9 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? decision.result : capture.value.result;
+#ifdef MHW_FG_SCENE_PROBE
+        if (!(flags & DXGI_PRESENT_TEST)) s.scene([&](auto& map) { map.present_result(reinterpret_cast<std::uintptr_t>(self), static_cast<std::uint32_t>(result)); });
+#endif
         v.args[2]=ticket;v.args[3]=capture.value.calls;
         const auto error = GetLastError();
         if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
@@ -389,6 +392,9 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? decision.result : capture.value.result;
+#ifdef MHW_FG_SCENE_PROBE
+        if (!(flags & DXGI_PRESENT_TEST)) s.scene([&](auto& map) { map.present_result(reinterpret_cast<std::uintptr_t>(self), static_cast<std::uint32_t>(result)); });
+#endif
         v.args[2]=ticket;v.args[3]=capture.value.calls;
         const auto error = GetLastError();
         if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);

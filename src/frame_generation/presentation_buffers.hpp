@@ -20,6 +20,11 @@ struct PresentationBuffers {
     // Bridge query at routed Present entry, before the SDK/native Present.
     std::uint64_t presents{};
     unsigned present_index{none};
+    // HRESULTs returned to the host by routed Present/Present1 (all contracts),
+    // kept across generations: totals and the first eight non-S_OK values.
+    std::uint64_t present_calls{},present_ok{},present_other{};
+    std::array<std::uint32_t,8> present_results{};
+    std::array<std::uint64_t,8> present_result_at{};
     bool label(unsigned index,std::uint64_t &value) const noexcept {
         if(index>=capacity||!(known_mask&(1U<<index)))return false;
         value=labels[index];return true;
@@ -34,8 +39,10 @@ struct PresentationBuffers {
 class PresentationBufferMap final {
     PresentationBuffers v_;
     void clear(std::uint64_t swap) noexcept {
-        const auto generation=v_.generation+1,conflicts=v_.conflicts,range=v_.out_of_range,foreign=v_.foreign;
-        v_={};v_.swap=swap;v_.generation=generation;v_.conflicts=conflicts;v_.out_of_range=range;v_.foreign=foreign;
+        auto kept=v_;
+        v_={};v_.swap=swap;v_.generation=kept.generation+1;v_.conflicts=kept.conflicts;v_.out_of_range=kept.out_of_range;
+        v_.foreign=kept.foreign;v_.present_calls=kept.present_calls;v_.present_ok=kept.present_ok;
+        v_.present_other=kept.present_other;v_.present_results=kept.present_results;v_.present_result_at=kept.present_result_at;
     }
 public:
     void chain(std::uint64_t swap) noexcept {clear(swap);}
@@ -58,6 +65,14 @@ public:
     void present(std::uint64_t swap,unsigned index) noexcept {
         if(!swap||swap!=v_.swap){++v_.foreign;return;}
         ++v_.presents;v_.present_index=index;
+    }
+    void present_result(std::uint64_t swap,std::uint32_t result) noexcept {
+        if(!swap||swap!=v_.swap){++v_.foreign;return;}
+        ++v_.present_calls;
+        if(!result){++v_.present_ok;return;}
+        if(v_.present_other<v_.present_results.size()){
+            v_.present_results[v_.present_other]=result;v_.present_result_at[v_.present_other]=v_.present_calls;}
+        ++v_.present_other;
     }
     const PresentationBuffers &snapshot() const noexcept {return v_;}
 };
