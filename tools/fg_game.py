@@ -19,7 +19,8 @@ VERSION = '0.7.0'
 
 
 def log_path(run):
-    logs = sorted(Path(run).glob('reflex-frames-*.jsonl'))
+    # Side files (<log>.boot.jsonl, <log>.crash.jsonl) share the prefix.
+    logs = sorted(p for p in Path(run).glob('reflex-frames-*.jsonl') if p.suffixes == ['.jsonl'])
     check(len(logs) == 1, 'exactly one process log in the run folder')
     return logs[0]
 
