@@ -37,7 +37,8 @@ constexpr float columns[4][3]{{0.5f, 0.25f, 0.125f}, {0.75f, 1.0f / 512, 0.0f}, 
 
 // Candidate CBSystem contents: fGammaCorrect, fGammaCorrectEx.x.
 constexpr float candidates[][2]{{gamma_correct, 2.0f}, {0.3f, 2.0f},          {gamma_correct, 0.5f},
-                                {gamma_correct, 8.0f}, {gamma_correct, 1.0f}, {0.3f, 0.7f}};
+                                {gamma_correct, 8.0f}, {gamma_correct, 1.0f}, {0.3f, 0.7f},
+                                {gamma_correct, 0.1f}, {gamma_correct, 3.0f}};  // slider min, max
 // Each step: captures in their own list (in order; -1 none), then the
 // transform in the next list, as in the game (screen write list, next frame).
 struct Step {
@@ -53,7 +54,9 @@ constexpr Step steps[]{
     {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f},  // bad layout: keep 2
     {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f},
     {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f},  // out of range: keep 0.5
-    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f}};          // valid then invalid
+    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f},           // valid then invalid
+    {{6, -1}, true, gamma_correct, 0.1f, 7, 4, gamma_correct, 0.1f},  // the game's minimum
+    {{7, -1}, true, gamma_correct, 3.0f, 8, 5, gamma_correct, 3.0f}}; // and maximum
 
 struct Device {
     ComPtr<ID3D12Device> device;

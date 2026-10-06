@@ -17,7 +17,7 @@ from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
 
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2')
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3')
 
 
 def log_path(run):

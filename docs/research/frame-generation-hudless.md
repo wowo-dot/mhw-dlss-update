@@ -1,9 +1,9 @@
-# In-game HUD-less colour for DLSS-G (v0.9.0 to v0.9.2)
+# In-game HUD-less colour for DLSS-G (v0.9.0 to v0.9.3)
 
 Design, 2026-10-06. Goal: give DLSS Frame Generation a HUD-free image in the
 backbuffer's colour space, so generated frames stop warping the HUD. Background:
 `frame-generation-hudless-capture-result.md` (RenderDoc) and
-`frame-generation-game-slice-result.md`. The current design is v0.9.2; the
+`frame-generation-game-slice-result.md`. The current design is v0.9.3; the
 sections after "Test" record how it got there.
 
 ## Where the inputs come from
@@ -46,8 +46,9 @@ sections after "Test" record how it got there.
    list that closes with a root CBV at graphics parameter 5 gets, as its last
    commands, a one-thread compute pass (at most 4 per frame). The pass reads
    that CBV. If `fGammaCorrect` is 1/2.2 (layout check) and `g` is in
-   [0.25, 4], it stores `g` in the FG state buffer; otherwise it leaves the
-   buffer alone. It always counts the attempt (and a match) on the GPU. No
+   [0.05, 4] (the slider spans 0.1 to 3.0), it stores `g` in the FG state
+   buffer; otherwise it leaves the buffer alone. It always counts the attempt
+   (and a match) on the GPU. No
    restore is needed because Close follows immediately. The screen write's
    list is one of these lists, so the next frame's transform uses this frame's
    brightness. A changed setting reaches the HUD-less image one frame late.
@@ -144,6 +145,33 @@ covers six steps:
 Each step checks the transform output, the probe's last-valid and raw
 last-attempt values, and exact GPU attempt/match counts, with captures and
 the transform in separate lists as in the game.
+
+## v0.9.2 in game (game-09): brightness captured live
+
+- 2x, then 4x (live multiplier). 9,732 Presents tagged with HUD-less colour
+  (8,248 at 4 frames per Present), with zero skips, record failures,
+  exceptions or SDK errors. The single `probe_fallback` is the first frame,
+  before any capture.
+- **User:** smooth at 120 fps, HUD stable.
+- The capture matched about once per frame (the screen write). Other closing
+  lists' parameter 5 failed the GPU layout check and were ignored as intended.
+- **Brightness slider** (the user moved it in game). The captured `g` followed
+  each step: 1.0 (start), 1.84, 2.44, 3.0 (maximum), then back to 0.999211
+  (the user's usual setting). On the way down it read 0.519212 and 0.259212,
+  then the **minimum, 0.1**. That was outside the guessed [0.25, 4] window, so
+  the capture rejected it: `last_attempt` was [0.4545, 0.1] and `gpu_matches`
+  stopped at 8,676 while frames continued. The transform kept 0.259212. This
+  failed safe, and the counters showed it, but the HUD-less image was off
+  at the minimum.
+
+## v0.9.3
+
+- `gamma_min` lowered to 0.05 (`gamma_max` stays 4). The window now covers the
+  measured slider range 0.1 to 3.0 with margin. The 1/2.2 layout check still
+  rejects other buffers.
+- Tests: every measured slider step is accepted; the curve stays in [0, 1] at
+  g = 0.1. `hudless_pass_warp` adds captures at the minimum and maximum
+  (8 steps; pixels within 1 LSB at g = 0.1 and g = 3.0).
 
 ## Not covered
 

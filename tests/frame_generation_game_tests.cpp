@@ -187,6 +187,13 @@ void screen_tests() {
     // Implausible parameters fall back to the neutral curve.
     require(!sc::gamma_plausible(0.0f) && !sc::gamma_plausible(std::nanf("")) && !sc::gamma_plausible(100.0f) &&
                 sc::gamma_plausible(1.0f), "gamma window");
+    // Every Brightness step measured in game (min 0.1 .. max 3.0) is accepted.
+    for (const float g : {0.1f, 0.259212f, 0.519212f, 0.999211f, 1.0f, 1.84f, 2.44f, 3.0f})
+        require(sc::gamma_plausible(g), "game brightness steps");
+    for (int i = 0; i <= 64; ++i) {
+        const float v = sc::channel(i / 64.0f, 0.1f);
+        require(v >= 0.0f && v <= 1.0f, "minimum brightness stays in range");
+    }
     require(sc::channel(0.5f, std::nanf("")) == sc::channel(0.5f, 1.0f), "fallback");
 }
 }  // namespace

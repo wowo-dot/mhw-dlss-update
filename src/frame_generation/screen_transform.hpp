@@ -10,9 +10,11 @@
 // the HUD-free T through this same transform. The HLSL pass mirrors it exactly.
 namespace mhw::frame_generation::screen {
 
-// The brightness setting's range is unknown; outside this window the pass
-// falls back to the neutral curve (g = 1) and reports it.
-constexpr float gamma_min = 0.25f, gamma_max = 4.0f;
+// The Brightness slider spans g = 0.1 (minimum) to 3.0 (maximum), measured in
+// game (v0.9.2, game-09); this window covers it with margin. Values outside
+// it are treated as not CBSystem (the capture keeps its last valid value; the
+// transform falls back to the neutral curve g = 1 before any).
+constexpr float gamma_min = 0.05f, gamma_max = 4.0f;
 inline bool gamma_plausible(float g) noexcept { return std::isfinite(g) && g >= gamma_min && g <= gamma_max; }
 
 inline float brightness(float c, float g) noexcept {

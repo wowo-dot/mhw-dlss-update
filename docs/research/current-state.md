@@ -2,10 +2,12 @@
 
 Updated 2026-10-06. **DLSS Frame Generation and multi-frame generation work in
 MHW** on the DLSS Performance path with Reflex On. The multiplier changes live
-from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. The
-current build is v0.8.0 (git tag `v0.8.0`). DLAA, DLSS Performance and Reflex
-keep working. Next: the HUD inputs, then resize, then the configuration-based
-alpha with performance cleanup.
+from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. Since
+v0.9.1 DLSS-G also gets a **HUD-less colour** input, and the HUD stays stable
+in generated frames. v0.9.2 takes the brightness from the game's own screen
+write. The current build is v0.9.3 (git tag `v0.9.3`). DLAA, DLSS Performance
+and Reflex keep working. Next: resize, then the configuration-based alpha with
+performance cleanup.
 
 ## Latest result
 
@@ -16,6 +18,12 @@ v0.8.0 (MFG): the multiplier was switched live through 2x, 3x, 4x and 6x, with
 a menu and an area change at 6x. Streamline presented exactly 2/3/4/6 frames per
 host frame, with zero errors, and the user found every step smooth. Both runs
 ended with FG Off on stop and a normal exit.
+
+`frame-generation-hudless.md`. v0.9.1 and v0.9.2 (2x and 4x): HUD-less colour
+was tagged on every FG frame, with zero skips or errors. The user saw the
+expected FG artifacts in the scene but none on the HUD. The captured
+brightness followed the in-game slider from 0.1 (minimum) to 3.0 (maximum);
+v0.9.3 widens the accepted range to cover the minimum.
 
 Things to know:
 
@@ -34,18 +42,19 @@ Things to know:
 
 ## Plan
 
-1. HUD inputs. The HUD-free `T` (linear `R11G11B10_FLOAT`, right after our
-   final draw) goes through the game's screen-write transform (brightness
-   `fGammaCorrectEx` + sRGB) to form the HUD-less input; then UI alpha.
-   Background: `frame-generation-hudless-capture-result.md`.
-2. Lifecycle: resolution change and swap-chain recreation with FG On.
-3. Configuration-based alpha: remove the diagnostic readers and overhead,
+1. Lifecycle: resolution change and swap-chain recreation with FG On.
+2. Configuration-based alpha: remove the diagnostic readers and overhead,
    restore the base frame rate, keep the research build separate.
 
-## Installed now: v0.8.0
+UI colour+alpha (DLSS-G recomposition) is deferred. HUD-less colour alone gave
+a stable HUD, and the game blends its UI in linear space before the brightness
+curve, so exact recomposition is not possible
+(`frame-generation-hudless-capture-result.md`).
+
+## Installed now: v0.9.3
 
 `mhw_fg_game_probe` is in the MO2 slot with its run folder
-`local/fg-game-20261006/game-06` (sealed). Install or restore with
+`local/fg-game-20261006/game-10` (latest sealed run: `game-09`, v0.9.2). Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).
 `<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
 starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
