@@ -25,10 +25,11 @@ public:
     sl::Result supported(sl::Feature feature, const sl::AdapterInfo& adapter) const;
     sl::Result requirements(sl::Feature feature, sl::FeatureRequirements& value) const;
     // Off is also used to suspend interpolation while retaining SDK routing.
-    sl::Result frame_generation_off(const sl::ViewportHandle& viewport) const;
+    // retain keeps FG resources allocated across Off (no re-enable stutter).
+    sl::Result frame_generation_off(const sl::ViewportHandle& viewport, bool retain = false) const;
     // Ordinary FG only: one generated frame. Caller must qualify support,
     // tag the matching frame's inputs and retain them until SDK consumption.
-    sl::Result frame_generation_ordinary(const sl::ViewportHandle& viewport) const;
+    sl::Result frame_generation_ordinary(const sl::ViewportHandle& viewport, bool retain = false) const;
     // Fixed-count MFG only, bounded by this viewport's reported capability.
     // State and option calls must run on the serialized presentation owner.
     sl::Result frame_generation_multi(const sl::ViewportHandle& viewport, unsigned generated_frames) const;

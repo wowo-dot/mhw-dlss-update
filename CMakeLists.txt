@@ -751,6 +751,20 @@ if(TARGET mhw_dlss_sdk_live)
         target_link_options(mhw_frame_generation_ownership_probe PRIVATE /guard:cf /OPT:NOICF)
         set_target_properties(mhw_frame_generation_ownership_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+        # In-game ordinary frame generation (v0.7.x): DLSS/Reflex sources plus the
+        # FG session; default targets keep the Reflex-only synchronous contract.
+        add_library(mhw_fg_game_probe SHARED ${fg_ownership_sources} src/frame_generation/game_session.cpp)
+        target_compile_features(mhw_fg_game_probe PRIVATE cxx_std_20)
+        target_include_directories(mhw_fg_game_probe PRIVATE src/projection_binding src/bridge_probe
+            "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
+        target_compile_definitions(mhw_fg_game_probe PRIVATE MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL
+            MHW_CONTINUOUS_SCALED MHW_FG_GAME WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+        target_link_libraries(mhw_fg_game_probe PRIVATE minhook bcrypt d3d12 dxgi dxguid
+            mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
+        target_compile_options(mhw_fg_game_probe PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
+        target_link_options(mhw_fg_game_probe PRIVATE /guard:cf /OPT:NOICF)
+        set_target_properties(mhw_fg_game_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # Opt-in metadata variant; default observer targets retain their behavior.
         add_library(mhw_fg_temporal_state STATIC src/temporal_present/observer.cpp)
         target_compile_features(mhw_fg_temporal_state PUBLIC cxx_std_20)

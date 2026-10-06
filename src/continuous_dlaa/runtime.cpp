@@ -28,6 +28,9 @@
 #include "../dlss_sdk/inline.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
+#ifdef MHW_FG_GAME
+#include "../frame_generation/game_session.hpp"
+#endif
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -657,6 +660,15 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
         else if(result.outcome!=ResolveOutcome::unfiltered)fail(30);
         return result;
     }
+#ifdef MHW_FG_GAME
+    // Same list, after the evaluation: copy this frame's converted depth and
+    // motion into an FG-owned slot (no-op unless frame generation is armed).
+    {frame_generation::game::SlotCamera camera;const auto &h=consumer.projection.history;camera.view=h.view_matrix;
+     for(unsigned i=0;i<16;++i)camera.projection[i]=std::bit_cast<float>(h.projection[i]);
+     camera.jitter_x=frame.jitter_x;camera.jitter_y=frame.jitter_y;camera.reset=decision.reset;
+     const auto images=pass->private_images();
+     frame_generation::game::record(list,state.generation,consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);}
+#endif
     history_telemetry.record(previous,consumer.projection.history,decision);
     history_depth=consumer.resources[3];previous=consumer.projection.history;lease.evaluated=true;++frames;last_skip=0;if(decision.reset)++reset_count;
     reconstruction.complete();
@@ -690,6 +702,9 @@ HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator
     if(!recording_pins.reset(list,l->generation))fail(16);
     if(!unfiltered_lifetime.reset(list,l->generation))fail(35);
     if(fence&&!fault.load()){recording_pins.collect(fence->GetCompletedValue());unfiltered_lifetime.collect();}
+#ifdef MHW_FG_GAME
+    frame_generation::game::reset(reinterpret_cast<std::uintptr_t>(list),l->generation);
+#endif
     l->generation=++generation;l->closed=false;l->submitted=false;
     obs::reset(list,l->generation,pipeline);return result;
 }
@@ -770,6 +785,10 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
     reinterpret_cast<void(WINAPI *)(ID3D12CommandQueue *,UINT,ID3D12CommandList *const *)>(originals[7])(queue,count,submitted);
     #ifdef MHW_CONTINUOUS_SCALED
     if(observed_batch)sr::observe_submission(reinterpret_cast<std::uintptr_t>(queue),GetTickCount64(),std::span(observed_lists).first(count));
+    #endif
+    #ifdef MHW_FG_GAME
+    if(observed_batch){static std::atomic<std::uint64_t> fg_batches{};const auto fg_batch=++fg_batches;
+        for(unsigned i=0;i<count;++i)if(observed_lists[i][1])frame_generation::game::submitted(observed_lists[i][0],observed_lists[i][1],fg_batch);}
     #endif
     if(signal_requested){const auto result=queue->Signal(fence.Get(),value);Lock lock;
         if(FAILED(result)){fail(22);return;}

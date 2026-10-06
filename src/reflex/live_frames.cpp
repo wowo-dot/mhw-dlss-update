@@ -7,6 +7,9 @@
 #ifdef MHW_FG_SCENE_PROBE
 #include "../scaled_temporal/stream_route.hpp"
 #endif
+#ifdef MHW_FG_GAME
+#include "../frame_generation/game_session.hpp"
+#endif
 #include <MinHook.h>
 #include <atomic>
 #include <array>
@@ -113,12 +116,24 @@ struct LiveFrames::State {
         try {
             std::lock_guard lock(mutex);
             if(flags&DXGI_PRESENT_TEST) { ++stats.present_tests;return false; }
-            if(!stats.running || !stats.frame_active) { ++stats.untracked_presents;return false; }
+            if(!stats.running || !stats.frame_active) {
+                ++stats.untracked_presents;
+#ifdef MHW_FG_GAME
+                frame_generation::game::present_begin(nullptr,0); // No token: FG Off for this Present.
+#endif
+                return false;
+            }
             std::uintptr_t native{};
             if(!identities() || GetCurrentThreadId()!=stats.owner || !pb::read(backend+0x1470,native) || native!=swap) {
                 fault("present-owner-or-identity");return false;
             }
-            const auto value=stamp();const bool ok=accepted(frames.present_begin(stats.owner,value),3,value);
+            const auto value=stamp();
+#ifdef MHW_FG_GAME
+            // Owner thread, token still valid (before PresentStart): tag the
+            // matching FG inputs, set constants and options for this Present.
+            frame_generation::game::present_begin(frames.input_token(stats.owner),value.temporal);
+#endif
+            const bool ok=accepted(frames.present_begin(stats.owner,value),3,value);
 #ifdef MHW_FG_SCENE_PROBE
             if(ok){
                 // Separate presentation lock; the route mutex is already held here.
@@ -138,6 +153,9 @@ struct LiveFrames::State {
             if(flags&DXGI_PRESENT_TEST || FAILED(result) || !identities() || GetCurrentThreadId()!=stats.owner ||
                 !pb::read(backend+0x1470,native) || native!=swap) { fault("present-return-invariant");return; }
             const auto value=stamp();accepted(frames.present_end(stats.owner,value),4,value);
+#ifdef MHW_FG_GAME
+            frame_generation::game::present_end(true);
+#endif
         } catch(...) { std::lock_guard lock(mutex);fault("present-return-exception"); }
     }
 };

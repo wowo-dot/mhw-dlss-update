@@ -149,17 +149,19 @@ sl::Result Streamline::supported(sl::Feature id, const sl::AdapterInfo& adapter)
 sl::Result Streamline::requirements(sl::Feature id, sl::FeatureRequirements& value) const {
     return initialized_ && requirements_ ? requirements_(id, value) : sl::Result::eErrorNotInitialized;
 }
-sl::Result Streamline::frame_generation_off(const sl::ViewportHandle& viewport) const {
+sl::Result Streamline::frame_generation_off(const sl::ViewportHandle& viewport, bool retain) const {
     if (!frame_generation_options_) return sl::Result::eErrorNotInitialized;
     sl::DLSSGOptions value{}; value.mode = sl::DLSSGMode::eOff; value.numFramesToGenerate = 1;
+    if (retain) value.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     return frame_generation_options_(viewport, value);
 }
 sl::Result Streamline::frame_generation_state(const sl::ViewportHandle& viewport, sl::DLSSGState& value) const {
     return frame_generation_state_ ? frame_generation_state_(viewport, value, nullptr) : sl::Result::eErrorNotInitialized;
 }
-sl::Result Streamline::frame_generation_ordinary(const sl::ViewportHandle& viewport) const {
+sl::Result Streamline::frame_generation_ordinary(const sl::ViewportHandle& viewport, bool retain) const {
     if (!frame_generation_options_) return sl::Result::eErrorNotInitialized;
     sl::DLSSGOptions value{}; value.mode = sl::DLSSGMode::eOn; value.numFramesToGenerate = 1;
+    if (retain) value.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     return frame_generation_options_(viewport, value);
 }
 sl::Result Streamline::frame_generation_multi(const sl::ViewportHandle& viewport, unsigned generated_frames) const {

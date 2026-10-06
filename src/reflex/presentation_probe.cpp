@@ -14,6 +14,9 @@
 #include "../scaled_temporal/stream_route.hpp"
 #endif
 #endif
+#ifdef MHW_FG_GAME
+#include "../frame_generation/game_session.hpp"
+#endif
 #ifdef MHW_REFLEX_FRAME_PROBE
 #include "live_frames.hpp"
 #include "driver_status.hpp"
@@ -228,7 +231,13 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
                 require(SUCCEEDED(created_device->QueryInterface(IID_PPV_ARGS(&device_pin))), "native-device-interface");
                 require(device_pin->GetNodeCount() == 1 && SUCCEEDED(device_pin->GetDeviceRemovedReason()), "native-device-health");
                 owner = GetCurrentThreadId();
-                sdk.initialize(runtime, output / L"sdk-logs"); initialized = true;
+#ifdef MHW_FG_GAME
+                // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
+                sdk.initialize(runtime, output / L"sdk-logs", mhw::reflex::StreamlineFeatures::reflex_and_frame_generation);
+#else
+                sdk.initialize(runtime, output / L"sdk-logs");
+#endif
+                initialized = true;
                 log << "{\"event\":\"sdk_initialized\",\"before_factory\":false,\"after_native_device_creation\":true,"
                        "\"before_native_queues_and_swapchain\":true,\"caller_rva\":" << 0x23a4e2e
                     << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
@@ -238,7 +247,23 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
                 info.deviceLUIDSizeInBytes = sizeof(luid);
                 api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
                 api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
+#ifdef MHW_FG_GAME
+                {
+                    const auto fg_support = sdk.supported(sl::kFeatureDLSS_G, info);
+                    sl::FeatureRequirements fg_requirements{};
+                    const auto fg_requirements_result = sdk.requirements(sl::kFeatureDLSS_G, fg_requirements);
+                    log << "{\"event\":\"fg_support\",\"supported\":" << static_cast<int>(fg_support)
+                        << ",\"requirements\":" << static_cast<int>(fg_requirements_result)
+                        << ",\"flags\":" << static_cast<unsigned>(fg_requirements.flags)
+                        << ",\"max_viewports\":" << fg_requirements.maxNumViewports
+                        << ",\"required_tags\":" << fg_requirements.numRequiredTags << "}\n" << std::flush;
+                    api(fg_support, "DLSS-G-support"); api(fg_requirements_result, "DLSS-G-requirements");
+                }
+#endif
                 api(sdk.attach(device_pin.Get()), "attach-native-device");
+#ifdef MHW_FG_GAME
+                api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
+#endif
                 api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
                 sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
                 device_checked = true;
@@ -272,7 +297,12 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
 #ifdef MHW_REFLEX_OWNERSHIP_PROBE
                 presentation->ownership(image,0x55d3000);
 #endif
+#ifdef MHW_FG_GAME
+                // Streamline owns pacing, generated presentation and the host-visible buffers.
+                presentation->install(device_pin.Get(), factory_pin.Get(), mhw::reflex::PresentationContract::sdk_paced);
+#else
                 presentation->install(device_pin.Get(), factory_pin.Get());
+#endif
                 success = true; accepting.store(false); completed.store(true);
                 log << "{\"event\":\"presentation_installed\",\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get())
                     << ",\"device_native\":true,\"returned_interfaces_native\":true,\"creation_routes\":4,\"mode\":0}\n" << std::flush;
@@ -400,7 +430,9 @@ DWORD WINAPI worker(void*) noexcept {
         require(file != INVALID_HANDLE_VALUE, "preserve-existing-log"); CloseHandle(file);
         log.open(output/name, std::ios::binary | std::ios::app); require(bool(log), "log"); log << std::boolalpha;
 #ifdef MHW_REFLEX_TEMPORAL
-#ifdef MHW_FG_SCENE_PROBE
+#if defined(MHW_FG_GAME)
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.7.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":true,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+#elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
         log << "{\"event\":\"start\",\"schema\":4,\"version\":\"0.6.0\",\"experiment\":\"frame-generation-game-ownership\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
@@ -502,6 +534,19 @@ DWORD WINAPI worker(void*) noexcept {
                 presentation->observe(live_frames->observer());
                 live_frames->install(image,reinterpret_cast<std::uintptr_t>(device_pin.Get()),log);live_frames->describe(log,static_cast<unsigned>(capture_mode));
                 log << "{\"event\":\"frames_armed\",\"mode\":1,\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n" << std::flush;
+#ifdef MHW_FG_GAME
+                {
+                    const auto chain = presentation->snapshot();
+                    mhw::frame_generation::game::configure(sdk, chain.width, chain.height);
+                    mhw::frame_generation::game::arm(true);
+                    sl::DLSSGState fg_state{};
+                    const auto fg_state_result = sdk.frame_generation_state(sl::ViewportHandle{0}, fg_state);
+                    log << "{\"event\":\"fg_armed\",\"width\":" << chain.width << ",\"height\":" << chain.height
+                        << ",\"state_result\":" << static_cast<int>(fg_state_result) << ",\"status\":" << static_cast<unsigned>(fg_state.status)
+                        << ",\"max_generated\":" << fg_state.numFramesToGenerateMax << ",\"min_width_or_height\":" << fg_state.minWidthOrHeight
+                        << ",\"vsync_support\":" << static_cast<int>(fg_state.bIsVsyncSupportAvailable) << "}\n" << std::flush;
+                }
+#endif
                 const auto started=GetTickCount64();auto last=started;
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
@@ -539,6 +584,9 @@ DWORD WINAPI worker(void*) noexcept {
                     if(now-last>=5000) {
 #ifdef MHW_REFLEX_TEMPORAL
                         mhw::reflex::temporal::sample();
+#ifdef MHW_FG_GAME
+                        log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
+#endif
 #endif
                         if(last==started)require(driver_mode("running_on",true),"driver-On-not-enabled");
                         log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed << ",\"tokens\":" << frames.tokens
@@ -574,6 +622,22 @@ DWORD WINAPI worker(void*) noexcept {
             }
 #endif
         }
+#ifdef MHW_FG_GAME
+        // Under SDK pacing the game renders into Streamline's buffers and the
+        // physical chain belongs to its pacer; neither can be retired under MHW.
+        // Stop therefore means FG Off; DLSS, Reflex and routing stay live until exit.
+        if(live_frames) {
+            mhw::frame_generation::game::arm(false);
+            const auto fg_off_began=GetTickCount64();
+            while(mhw::frame_generation::game::frame_generation_on() && GetTickCount64()-fg_off_began<3000)Sleep(10);
+            const auto frames=live_frames->snapshot();
+            log << "{\"event\":\"fg_stopped\",\"off\":" << !mhw::frame_generation::game::frame_generation_on()
+                << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults << ",\"session\":";
+            mhw::frame_generation::game::write(log);log << "}\n";
+        }
+        log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":true,\"temporal_active\":true}\n" << std::flush;
+        return 0;
+#endif
 #ifdef MHW_REFLEX_TEMPORAL
         const bool temporal_clean=finish_temporal();
 #endif
