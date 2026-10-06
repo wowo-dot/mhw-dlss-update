@@ -27,7 +27,8 @@ def plain(obj, depth=3):
         return obj
     if depth <= 0:
         return str(obj)
-    if isinstance(obj, (list, tuple)):
+    # SWIG arrays (rdcarray) are sequences without being list/tuple.
+    if isinstance(obj, (list, tuple)) or (hasattr(obj, '__len__') and hasattr(obj, '__getitem__')):
         return [plain(x, depth - 1) for x in list(obj)[:64]]
     if type(obj).__name__ == 'ResourceId':
         return 'res' + str(int(obj))
@@ -93,10 +94,27 @@ def main(controller):
                         block['bound_error'] = traceback.format_exc(limit=2)
                     blocks.append(block)
             ev['constant_blocks'] = blocks
+            # Vertex stage blocks too: root CBV order spans both stages.
+            vrefl = pipe.GetShaderReflection(rd.ShaderStage.Vertex)
+            if vrefl is not None:
+                ev['vs_blocks'] = []
+                for i, cb in enumerate(vrefl.constantBlocks):
+                    entry = dict(index=i, name=cb.name, register=getattr(cb, 'fixedBindNumber', None))
+                    try:
+                        bound = pipe.GetConstantBlock(rd.ShaderStage.Vertex, i, 0)
+                        desc = getattr(bound, 'descriptor', bound)
+                        entry['offset'] = getattr(desc, 'byteOffset', None)
+                    except Exception:
+                        entry['bound_error'] = traceback.format_exc(limit=1)
+                    ev['vs_blocks'].append(entry)
             try:
                 d3d = controller.GetD3D12PipelineState()
-                ev['root_signature'] = 'res' + str(int(d3d.rootSignatureResourceId))
-                ev['root_elements'] = plain(d3d.rootElements, 4)
+                ev['d3d12_root_attributes'] = [a for a in dir(d3d) if 'root' in a.lower()]
+                if hasattr(d3d, 'rootSignature'):  # RenderDoc 1.46
+                    ev['root_signature'] = plain(d3d.rootSignature, 6)
+                else:
+                    ev['root_signature'] = 'res' + str(int(d3d.rootSignatureResourceId))
+                    ev['root_elements'] = plain(d3d.rootElements, 5)
             except Exception:
                 ev['root_error'] = traceback.format_exc(limit=2)
         except Exception:
