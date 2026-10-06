@@ -1,7 +1,43 @@
 # Modern DLSS provider bridge boundary
 
-Status: the static boundary and fail-closed capture policy are implemented;
-in-game acceptance has not been performed. This milestone does not initialize
+Status: v0.5.2 confirms successful DLSS capability delivery to MHW, while the
+user still reported the menu row missing; Create and full cleanup were
+unobserved in that version. Version 0.5.3 confirms that the
+[ISP prerequisite](isp-prerequisite.md) is unsatisfied: availability `0`, Init
+status `0xBAD00002`, with successful getters through both core layers.
+Version 0.6.0 adds the [two-provider capture boundary](two-provider-create-capture.md).
+Three tests completed those transactions but exposed a stateful callback outside
+the exported lifecycle. The [v0.6.1 correction](optimal-settings-callback-crash.md)
+contains that callback. Accepted run 34496 captured its four sizing inputs,
+reached the Display menu with DLSS visible but unavailable, and completed both
+bridge shutdown paths, with no Create in that run.
+The [v0.6.2 sizing diagnostic](diagnostic-optimal-settings.md) passed its sizing
+and menu-selection test in run 20164, with both bridge shutdown paths complete.
+[Run 19800](first-create-capture.md) left Options while On and captured the first
+verified DLSS Create: 11 scalar queries, intentional failure with no handle, and
+both bridge shutdown paths complete. Version 0.7.0 adds the separately reviewed
+[one-Evaluate diagnostic](one-evaluate-capture.md).
+[Run 32832](first-handle-lifetime.md) passed live Create success, copied-handle
+validation at Release and both Shutdowns, with no Evaluate call. Evaluate and
+cleanup after it remain untested. The contract specifies the core-owned handle copy,
+DLSS-only mode, stricter admission and the game's ignored Evaluate result.
+[Loaded-scene runs 37452 and 28340](loaded-scene-evaluate-gate.md) repeat successful
+handle cleanup without reaching Evaluate. Static analysis now locates the
+temporal-pass selector and type-3 work-item producer; live gates remain unknown.
+Version 0.7.1 adds [read-only renderer gate observation](renderer-gate-observation.md)
+to measure those fields after Create. It passes all 13 tests; run 35100 has two
+valid early samples with all selector gates ready and clean handle cleanup,
+but still no Evaluate. Early Release ends the one-shot lifetime, after which
+sizing rejects admission. The next attempt starts with saved Off and enables
+once from the main menu. Run 43380 did so, reached a loaded save and recorded
+12 valid ready-gate samples, all 11 sizing calls successful and clean cleanup
+on exit, but zero Evaluate. Temporal-layer activation and enqueueing are the
+next investigation; their execution is not instrumented.
+Version 0.7.2 adds [historical shader-cache and deferral observations](temporal-activation-observation.md)
+before and after Create. All 14 tests pass; live acceptance is pending. The
+observations are read-only and do not count pass or enqueue executions.
+The single-provider table below remains a baseline reference.
+This milestone does not initialize
 or evaluate a modern DLSS runtime and does not render an upscaled frame.
 
 ## Why the bridge replaces the DLSS 1 patch experiment
@@ -152,9 +188,14 @@ current core can skip its later population pass.
 
 No mode patches an instruction, spoofs a GPU name, copies a GPU resource, runs
 an old kernel, or submits a command list. Capture storage is fixed and bounded
-to 28 getter attempts: one complete Create plus one complete Evaluate snapshot.
-The first callback fault, wrong token, wrong order, unverified caller, identity
-change, or capacity exhaustion latches the lifecycle inert.
+to 28 Create/Evaluate getter attempts plus at most 28 capability getter attempts
+in v0.5.3: one complete Create, one complete Evaluate, and four scalar capability
+snapshots at distinct boundaries.
+Within Create/Evaluate, the first callback fault, wrong token, wrong order,
+unverified caller, identity change, or capacity exhaustion latches the lifecycle
+inert. A capability-only getter fault disables all later host getter calls
+without replacing the upstream GetParameters result; outstanding cleanup
+obligations remain intact.
 
 Provider wrappers use a single non-waiting boundary transaction around
 Populate mutation and Create/Evaluate getter capture. Unexpected concurrent or
@@ -173,10 +214,11 @@ misspelled, padded, or differently cased value.
 | --- | --- |
 | `disabled` | Default. Preserve the v0.4.1 resolver/status observation path and do not substitute a feature provider. |
 | `capture-create` | Satisfy only enough of the provider handshake to capture one Create parameter contract, return no feature handle, and fail Create closed. Evaluate is never accepted. This is the first runtime test mode. |
-| `capture-one-evaluate` | After one captured Create, issue one bridge-owned packed token solely to reach one Evaluate call, capture its bounded scalar/resource-pointer contract, leave every resource untouched, then return failure and accept release of only that token. This is a later, separate opt-in test. |
+| `capture-one-evaluate` | v0.7.0 separate opt-in test, runtime acceptance pending. DLSS may issue one packed token after gated Create, validate the core's copied handle and capture one Evaluate. ISP stays Create-only. Evaluate returns failure with resources untouched; MHW ignores that return, so an incomplete frame is possible. |
 
 The one-evaluate token has feature index 1 in its high DWORD because the current
-core wraps a provider handle and reads that field before dispatch. It is a
+core copies eight bytes into its own record and reads that field before dispatch.
+Release must accept the verified copied address, not require the original pointer. It is a
 control-flow token, not a modern DLSS feature handle, and success at that step
 does not mean rendering occurred.
 

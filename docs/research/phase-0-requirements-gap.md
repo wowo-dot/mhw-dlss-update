@@ -1,6 +1,171 @@
 # Phase 0: Modern DLSS requirements versus Monster Hunter: World
 
-Status: static evidence collected; runtime observation not yet performed.
+Latest result: [bare-profile run 2632](jitter-bare-profile.md)
+retains the zero jitter byte/stored camera jitter in both scenes with no enabled
+MO2 mods or detected bridge/mod-loader DLL. Focused consistency passes 11/16
+attempts per phase. This narrows the search to native assignment/callback order
+without establishing that the sampled layer is active or native TAA is broken.
+Normal exit and unchanged settings/profile are verified; no changes require
+rollback. GPU/raster behavior and modern SDK integration remain open.
+
+Previous result: [disabled-provider run 8164](jitter-startup-control.md#run-8164-menu-and-gameplay-remain-zero-in-the-control)
+retains jitter-enable 0 and zero stored camera jitter in menu and gameplay
+without synthetic startup substitution. The backend context is absent, yet
+the sampled gate remains Off. Focused consistency passes 12 menu/8 gameplay
+attempts; no CPU observation qualifies raster jitter or temporal inputs.
+The 30-second passive trace covers startup, not the later samples or shutdown.
+Normal exit is reported, settings unchanged and original sidecar restored.
+Next is the flag's scene/property assignment or remaining mod/observer effects;
+active startup behavior is not required for the zero state. Modern integration
+remains inactive and no native source/binary changed.
+
+Previous result: [pre-enable run 5836](jitter-pre-enable-observation.md)
+observes zero stored jitter and a disabled TAA jitter flag in menu and gameplay
+before any Create/Evaluate, with DLSS left Off. Eleven focused gameplay samples
+retain matching counters/epoch and stable scalar reads, without proving GPU
+coherence. First-Create hooks are not required for this state; the bridge's
+startup callbacks, game properties and other mods remain unresolved influences.
+Next is a control isolating bridge startup behavior or an earlier assignment
+observation. Saved Off/TAA settings are unchanged; shutdown is unobserved after
+trace timeout. No native implementation changed and modern integration remains
+inactive.
+
+Previous result: [v0.15.0 run 27200](jitter-scene-probe.md#run-27200-menu-and-loaded-scene-cpu-samples-accepted)
+accepts 16 menu and 16 triggered loaded-scene CPU samples. A different TAA
+instance in gameplay still has zero jitter and the enable byte Off; every
+other captured predicate clause passes. The assignment clearing it remains
+unresolved. One Evaluate and a 517-record completion journal are retained,
+but an overlapping call keeps the local checkpoint unqualified. Recreation
+is refused by the single-use diagnostic; normal exit/settings are verified.
+The unchanged build retains 48 native and 78 Python passing tests. Next is
+the flag's assignment/pre-enable state; GPU upload, raster jitter, temporal
+contents and modern SDK integration remain unverified or inactive.
+
+Latest result: [v0.14.0 run 30924](jitter-sequence-probe.md#run-30924-both-cpu-phases-accepted)
+accepts 32 CPU jitter/gate samples with the one-Evaluate budget unchanged.
+Both wrapper phases have zero jitter and identical matrices; `mJitterEnable`
+is the only false captured predicate clause. The live reset vector is zero.
+Clean shutdown, original settings and staged identities are verified; the
+unchanged code retains 47 native and 64 Python passing tests. Next is tracing
+the scene/property control and preparing a loaded-scene comparison. Main-menu
+CPU evidence does not establish earlier callback execution or raster jitter.
+
+Latest result: [v0.13.1 run 21636](camera-type-probe.md#run-21636-cpu-projection-observation-accepted)
+accepts source-stamped CPU projection observation with the derived camera,
+matching viewport, zero stored jitter and identical matrices. Both table
+candidates are nonzero, so table lookup alone is not applied-jitter evidence.
+One guarded Evaluate/completion stop and clean Off/apply/exit succeed. The
+unchanged build retains 45 native and 52 Python tests. Next is a bounded CPU
+sequence of native jitter gates/projection values, now implemented above. Shader/
+raster jitter, GPU image alignment, motion/depth and modern integration remain
+open; CPU matrix agreement alone does not qualify them.
+
+Latest result: [v0.12.0 run 4768](publication-receipt-probe.md#run-4768-publication-binding-and-completion-stop-accepted)
+accepts one CPU publication-bound work item through Evaluate and the recorder's
+completion stop/drain with zero journal flags. Stable counters 10791 -> 10792
+and bank 1 -> 0 accompany the same descriptor/payload and resource identities.
+All 17 queries complete; Off/apply/exit and cleanup succeed with original
+settings. The unchanged code retains its 43 native and 42 Python tests, plus
+binary/assembly and D3D12 completion checks. Actual shader jitter, motion/depth
+conventions, content alignment and complete GPU qualification remain open.
+The offline projection trace now motivates v0.13.0 above; no unchanged rerun
+is needed. GPU readback and shader execution validation remain future work.
+
+Latest: [v0.11.0 run 17204](frame-packet-probe.md#run-17204-producerpreparation-counter-mismatch)
+rejects the first preparation because the global renderer counter advances
+from 24291 to 24292 after producer capture. Both snapshots are stable and their
+renderer, rectangle and reset bits match. No Evaluate occurs; the markerless
+journal overflows. Off/apply/exit and cleanup succeed with original settings.
+The [offline queue trace](queued-work-provenance.md) now identifies a direct
+producer-to-descriptor link and the separate epoch/command-bank roles; 96 owned
+enqueue replays pass. This motivated the receipt now implemented in v0.12.0.
+The historical v0.11.0 build passed 38 CTests and 37 Python tests; shader
+jitter/content and completion-bound game acceptance remain open.
+
+[Current result: v0.10.0 run 47820](guarded-depth-probe.md#run-47820-one-corrected-item-recovery-and-clean-exit)
+accepts one guarded depth correction, four preparation calls, one completed
+consumer/Evaluate and subsequent main-menu TAA fallback. All 17 parameter
+queries completed. The user turned DLSS Off and exited normally; Release and
+both Shutdown calls succeeded. All 33 tests and binary audits still apply.
+GPU state/order remains unqualified: the Evaluate barrier snapshot is incomplete
+and the post-Evaluate journal reached capacity. The subsequent
+[offline review](submission-order-and-temporal-inputs.md) reconstructs expected
+state declarations and a same-queue signal/completed-value chain while
+preserving those coverage flags. Frame-indexed jitter tables are located;
+live values, units, contents and frame alignment remain unverified. The next
+diagnostic design binds these inputs to one work item and stops the journal
+after its bound completion observation. That design is implemented in v0.11.0 above.
+
+[Current result: run 45100](native-taa-fallback.md#run-45100-recreation-and-menu-toggle-accepted)
+accepts v0.9.2 fallback recreation and menu toggling: three generations retired,
+34/34 sizing successes and selectable On after the requested save/menu return
+and deliberate Off/On cycle. The user exited normally with original Off/TAA
+settings. All 29 CTests pass, including 256 generations and concurrent cleanup.
+Alt-Tab and wider display/device transitions remain untested. The depth
+selector and modern SDK are still inactive; guarded depth/producer integration
+is the next implementation milestone.
+
+[Earlier result: run 19484](native-taa-fallback.md) verifies the v0.9.1 sizing
+fix in game. The user reports normal rendering, but automatic Release still
+leaves DLSS unavailable. Offline replay confirms post-Release sizing/Create
+rejections and the retained handle binding. This motivated v0.9.2; full
+menu-lifecycle acceptance remains pending. The backing selector
+and modern reconstruction remain inactive. Older decisions and evidence follow.
+
+[Earlier decision after run 17772](current-state.md): the next three-Evaluate
+attempt stopped on the previously observed tracker state 0x8 before applying
+any correction. The checkpoint revision was not exercised. Keep the game
+closed for offline backing-selection and fallback design; do not repeat the
+unchanged test. The accepted evidence and historical gap discussion follow.
+
+Current status (2026-09-22): [run 46868](three-frame-result.md) accepts three
+consecutive depth-argument corrections, first-Evaluate binding to four real
+2560x1440 resources, and closed/submitted depth recordings in all three CPU
+intervals. Their continuous declaration chains end at combined shader read
+`0xC0`; the fourth fault was forwarded when the correction budget was spent.
+The 807-call journal is complete within its bounded scope. Later Evaluate
+contracts were not captured, GPU completion/contents are unverified, and modern
+DLSS is not invoked. Next work is bounded per-Evaluate input capture with fence
+completion evidence, then motion/jitter, depth convention and exposure validation.
+The [first v0.8.0 run](multi-evaluate-first-result.md) captures one Evaluate and natural fence queries, but an unrelated parallel barrier causes its global checkpoint to reject the next correction. The [v0.8.1 checkpoint revision](scoped-checkpoint-review.md) passes the saved-run replay and all 26 local tests; three-Evaluate game acceptance and captured-submission completion remain pending. Historical progress through v0.7.2 follows.
+
+Historical status: static inputs mapped; v0.5.2 confirms DLSS capability delivery through
+the MHW return. Create/Evaluate resources have not been captured. An earlier
+gate was the [separate ISP lifecycle](isp-prerequisite.md): v0.5.3 confirms
+ISP availability `0` and Init failure while DLSS capability delivery succeeds.
+Version 0.6.0 implements the
+[two-provider Create capture](two-provider-create-capture.md). Its tests passed
+ISP publication but crashed before Create in a parameter-published callback.
+The [v0.6.1 containment](optimal-settings-callback-crash.md) passed in run 34496:
+the local sizing callback captured four inputs, DLSS became visible but
+unavailable, and both bridge shutdown paths completed. The
+[v0.6.2 sizing diagnostic](diagnostic-optimal-settings.md) now returns controlled
+1:1 output metadata. Run 20164 confirms four successful sizing responses and
+a selectable DLSS menu setting, with both bridge shutdown paths complete.
+[Run 19800](first-create-capture.md) left Options while On and captured the first
+DLSS Create with a verified D3D12 command list and all 11 scalar queries completed.
+Nine keys were present; ResourceWidth and ResourceHeight were absent. The
+intentional no-handle failure and both bridge shutdown paths passed. Evaluate
+inputs and resource descriptions remain uncaptured. Version 0.7.0 prepares a
+[one-Evaluate diagnostic](one-evaluate-capture.md) after static review of the
+core's copied handle and the game's cleanup path. [Run 32832](first-handle-lifetime.md)
+now accepts Create success and copied-handle Release before both Shutdowns,
+with zero Evaluate calls. [Loaded-scene runs 37452 and 28340](loaded-scene-evaluate-gate.md)
+also have zero Evaluate calls; the upstream scheduling gate and frame-input
+capture remain unresolved. DLSS can only be changed from the main menu.
+Version 0.7.1 adds [read-only renderer gate observation](renderer-gate-observation.md)
+after Create; all 13 tests pass. Run 35100 records two valid early samples with
+all selector gates ready, but no Evaluate before early Release. Its post-Release
+sizing rejections explain the diagnostic's terminal menu availability; the
+precise Release reason and loaded-scene behavior remain unresolved. The next
+attempt started Off and enabled once at the main menu. Run 43380 then reached
+a loaded save and captured 12 ready-gate samples over a 23.2-second lifetime,
+without sizing rejection or exhaustion, followed by clean exit cleanup. Zero
+Evaluate persists. Temporal-layer activation and enqueueing are now the next
+investigation; their execution is not instrumented by this build.
+Version 0.7.2 adds [read-only historical cache and deferral observations](temporal-activation-observation.md),
+with all 14 tests passing and live acceptance pending. These can guide the
+next boundary investigation but do not count pass or enqueue executions.
 
 ## Conclusion
 
@@ -42,7 +207,7 @@ components.
 | Separate output UAV | Old feature requires `Output` | Strong candidate already passed | Format, dimensions, UAV flag, and post-DLSS consumers |
 | Same-frame depth | Old feature accepts optional `Depth` and `DepthInverted`; renderer exposes several depth resources | Available in the renderer, but not proven to reach NGX | Presence, format, resolution, reverse-Z, and frame alignment |
 | Dense 2D motion vectors | Old feature requires `MotionVectors` and recognizes optional scale/offset keys; renderer names `TemporalAA2_ResolveDenseVelocity` | Strong candidate exists; scale/offset usage is unproven | `RG16F`/`RG32F`, low/full resolution, units, signs, jitter inclusion, sky/foliage coverage |
-| Jitter X/Y in render-pixel units | Renderer names `mTUJitter` and `fJitterOffset`; old feature does not request modern `Jitter.Offset.X/Y` | Available but not connected to old NGX | Locate values and verify sequence, sign, axes, and range |
+| Jitter X/Y in render-pixel units | `mTUJitter` selects frame-indexed 18/20-entry sources for `fJitterOffset`; old feature does not request modern `Jitter.Offset.X/Y` | Static address formulas located; live values and units unverified | Capture active mode/value with producer frame; verify actual shader binding, sign, axes, units and range |
 | Actual render-subrect dimensions | Old path has `Width`, `Height`, `ResourceWidth`, `ResourceHeight`, `OutWidth`, and `OutHeight`; renderer has content/dynamic-resolution fields | Likely derivable at create/evaluate | Determine fixed versus dynamic dimensions each frame |
 | Exposure or AutoExposure | Renderer names `fExposureValue` and auto-exposure/luminance passes | Required policy for a linear/HDR input | Identify a 1x1 exposure texture and pre-exposure convention, or deliberately create DLSS with AutoExposure |
 | History reset | Old feature accepts `Reset`; TAA has reset passes | Likely wired in some form | Verify first frame, loading, camera cuts, teleports, cutscenes, and resolution changes |
