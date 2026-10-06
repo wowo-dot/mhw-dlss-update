@@ -97,6 +97,22 @@ struct Presentation::State {
     std::array<Queue, 16> queues{};
     ComPtr<IDXGISwapChain3> swap, proxy_swap;
     bool stopped{}, released{};
+#ifdef MHW_FG_SCENE_PROBE
+    // Scene diagnostic only: CPU labels, no retained buffers. Writers already
+    // hold the route mutex; readers take only this lock.
+    SRWLOCK scene_lock = SRWLOCK_INIT;
+    mhw::frame_generation::PresentationBufferMap scene_buffers;
+    template<class Fn> void scene(Fn&& fn) noexcept {
+        AcquireSRWLockExclusive(&scene_lock); fn(scene_buffers); ReleaseSRWLockExclusive(&scene_lock);
+    }
+    // One index query on the routed host chain before the SDK/native Present.
+    // Synchronous Reflex-only contract; the SDK-paced FG contract is excluded.
+    void scene_present_entry(IUnknown* self) noexcept {
+        if (contract != PresentationContract::synchronous_native || !proxy_swap) return;
+        const auto index = proxy_swap->GetCurrentBackBufferIndex();
+        scene([&](auto& map) { map.present(reinterpret_cast<std::uintptr_t>(self), index); });
+    }
+#endif
 
     void record(OwnershipCall call) noexcept {
         if(!diagnostic_image)return;
@@ -131,7 +147,12 @@ struct Presentation::State {
         return nullptr;
     }
     bool is_swap(IUnknown* value) const noexcept { return swap && value == swap.Get(); }
-    void retire_swap() noexcept { paced_host_swap.store(0); paced_host_thread.store(0); creation_queue = 0; swap.Reset(); proxy_swap.Reset(); }
+    void retire_swap() noexcept {
+        paced_host_swap.store(0); paced_host_thread.store(0); creation_queue = 0; swap.Reset(); proxy_swap.Reset();
+#ifdef MHW_FG_SCENE_PROBE
+        scene([](auto& map) { map.chain(0); });
+#endif
+    }
     void describe() {
         DXGI_SWAP_CHAIN_DESC desc{};
         require(swap && SUCCEEDED(swap->GetDesc(&desc)), "presentation-swap-description");
@@ -148,6 +169,9 @@ struct Presentation::State {
         // runs through the proxy. No backbuffer is retained by this bridge.
         retire_swap();
         swap = next_native; proxy_swap = next_proxy;
+#ifdef MHW_FG_SCENE_PROBE
+        scene([&](auto& map) { map.chain(reinterpret_cast<std::uintptr_t>(swap.Get())); });
+#endif
         creation_queue = reinterpret_cast<std::uintptr_t>(queue);
         paced_host_swap.store(reinterpret_cast<std::uintptr_t>(swap.Get()));
         paced_host_thread.store(GetCurrentThreadId());
@@ -294,6 +318,9 @@ auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& 
 HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT flags) {
     return route(self, {4,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
+#ifdef MHW_FG_SCENE_PROBE
+        if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
+#endif
         const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
         SetLastError(before);
         Capture capture(self);
@@ -316,7 +343,11 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
 }
 HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID iid, void** out) {
     return route(self,{5,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{index,iid==__uuidof(ID3D12Resource)}}, [&](auto& s,auto& v) {
-        const auto hr=s.proxy_swap->GetBuffer(index,iid,out);v.returned=SUCCEEDED(hr)&&out?reinterpret_cast<std::uintptr_t>(*out):0;return hr;},
+        const auto hr=s.proxy_swap->GetBuffer(index,iid,out);v.returned=SUCCEEDED(hr)&&out?reinterpret_cast<std::uintptr_t>(*out):0;
+#ifdef MHW_FG_SCENE_PROBE
+        if(v.returned&&iid==__uuidof(ID3D12Resource))s.scene([&](auto& map){map.buffer(reinterpret_cast<std::uintptr_t>(self),index,v.returned);});
+#endif
+        return hr;},
         [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); });
 }
 HRESULT STDMETHODCALLTYPE full_hook(IDXGISwapChain* self, BOOL full, IDXGIOutput* target) {
@@ -335,12 +366,18 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
     return route(self,{8,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
         const auto hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
         if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+#ifdef MHW_FG_SCENE_PROBE
+        if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
+#endif
         return hr;
     }, [&](auto& s) { return original<ResizeFn>(s, 8)(self, count, w, h, format, flags); });
 }
 HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     return route(self,{9,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
+#ifdef MHW_FG_SCENE_PROBE
+        if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
+#endif
         const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
         SetLastError(before);
         Capture capture(self);
@@ -360,7 +397,12 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
     }, [&](auto& s) { return record_present(self, original<Present1Fn>(s, 9)(self, interval, flags, params)); });
 }
 UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
-    return route(self,{10,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto&) { return s.proxy_swap->GetCurrentBackBufferIndex(); },
+    return route(self,{10,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto&) {
+        const auto index = s.proxy_swap->GetCurrentBackBufferIndex();
+#ifdef MHW_FG_SCENE_PROBE
+        s.scene([&](auto& map) { map.game_index(reinterpret_cast<std::uintptr_t>(self), index); });
+#endif
+        return index; },
         [&](auto& s) { return original<IndexFn>(s, 10)(self); });
 }
 HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags,
@@ -383,6 +425,9 @@ HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w
             hr = s.proxy_swap->ResizeBuffers1(count, w, h, format, flags, masks, queues);
         }
         if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+#ifdef MHW_FG_SCENE_PROBE
+        if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
+#endif
         return hr;
     }, [&](auto& s) { return original<Resize1Fn>(s, 11)(self, count, w, h, format, flags, masks, queues); });
 }
@@ -483,4 +528,11 @@ bool Presentation::release_after_shutdown() noexcept {
     s.released = true; return true;
 }
 const std::array<PresentationHook, 12>& Presentation::hooks() const noexcept { return state_->heads; }
+#ifdef MHW_FG_SCENE_PROBE
+bool scene_presentation_buffers(frame_generation::PresentationBuffers& out) noexcept {
+    auto* s = dispatch.load(); if (!s) return false;
+    AcquireSRWLockShared(&s->scene_lock); out = s->scene_buffers.snapshot(); ReleaseSRWLockShared(&s->scene_lock);
+    return true;
+}
+#endif
 }

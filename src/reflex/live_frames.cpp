@@ -120,7 +120,12 @@ struct LiveFrames::State {
             }
             const auto value=stamp();const bool ok=accepted(frames.present_begin(stats.owner,value),3,value);
 #ifdef MHW_FG_SCENE_PROBE
-            if(ok)mhw::scaled_temporal::stream_route::scene_present(value.temporal,value.epoch,frames.id(),stats.owner,swap);
+            if(ok){
+                // Separate presentation lock; the route mutex is already held here.
+                frame_generation::PresentationBuffers buffers{};
+                if(!scene_presentation_buffers(buffers))buffers={};
+                mhw::scaled_temporal::stream_route::scene_present(value.temporal,value.epoch,frames.id(),stats.owner,swap,buffers);
+            }
 #endif
             return ok;
         } catch(...) { std::lock_guard lock(mutex);fault("present-entry-exception");return false; }

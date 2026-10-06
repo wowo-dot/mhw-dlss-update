@@ -1,5 +1,6 @@
 #pragma once
 #include "../temporal_bindings/inputs.hpp"
+#include "../frame_generation/presentation_buffers.hpp"
 #include <d3d12.h>
 #include <iosfwd>
 #include <filesystem>
@@ -41,8 +42,10 @@ void save_compute_depth(const std::filesystem::path &prefix) noexcept;
 bool drained() noexcept;
 bool callbacks_idle() noexcept;
 // Opt-in metadata probe. No FG tags, resource ownership or GPU work.
-bool scene_request(unsigned request) noexcept;
-void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap) noexcept;
+// Buffer snapshots are host GetBuffer labels: identity metadata, never owned.
+bool scene_request(unsigned request,const frame_generation::PresentationBuffers &buffers={}) noexcept;
+void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap,
+    const frame_generation::PresentationBuffers &buffers={}) noexcept;
 // Fault shutdown only: seal undecided choices and retain unproven pins.
 // Requires stopped admission and no route callback; this is not retirement.
 bool abandon() noexcept;

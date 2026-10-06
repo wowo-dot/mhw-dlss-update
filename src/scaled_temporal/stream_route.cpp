@@ -1216,18 +1216,19 @@ bool drained() noexcept{Lock lock;if(pending.load()||active.list)return false;
  for(const auto &capture:compute_depth_pixels)if(capture.pending_submission())return false;
  for(const auto &p:plans)if(p.prepared&&p.handoff.submitted_count()!=p.handoff.count())return false;return true;}
 bool callbacks_idle() noexcept{return pending.load()==0;}
-bool scene_request(unsigned request) noexcept {
+bool scene_request(unsigned request,const frame_generation::PresentationBuffers &buffers) noexcept {
 #ifdef MHW_FG_SCENE_PROBE
- Lock lock;return accepting.load()&&!fault.load()&&scene_trace.request(request);
+ Lock lock;return accepting.load()&&!fault.load()&&scene_trace.request(request,buffers);
 #else
- (void)request;return false;
+ (void)request;(void)buffers;return false;
 #endif
 }
-void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap) noexcept {
+void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap,
+    const frame_generation::PresentationBuffers &buffers) noexcept {
 #ifdef MHW_FG_SCENE_PROBE
- Lock lock;scene_trace.present(frame,epoch,reflex_id,thread,swap,scene_qpc());
+ Lock lock;scene_trace.present(frame,epoch,reflex_id,thread,swap,scene_qpc(),buffers);
 #else
- (void)frame;(void)epoch;(void)reflex_id;(void)thread;(void)swap;
+ (void)frame;(void)epoch;(void)reflex_id;(void)thread;(void)swap;(void)buffers;
 #endif
 }
 bool abandon() noexcept{
@@ -1248,7 +1249,19 @@ void save_compute_depth(const std::filesystem::path &prefix) noexcept{
   compute_depth_pixels[i].save(prefix.wstring()+L"-gallery-depth-"+std::to_wstring(i)+L".r32f");}catch(...){/* No renderer changes for artifact failure. */}
 }
 bool healthy() noexcept{return !fault.load();}
-void write(std::ostream &o){Lock lock;bool off=true;for(bool b:enabled)off=off&&!b;
+#ifdef MHW_FG_SCENE_PROBE
+// Status writers copy the bounded CPU map under the route lock, then
+// serialize it after release so render callbacks never wait on its text.
+SceneTrace scene_snapshot;
+SRWLOCK scene_write_lock=SRWLOCK_INIT;
+struct SceneWriteLock {SceneWriteLock(){AcquireSRWLockExclusive(&scene_write_lock);}~SceneWriteLock(){ReleaseSRWLockExclusive(&scene_write_lock);}};
+#endif
+void write(std::ostream &o){
+#ifdef MHW_FG_SCENE_PROBE
+ SceneWriteLock scene_guard;
+ {
+#endif
+ Lock lock;bool off=true;for(bool b:enabled)off=off&&!b;
  unsigned unresolved{},unsubmitted{};for(const auto &p:plans)if(p.prepared){unresolved+=!p.resolved;unsubmitted+=p.handoff.submitted_count()!=p.handoff.count();}
  o<<"{\"silhouette_probe\":";indexed_write(o);o<<",\"silhouette_output\":";silhouette_write(o);
  o<<",\"schema\":3,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<off<<",\"published\":"<<published<<",\"built\":"<<built
@@ -1274,13 +1287,18 @@ void write(std::ostream &o){Lock lock;bool off=true;for(bool b:enabled)off=off&&
  o<<",\"dependency_refresh\":";dependency_refresh.write(o);
  o<<",\"dependencies\":";dependencies.write(o);
 #ifdef MHW_FG_SCENE_PROBE
- o<<",\"scene_boundary\":";scene_trace.write(o);
+ scene_snapshot=scene_trace; // Serialized below, after the route lock.
 #endif
  o<<",\"intermediate_dependencies\":";intermediate_dependencies.write(o);
  o<<",\"dof_native_sequence\":";dof_write(o);
  o<<",\"compute_dependencies\":";compute_dependencies.write(o);o<<",\"compute_resources\":";compute_gpu_write(o);
  o<<",\"compute_depth_pixels\":{\"schema\":1,\"policy\":\"native-depth-before-reduction-v1\",\"diagnostic_only\":true,\"captures\":[";
- for(unsigned i=0;i<compute_depth_pixels.size();++i){if(i)o<<',';compute_depth_pixels[i].write(o);}o<<"]}}";
+ for(unsigned i=0;i<compute_depth_pixels.size();++i){if(i)o<<',';compute_depth_pixels[i].write(o);}o<<"]}";
+#ifdef MHW_FG_SCENE_PROBE
+ }
+ o<<",\"scene_boundary\":";scene_snapshot.write(o);
+#endif
+ o<<'}';
 }
 }
 extern "C" void mhw_scaled_postfilter(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::post_dispatch(f);}

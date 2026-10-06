@@ -186,6 +186,9 @@ of these diagnostic snapshots authorize rendering or promote rejected entries
 to completed draws. The v0.6.4 trace is schema 4 / policy
 `submitted-scene-raster-scope-map-v4`; the probe log is schema 6. Current reviewer
 acceptance is version-specific; accepted v0.6.3 source/reviewer remains frozen.
+The v0.6.4 result is in `frame-generation-scene-raster-result.md`. The v0.6.5
+depth-bearing draw and presented-buffer extension is described in
+`frame-generation-scene-depth-presentation.md`.
 
 The pure CPU tests cover bounded request/state rules, saturation, generation
 retirement failures and reordered list submission. Reviewer tests reject

@@ -64,19 +64,58 @@ void scene_api(ID3D12GraphicsCommandList *list,bool indexed,std::array<std::uint
  if(!cache_read(attachment,0x48,flags,5)||(flags&7U)!=1){reject(5);return;}
  if(!cache_read(attachment,0,view,6)||!cache_read(view,0x60,backend,7)||!field(backend,0x18,e.resource)||!e.resource){reject(6);return;}
  if(!field(backend,0x28,rotation)){reject(7);return;}
- if(!scene_trace.tracked(e.resource)){++capture->unmatched;return;}
+ const auto match=scene_trace.match(e.resource);
+ if(match==SceneTrace::unmatched){++capture->unmatched;return;}
+ // A request-time GetBuffer label is presentation metadata only; it never
+ // joins the followed final-target path or the closure gate.
+ e.presentation_label=match==SceneTrace::presentation;e.diagnostic=e.presentation_label;
  e.rotation=rotation;
  if(!observed){reject(8);return;}
- if(!raster_read){reject(9);return;}
- if(!cache_read(state,0x98,native_rtv,8)||native_rtv!=raster.render_target){reject(10);return;}
- if(!cache_read(state,0x110,root,9)||root!=roots.graphics.signature){reject(11);return;}
- if(!cache_read(state,0x108,pipeline,10)||pipeline!=roots.pipeline){reject(12);return;}
+ const auto &r=e.raster_observation;
+ // The preserved output_known contract is unchanged. A complete one-RTV OM
+ // observation with a readable depth attachment gets its own diagnostic
+ // qualification; it never authorizes replacement or rendering changes.
+ const bool depth_output=!raster_read&&r[0]==1&&r[1]==1&&r[2]==1&&r[3]==1&&r[4]==1&&r[5]==1&&
+  r[6]==roots.generation&&r[7]==r[6]&&(r[8]&15U)==15U&&!(r[8]&32U)&&r[10]==1&&r[11]==1&&
+  r[13]==1&&r[14]==1&&r[15]&&r[16]==1&&r[17]==1&&r[18];
+ if(!raster_read&&!depth_output){reject(9);return;}
+ const std::uintptr_t api_rtv=raster_read?raster.render_target:static_cast<std::uintptr_t>(r[15]);
+ e.rtv=api_rtv;
+ unsigned depth_format{};
+ if(depth_output){
+  e.output_scope=1;e.diagnostic=true;e.dsv=r[18];
+  const auto output_read=[&](std::uintptr_t address,unsigned offset,unsigned bit,bool format=false){
+   std::uintptr_t value{};unsigned narrow{};
+   if(!(format?field(address,offset,narrow):field(address,offset,value)))return false;
+   e.output_native[bit]=format?narrow:value;e.output_native_read_mask|=1U<<bit;return true;};
+  const auto &o=e.output_native;
+  // Existing tested attachment/cache offsets: backend+0x10 handle, attachment
+  // +0x40 depth view, view+0x60 backend, +0x74 format, state+0x98 handles[9],
+  // state+0x140 cached depth resource. No rotating table is traversed.
+  if(!cache_read(state,0x98,native_rtv,8)||native_rtv!=api_rtv||!output_read(backend,0x10,0)||o[0]!=api_rtv){reject(16);return;}
+  if(!output_read(attachment,0x40,1)||!o[1]||!output_read(o[1],0x60,2)||!o[2]||
+     !output_read(o[2],0x10,3)||!output_read(o[2],0x18,4)||!o[4]||!output_read(o[1],0x74,5,true)||
+     !output_read(state,0x98+8*8,6)||!output_read(state,0x140,7)||
+     o[3]!=e.dsv||o[6]!=e.dsv||o[7]!=o[4]){reject(17);return;}
+  if(!cache_read(state,0x110,root,9)||root!=roots.graphics.signature){reject(18);return;}
+  if(!cache_read(state,0x108,pipeline,10)||pipeline!=roots.pipeline){reject(19);return;}
+  depth_format=static_cast<unsigned>(e.output_native[5]);
+ }else{
+  if(!cache_read(state,0x98,native_rtv,8)||native_rtv!=raster.render_target){reject(10);return;}
+  if(!cache_read(state,0x110,root,9)||root!=roots.graphics.signature){reject(11);return;}
+  if(!cache_read(state,0x108,pipeline,10)||pipeline!=roots.pipeline){reject(12);return;}
+ }
+ // The exact final packet belongs to the preserved followed path only.
+ if(e.diagnostic&&e.packet==capture->identity.packet){reject(20);return;}
  e.native_cache={state,command,packet,attachment,active_attachment,flags,view,backend,native_rtv,root,pipeline};
- e.generation=roots.generation;e.rtv=raster.render_target;e.root=root;e.pipeline=pipeline;e.api_state_matched=true;
+ e.generation=roots.generation;e.root=root;e.pipeline=pipeline;e.api_state_matched=true;
  pb::NativePipeline facts;
- e.pipeline_read=pb::snapshot_native_pipeline(cfg.image,e.packet,facts);
- if(e.pipeline_read){e.shader=facts.shader_handle;e.blend=facts.blend[2];e.depth=facts.depth[0];}
- if(e.packet==capture->identity.packet)e.stage=2;
+ e.pipeline_read=pb::snapshot_native_pipeline(cfg.image,e.packet,facts,depth_format);
+ if(e.pipeline_read){e.shader=facts.shader_handle;e.blend=facts.blend[2];e.depth=facts.depth[0];
+  for(unsigned i=0;i<10;++i)e.pipeline_facts[i]=facts.blend[2+i];
+  for(unsigned i=0;i<3;++i)e.pipeline_facts[10+i]=facts.depth[i];
+  e.pipeline_facts[13]=facts.dsv_format;}
+ if(!e.diagnostic&&e.packet==capture->identity.packet)e.stage=2;
  scene_scope.frame=capture->identity.frame;scene_scope.epoch=capture->identity.epoch;
  scene_scope.event=scene_trace.event(scene_scope.frame,scene_scope.epoch,e);
 }
@@ -91,8 +130,12 @@ SceneCopyReceipt scene_copy(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_
  if(!destination||!source||!pb::copy_memory(reinterpret_cast<std::uintptr_t>(destination),&d,sizeof(d))||
     !pb::copy_memory(reinterpret_cast<std::uintptr_t>(source),&s,sizeof(s))){scene_trace.reject(13,e);return {};}
  const auto src=reinterpret_cast<std::uintptr_t>(s.pResource),dst=reinterpret_cast<std::uintptr_t>(d.pResource);
- if(!scene_trace.tracked(src)&&!scene_trace.tracked(dst))return {};
- e.resource=scene_trace.tracked(src)?src:dst;
+ const auto from=scene_trace.match(src),to=scene_trace.match(dst);
+ if(!from&&!to)return {};
+ // Followed copies keep the preserved v0.6.4 path/closure contract. A copy
+ // touching only presentation labels is diagnostic and never extends it.
+ e.diagnostic=from!=SceneTrace::followed&&to!=SceneTrace::followed;e.presentation_label=e.diagnostic;
+ e.resource=from==SceneTrace::followed||(e.diagnostic&&from)?src:dst;
  if(!src||!dst||s.Type!=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX||d.Type!=s.Type||
     (box&&(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||
      b.left>=b.right||b.top>=b.bottom||b.front>=b.back))){scene_trace.reject(13,e);return {};}
@@ -110,15 +153,27 @@ void scene_barrier(ID3D12GraphicsCommandList *list,std::uint64_t generation,cons
  std::uint64_t frame{},epoch{};
  if(!field(cfg.renderer,0x1f210,frame)||!field(cfg.renderer,0x1f208,epoch))return;
  auto *capture=scene_trace.recording();if(!capture)return;
- const auto tracked=[](ID3D12Resource *resource){return scene_trace.tracked(reinterpret_cast<std::uintptr_t>(resource));};
- const bool transition=b.Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&tracked(b.Transition.pResource);
- const bool alias=b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING&&
-   (!b.Aliasing.pResourceBefore||!b.Aliasing.pResourceAfter||tracked(b.Aliasing.pResourceBefore)||tracked(b.Aliasing.pResourceAfter));
- const bool uav=b.Type==D3D12_RESOURCE_BARRIER_TYPE_UAV&&(!b.UAV.pResource||tracked(b.UAV.pResource));
- if(!transition&&!alias&&!uav)return;
+ using M=SceneTrace::Match;
+ const auto match=[](ID3D12Resource *resource){return scene_trace.match(reinterpret_cast<std::uintptr_t>(resource));};
+ // Followed scope wins; presentation-only barriers are diagnostic metadata.
+ // Null alias/UAV barriers stay in the preserved followed scope as before.
+ M scope=SceneTrace::unmatched;ID3D12Resource *label{};
+ const auto consider=[&](ID3D12Resource *resource){const auto m=match(resource);
+  if(m==SceneTrace::followed||(m==SceneTrace::presentation&&scope==SceneTrace::unmatched)){scope=m;label=resource;}};
+ if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)consider(b.Transition.pResource);
+ else if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING){
+  if(!b.Aliasing.pResourceBefore||!b.Aliasing.pResourceAfter)scope=SceneTrace::followed;
+  else{consider(b.Aliasing.pResourceBefore);consider(b.Aliasing.pResourceAfter);}
+ }else if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_UAV){
+  if(!b.UAV.pResource)scope=SceneTrace::followed;else consider(b.UAV.pResource);
+ }
+ if(scope==SceneTrace::unmatched)return;
+ const bool transition=b.Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
  SceneTrace::Event e;e.kind=transition?2U:3U;e.qpc=scene_qpc();e.thread=GetCurrentThreadId();
  e.list=reinterpret_cast<std::uintptr_t>(list);e.generation=generation;e.resource=capture->identity.target;e.flags=b.Flags;e.returned=true;
  e.native_frame=frame;e.native_epoch=epoch;
+ e.diagnostic=e.presentation_label=scope==SceneTrace::presentation;
+ if(e.presentation_label)e.resource=reinterpret_cast<std::uintptr_t>(label);
  if(transition){e.resource=reinterpret_cast<std::uintptr_t>(b.Transition.pResource);e.subresource=b.Transition.Subresource;e.before=b.Transition.StateBefore;e.after=b.Transition.StateAfter;}
  e.args[0]=static_cast<unsigned>(b.Type);(void)scene_trace.event(capture->identity.frame,capture->identity.epoch,e);
 }

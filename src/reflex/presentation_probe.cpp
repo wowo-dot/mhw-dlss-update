@@ -401,7 +401,7 @@ DWORD WINAPI worker(void*) noexcept {
         log.open(output/name, std::ios::binary | std::ios::app); require(bool(log), "log"); log << std::boolalpha;
 #ifdef MHW_REFLEX_TEMPORAL
 #ifdef MHW_FG_SCENE_PROBE
-        log << "{\"event\":\"start\",\"schema\":6,\"version\":\"0.6.4\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
         log << "{\"event\":\"start\",\"schema\":4,\"version\":\"0.6.0\",\"experiment\":\"frame-generation-game-ownership\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #else
@@ -520,9 +520,15 @@ DWORD WINAPI worker(void*) noexcept {
                             valid=bool(input)&&generation==creation;
                             require(valid,"scene-request-generation");
                         }
-                        if(valid&&mhw::scaled_temporal::stream_route::scene_request(request)){
+                        // Request-time host GetBuffer labels seed presentation-only
+                        // diagnostic matching; Present rechecks their generation.
+                        mhw::frame_generation::PresentationBuffers buffers{};
+                        const bool buffers_read=valid&&mhw::reflex::scene_presentation_buffers(buffers);
+                        if(valid&&mhw::scaled_temporal::stream_route::scene_request(request,buffers)){
                             scene_requested=request;
-                            log<<"{\"event\":\"scene_capture_requested\",\"request\":"<<request<<",\"generation_checked\":true}\n"<<std::flush;
+                            log<<"{\"event\":\"scene_capture_requested\",\"request\":"<<request<<",\"generation_checked\":true"
+                               <<",\"presentation_buffers_read\":"<<buffers_read<<",\"presentation_generation\":"<<buffers.generation
+                               <<",\"presentation_known_mask\":"<<buffers.known_mask<<"}\n"<<std::flush;
                         }
                     }
 #endif

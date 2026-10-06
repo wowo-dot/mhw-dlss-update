@@ -1,6 +1,9 @@
 #pragma once
 #include "streamline.hpp"
 #include "present_result.hpp"
+#ifdef MHW_FG_SCENE_PROBE
+#include "../frame_generation/presentation_buffers.hpp"
+#endif
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <array>
@@ -60,4 +63,10 @@ private:
     // no destructor that could call the SDK under process-detach loader lock.
     State* state_;
 };
+#ifdef MHW_FG_SCENE_PROBE
+// Scene-diagnostic library variant only. Copies the routed host chain's
+// GetBuffer labels, last host index and Present-entry index under a separate
+// lock that never waits for the route mutex. False before construction.
+bool scene_presentation_buffers(frame_generation::PresentationBuffers&) noexcept;
+#endif
 }

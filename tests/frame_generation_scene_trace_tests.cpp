@@ -3,7 +3,73 @@
 #include <sstream>
 #include <memory>
 using Trace=mhw::frame_generation::SceneTrace;
+using Buffers=mhw::frame_generation::PresentationBuffers;
 void require(bool ok){if(!ok)throw std::runtime_error("scene trace contract");}
+void buffer_map(){
+    mhw::frame_generation::PresentationBufferMap m;
+    require(m.snapshot().generation==0&&!m.snapshot().known_mask);
+    m.buffer(9,0,100);require(m.snapshot().foreign==1&&!m.snapshot().known_mask); // No chain yet.
+    m.chain(9);require(m.snapshot().generation==1&&m.snapshot().swap==9);
+    m.buffer(9,0,100);m.buffer(9,1,101);m.buffer(9,2,102);m.buffer(9,2,0);
+    std::uint64_t label{};
+    require(m.snapshot().known_mask==7&&m.snapshot().label(2,label)&&label==102&&!m.snapshot().label(3,label));
+    require(m.snapshot().contains(101)&&!m.snapshot().contains(0)&&!m.snapshot().contains(999));
+    m.buffer(9,1,201);require(m.snapshot().conflicts==1&&m.snapshot().labels[1]==201);
+    m.buffer(9,Buffers::capacity,1);require(m.snapshot().out_of_range==1);
+    m.buffer(8,0,1);m.game_index(8,0);m.present(8,0);m.resized(8);require(m.snapshot().foreign==5);
+    // presents-1 identifies a host index query in the frame being presented.
+    m.game_index(9,2);m.present(9,2);
+    require(m.snapshot().game_index==2&&m.snapshot().game_index_present==0&&m.snapshot().presents==1&&m.snapshot().present_index==2);
+    m.resized(9);const auto r=m.snapshot();
+    require(r.generation==2&&!r.known_mask&&!r.contains(100)&&r.game_index==Buffers::none&&r.present_index==Buffers::none&&
+            r.conflicts==1&&r.foreign==5&&r.out_of_range==1&&r.presents==0);
+    m.chain(0);require(m.snapshot().generation==3&&!m.snapshot().swap);
+}
+void diagnostic_scope(Trace::Identity id,Trace::Event a,std::span<const std::array<std::uint64_t,2>> batch){
+    const auto storage=std::make_unique<Trace>();auto &t=*storage;
+    Buffers request;request.swap=9;request.generation=4;request.known_mask=3;request.labels[0]=500;request.labels[1]=501;
+    require(t.request(1,request)&&t.begin(id));
+    require(t.frame(0).request_buffers.generation==4&&t.match(70)==Trace::followed&&t.match(501)==Trace::presentation&&
+            t.match(502)==Trace::unmatched&&t.match(0)==Trace::unmatched);
+    a.packet=id.packet;const auto final=t.event(id.frame,id.epoch,a);t.returned(id.frame,id.epoch,final,true,true);
+    auto depth=a;depth.stage=Trace::none;depth.diagnostic=true;depth.output_scope=1;depth.dsv=77;depth.list=400;depth.qpc=2;
+    const auto pending=t.event(id.frame,id.epoch,depth);t.returned(id.frame,id.epoch,pending,true,false);
+    auto unreturned=depth;unreturned.list=100;const auto open=t.event(id.frame,id.epoch,unreturned);
+    // A presentation-only copy is diagnostic and never extends the followed path.
+    auto copy=a;copy.kind=4;copy.stage=Trace::none;copy.diagnostic=copy.presentation_label=true;copy.copy[0]=501;copy.copy[1]=600;copy.resource=501;
+    const auto edge=t.event(id.frame,id.epoch,copy);t.returned(id.frame,id.epoch,edge,true,false);require(!t.tracked(600));
+    require(t.frame(0).diagnostic_count==3&&t.frame(0).diagnostic_events==3);
+    for(unsigned i=0;i<Trace::diagnostic_capacity;++i)(void)t.event(id.frame,id.epoch,depth);
+    require(t.frame(0).diagnostic_count==Trace::diagnostic_capacity&&t.frame(0).diagnostic_overflow==3&&!t.frame(0).overflow);
+    // Gating capacity is preserved after diagnostic saturation.
+    auto barrier=a;barrier.kind=2;barrier.stage=Trace::none;barrier.list=100;
+    require(t.event(id.frame,id.epoch,barrier)!=Trace::none);
+    t.submit(300,3,batch);t.submit(300,4,batch);
+    require(t.frame(0).duplicate_submissions>0); // Gating list 100 submitted twice remains a gate failure.
+    const auto gate_storage=std::make_unique<Trace>();auto &g=*gate_storage;
+    require(g.request(1,request)&&g.begin(id));
+    const auto f2=g.event(id.frame,id.epoch,a);g.returned(id.frame,id.epoch,f2,true,true);
+    const auto late=g.event(id.frame,id.epoch,depth);g.returned(id.frame,id.epoch,late,true,false); // list 400: never submitted.
+    auto lost=unreturned;lost.list=200;(void)g.event(id.frame,id.epoch,lost); // Executor never returns.
+    g.reset(400,1);require(g.frame(0).diagnostic_premature_resets==1&&!g.frame(0).premature_resets);
+    g.submit(300,3,batch);
+    const std::array<std::array<std::uint64_t,2>,1> repeat{{{200,1}}};g.submit(300,4,repeat);
+    require(g.frame(0).diagnostic_duplicate_submissions==1&&!g.frame(0).duplicate_submissions);
+    g.choice(id.frame,id.epoch,2);
+    Buffers at_present=request;at_present.presents=8;at_present.present_index=1;
+    g.present(id.frame+1,21,1,4,5,6,at_present);
+    // Diagnostic events cannot block or authorize the preserved closure.
+    require(g.frame(0).presented&&g.frame(0).diagnostic_unreturned_at_present==1&&g.frame(0).diagnostic_unsubmitted_at_present==1&&
+            g.frame(0).present_buffers.present_index==1&&g.frame(0).present_buffers.presents==8);
+    g.reset(400,1);require(g.frame(0).diagnostic_premature_resets==1); // Closed captures do not count later resets.
+    require(g.match(501)==Trace::unmatched&&g.event(id.frame,id.epoch,depth)==Trace::none);
+    std::ostringstream out;out<<std::boolalpha;g.write(out);const auto text=out.str();
+    require(text.find("\"policy\":\"submitted-scene-depth-presentation-map-v5\"")!=std::string::npos);
+    require(text.find("\"diagnostic_capacity\":512")!=std::string::npos&&text.find("\"output_scope\":1")!=std::string::npos);
+    require(text.find("\"present_buffers\":{\"swap\":9,\"generation\":4")!=std::string::npos);
+    require(text.find("\"labels\":[500,501,0,")!=std::string::npos&&text.find("\"present_index\":1}")!=std::string::npos);
+    (void)open;
+}
 int main(){
     // Production storage is static. Multiple bounded trace arrays in this
     // single test must not exhaust the default Windows thread stack.
@@ -69,7 +135,8 @@ int main(){
     require(copies.frame(0).presented&&!copies.frame(0).samples[0].batch); // Incomplete samples cannot prevent closure.
     std::ostringstream out;out<<std::boolalpha;t.write(out);
     require(out.str().find("\"gpu_work_added\":false")!=std::string::npos);
-    require(out.str().find("\"schema\":4")!=std::string::npos);
+    require(out.str().find("\"schema\":5")!=std::string::npos);
+    buffer_map();diagnostic_scope(id,a,batch);
     std::ostringstream diagnostic;diagnostic<<std::boolalpha;copies.write(diagnostic);
     require(diagnostic.str().find("\"native_cache_read_mask\":3")!=std::string::npos);
     require(diagnostic.str().find("\"raster_observation\":[1,1,1,1,1,1,1,1,15,1,1,1,0,1,1,123,1,1,456]")!=std::string::npos);
