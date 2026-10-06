@@ -26,12 +26,15 @@ Reflex frame token); HUD-free colour and UI alpha are quality inputs. Next:
    copy of `T` taken right after our final draw. Accept HUD artifacts at first.
 2. FG swap-chain lifecycle in game: SDK-paced presentation, worker routing,
    resize/alt-tab, and chain retirement/recreation at shutdown.
-3. Identify the backbuffer write (copy versus colour transform) so the HUD-free
-   copy matches the backbuffer colour space; then UI alpha.
+3. Apply the screen-write transform (brightness `fGammaCorrectEx` + sRGB) to
+   the HUD-free copy so it matches the backbuffer; then UI alpha.
 4. MFG on the same inputs.
 
-A GPU frame capture tool (Nsight Graphics or PIX) is wanted to check formats,
-the backbuffer write and HUD-free pixels directly.
+GPU capture (`frame-generation-hudless-capture-result.md`, RenderDoc driven by
+`tools/rdc/`) confirmed the HUD-free `T` with pixels. `T` is linear
+`R11G11B10_FLOAT`; the screen write applies the game's brightness curve and sRGB
+encode into the BGRA8 backbuffer. DLSS-G's HUD-less input must therefore be the
+HUD-free `T` passed through that same pointwise transform, not a raw copy.
 
 ## Working method
 
