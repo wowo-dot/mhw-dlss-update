@@ -36,6 +36,20 @@ GPU capture (`frame-generation-hudless-capture-result.md`, RenderDoc driven by
 encode into the BGRA8 backbuffer. DLSS-G's HUD-less input must therefore be the
 HUD-free `T` passed through that same pointwise transform, not a raw copy.
 
+## Installed now: v0.7.0 (first in-game FG slice, runtime pending)
+
+`mhw_fg_game_probe` (tag `v0.7.0`, design `frame-generation-game-slice.md`) is in
+the MO2 slot; run folder `local/fg-game-20261006/game-01`. The Streamline runtime
+sidecar points at the pinned six-DLL set (DLSS-G included). Restore with the
+command in that folder's `install-receipt.json`.
+
+Procedure: launch through MO2 to the main menu (FG plugin loaded, FG Off: checks
+startup, SDK-paced presentation and the startup resizes), then
+`python -B tools/fg_game.py arm --run <run>` at the main menu (DLSS, Reflex and
+FG On), gameplay, a menu, an area change and an alt-tab within the 600-second
+window; `stop` turns FG Off (DLSS and Reflex stay on); exit normally; then
+`summary`. HUD smearing is expected in this slice.
+
 ## Working method
 
 Git is the source of truth: one commit and annotated tag per tested version.
