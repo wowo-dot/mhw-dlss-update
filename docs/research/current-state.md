@@ -1,17 +1,21 @@
 # Current state
 
-Updated 2026-10-06. **DLSS Frame Generation (2x) works in MHW** on the DLSS
-Performance path with Reflex On (build v0.7.3, git tag `v0.7.3`). DLAA, DLSS
-Performance and Reflex keep working. Next: MFG on the same inputs, then the HUD
-inputs, then the configuration-based alpha with performance cleanup.
+Updated 2026-10-06. **DLSS Frame Generation and multi-frame generation work in
+MHW** on the DLSS Performance path with Reflex On. The multiplier changes live
+from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. The
+current build is v0.8.0 (git tag `v0.8.0`). DLAA, DLSS Performance and Reflex
+keep working. Next: the HUD inputs, then resize, then the configuration-based
+alpha with performance cleanup.
 
 ## Latest result
 
-`frame-generation-game-slice-result.md`: armed at the main menu, about 9.5
-minutes of gameplay, menus, loading and alt-tab. 13697 frames tagged with depth,
-motion vectors and camera constants, with zero SDK errors, camera failures or
-exceptions. Streamline presented 2 frames per host frame, and the user saw a
-smooth 30 → 60 fps with only the expected FG defects. FG Off on stop, normal exit.
+`frame-generation-game-slice-result.md`. v0.7.3 (2x): about 9.5 minutes of
+gameplay, menus, loading and alt-tab, with 13697 frames tagged (depth, motion
+vectors, camera constants) and zero SDK errors, camera failures or exceptions.
+v0.8.0 (MFG): the multiplier was switched live through 2x, 3x, 4x and 6x, with
+a menu and an area change at 6x. Streamline presented exactly 2/3/4/6 frames per
+host frame, with zero errors, and the user found every step smooth. Both runs
+ended with FG Off on stop and a normal exit.
 
 Things to know:
 
@@ -30,22 +34,22 @@ Things to know:
 
 ## Plan
 
-1. MFG: the frame multiplier (2x–6x on the RTX 5090) from a sidecar setting,
-   on the same inputs.
-2. HUD inputs. The HUD-free `T` (linear `R11G11B10_FLOAT`, right after our
+1. HUD inputs. The HUD-free `T` (linear `R11G11B10_FLOAT`, right after our
    final draw) goes through the game's screen-write transform (brightness
    `fGammaCorrectEx` + sRGB) to form the HUD-less input; then UI alpha.
    Background: `frame-generation-hudless-capture-result.md`.
-3. Lifecycle: resolution change and swap-chain recreation with FG On.
-4. Configuration-based alpha: remove the diagnostic readers and overhead,
+2. Lifecycle: resolution change and swap-chain recreation with FG On.
+3. Configuration-based alpha: remove the diagnostic readers and overhead,
    restore the base frame rate, keep the research build separate.
 
-## Installed now: v0.7.3
+## Installed now: v0.8.0
 
 `mhw_fg_game_probe` is in the MO2 slot with its run folder
-`local/fg-game-20261006/game-05` (sealed). Install or restore with
+`local/fg-game-20261006/game-06` (sealed). Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).
-`<dll>.fg-mode` containing `off` runs the same binary without DLSS-G.
+`<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
+starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
+changes the multiplier while armed.
 
 Procedure: launch through MO2 to the main menu, then
 `python -B tools/fg_game.py arm --run <run>` (DLSS, Reflex and FG On, 600 s),

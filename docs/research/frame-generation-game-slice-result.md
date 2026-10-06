@@ -45,11 +45,34 @@ Confirmed from the logs:
   dropped to 2–3 fps (frames over 100 ms); the user attributes that to the
   diagnostic readers. Both must be fixed before the alpha.
 
+## Multi-frame generation (v0.8.0)
+
+Build v0.8.0 (git tag `v0.8.0`, commit `def363b`), DLL SHA-256
+`48cee5c5…a535`. Evidence (private, sealed): `local/fg-game-20261006/game-06`,
+manifest SHA-256 `2ee87bd3…7fc`.
+
+The multiplier is changed live through `fg_game.py multiplier --x N`. It is
+applied through `slDLSSGSetOptions` at the next tagged Present and limited to
+the reported `numFramesToGenerateMax` (5 on the RTX 5090, so 6x at most).
+Session: armed at 2x in the main menu, then 3x, 4x and 6x in gameplay, with a
+menu and an area change at 6x. The user reported smooth motion at 90, 120 and
+180 fps on a 240 Hz display.
+
+- All three requests were accepted and applied: `generated` 2, 3, 5, with no
+  capability limiting.
+- Frames Streamline actually presented per host frame: 2 frames ×1437,
+  3 ×766, 4 ×999, 6 ×2740, and 1 ×539 (start-up, dropouts and loading).
+- 6481 tagged frames: zero camera, constants, tag or option failures, zero SDK
+  errors, zero exceptions, no ring starvation. 636 presents without input
+  (loading) turned FG Off as designed. Stop turned FG Off; normal exit.
+- Host rate stayed at 26–33 fps across all multipliers. MFG adds no visible
+  cost to the game frame at this base rate.
+
 ## Not verified yet
 
-HUD-less colour and UI alpha (HUD is interpolated as part of the scene),
-multi-frame generation, latency, frame pacing measurements, resolution changes,
-and visual quality beyond the user's impression.
+HUD-less colour and UI alpha (the HUD is interpolated as part of the scene),
+latency, frame pacing measurements, resolution changes, and visual quality
+beyond the user's impression.
 
 ## Related findings from the same day
 
