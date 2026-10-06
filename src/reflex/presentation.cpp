@@ -16,6 +16,7 @@ namespace mhw::reflex {
 namespace {
 using Microsoft::WRL::ComPtr;
 thread_local unsigned bypass_depth{};
+thread_local bool routed_call{};  // Set when route() sent the call through the SDK proxy.
 struct Bypass { Bypass() { ++bypass_depth; } ~Bypass() { --bypass_depth; } };
 struct NativePresent {
     IUnknown* swap{}; unsigned calls{}; HRESULT result{E_FAIL}; NativePresent* previous{};
@@ -60,6 +61,7 @@ using ResizeFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, 
 using Present1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 using IndexFn = UINT(STDMETHODCALLTYPE*)(IDXGISwapChain3*);
 using Resize1Fn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
+using TargetFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, const DXGI_MODE_DESC*);
 HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
 HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
@@ -72,6 +74,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FO
 HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS*);
 UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3*);
 HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3*, UINT, UINT, UINT, DXGI_FORMAT, UINT, const UINT*, IUnknown* const*);
+HRESULT STDMETHODCALLTYPE target_hook(IDXGISwapChain*, const DXGI_MODE_DESC*);
 }
 struct Presentation::State {
     explicit State(Streamline& value) : sdk(value) {}
@@ -89,8 +92,21 @@ struct Presentation::State {
     std::atomic<unsigned> paced_host_thread{};
     std::uintptr_t creation_queue{};
     unsigned device_nodes{};
-    std::array<PresentationHook, 12> heads{};
-    std::array<void*, 12> original{};
+    std::array<PresentationHook, hook_capacity> heads{};
+    std::array<void*, hook_capacity> original{};
+    LifecycleListener listener;
+    std::atomic<bool> listener_ready{};  // Published after listener is complete.
+    // Lifecycle ring: its own lock, never held across a driver or SDK call.
+    SRWLOCK lifecycle_lock = SRWLOCK_INIT;
+    std::array<LifecycleEvent, lifecycle_capacity> lifecycle_ring{};
+    std::uint64_t lifecycle_written{}, lifecycle_read{}, lifecycle_dropped{};
+    void lifecycle_record(LifecycleEvent e) noexcept {
+        AcquireSRWLockExclusive(&lifecycle_lock);
+        if (lifecycle_written - lifecycle_read == lifecycle_capacity) { ++lifecycle_dropped; ++lifecycle_read; }
+        e.sequence = ++lifecycle_written;
+        lifecycle_ring[(e.sequence - 1) % lifecycle_capacity] = e;
+        ReleaseSRWLockExclusive(&lifecycle_lock);
+    }
     ComPtr<ID3D12Device> device, proxy_device;
     ComPtr<IDXGIFactory2> factory, proxy_factory;
     struct Queue { ComPtr<ID3D12CommandQueue> proxy; ID3D12CommandQueue* native{}; };
@@ -183,6 +199,9 @@ struct Presentation::State {
         add(9, swap.Get(), 22, reinterpret_cast<void*>(&present1_hook));
         add(10, swap.Get(), 36, reinterpret_cast<void*>(&index_hook));
         add(11, swap.Get(), 39, reinterpret_cast<void*>(&resize1_hook));
+#ifdef MHW_FG_SCENE_PROBE
+        add(12, swap.Get(), 14, reinterpret_cast<void*>(&target_hook));
+#endif
         enable(); describe(); ++stats.swapchains;
         stats.native_swapchain = reinterpret_cast<std::uintptr_t>(swap.Get());
         stats.proxy_swapchain = reinterpret_cast<std::uintptr_t>(proxy_swap.Get());
@@ -199,6 +218,39 @@ struct Call {
     ~Call() { s.active.fetch_sub(1); }
 };
 template<class Fn> Fn original(Presentation::State& s, unsigned index) { return reinterpret_cast<Fn>(s.original[index]); }
+// Host lifecycle call: the listener (outside the route mutex), timing, result
+// and the chain description afterwards. The SDK's own recursion passes through.
+template<class Forward, class Chain>
+HRESULT lifecycle_call(unsigned method, IUnknown* self, std::array<std::uint64_t, 6> args, Forward&& forward, Chain&& chain) {
+    auto* s = dispatch.load();
+    if (bypass_depth || !s) return forward();
+    Call active(*s);
+    LifecycleEvent e{};
+    e.method = method; e.thread = GetCurrentThreadId(); e.args = args;
+    const auto host = s->paced_host_swap.load();
+    e.current_chain = host && reinterpret_cast<std::uintptr_t>(self) == host;
+    e.host_thread = e.thread == s->paced_host_thread.load();
+    if (s->accepting.load() && s->listener_ready.load(std::memory_order_acquire))
+        e.guard_off = s->listener.before(s->listener.context, method);
+    LARGE_INTEGER t{}; QueryPerformanceCounter(&t); e.began_qpc = static_cast<std::uint64_t>(t.QuadPart);
+    routed_call = false;
+    const HRESULT hr = forward();
+    e.routed = routed_call; routed_call = false;
+    QueryPerformanceCounter(&t); e.ended_qpc = static_cast<std::uint64_t>(t.QuadPart);
+    e.result = static_cast<std::uint32_t>(hr);
+    const auto error = GetLastError();
+    if (IUnknown* described = SUCCEEDED(hr) ? chain() : nullptr) {
+        Bypass bypass; ComPtr<IDXGISwapChain> sc; DXGI_SWAP_CHAIN_DESC d{};
+        if (SUCCEEDED(described->QueryInterface(IID_PPV_ARGS(&sc))) && SUCCEEDED(sc->GetDesc(&d))) {
+            e.described = true; e.windowed = d.Windowed != FALSE;
+            e.width = d.BufferDesc.Width; e.height = d.BufferDesc.Height; e.format = static_cast<std::uint32_t>(d.BufferDesc.Format);
+            e.buffers = d.BufferCount; e.flags = d.Flags;
+        }
+    }
+    SetLastError(error);
+    s->lifecycle_record(e);
+    return hr;
+}
 HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUEUE_DESC* desc, REFIID iid, void** out) {
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     auto& s = *dispatch.load(); Call call(s);
@@ -225,8 +277,7 @@ HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUE
     }
     return original<QueueFn>(s, 0)(self, desc, iid, out);
 }
-HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
-    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+HRESULT swap_routed(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out, std::uintptr_t caller) {
     auto& s = *dispatch.load(); Call call(s);
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
@@ -248,9 +299,8 @@ HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* self, IUnknown* queue, DXGI_SW
     }
     return original<SwapFn>(s, 1)(self, queue, desc, out);
 }
-HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
-    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out) {
-    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+HRESULT hwnd_routed(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out, std::uintptr_t caller) {
     auto& s = *dispatch.load(); Call call(s);
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
@@ -271,9 +321,8 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* self, IUnknown* queue, HWND h
     }
     return original<HwndFn>(s, 2)(self, queue, hwnd, desc, full, restrict, out);
 }
-HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
-    IDXGIOutput* restrict, IDXGISwapChain1** out) {
-    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+HRESULT core_routed(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
+    IDXGIOutput* restrict, IDXGISwapChain1** out, std::uintptr_t caller) {
     auto& s = *dispatch.load(); Call call(s);
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
@@ -294,6 +343,29 @@ HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2* self, IUnknown* queue, IUnkno
     }
     return original<CoreFn>(s, 3)(self, queue, window, desc, restrict, out);
 }
+using Args = std::array<std::uint64_t, 6>;
+Args creation_args(const DXGI_SWAP_CHAIN_DESC1* d, unsigned windowed) {
+    return d ? Args{d->Width, d->Height, static_cast<unsigned>(d->Format), d->BufferCount, d->Flags, windowed} : Args{};
+}
+template<class T> IUnknown* created_chain(T** out) { return out && *out ? static_cast<IUnknown*>(*out) : nullptr; }
+HRESULT STDMETHODCALLTYPE swap_hook(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    const auto args = desc ? Args{desc->BufferDesc.Width, desc->BufferDesc.Height, static_cast<unsigned>(desc->BufferDesc.Format),
+                                  desc->BufferCount, desc->Flags, static_cast<unsigned>(desc->Windowed)} : Args{};
+    return lifecycle_call(1, self, args, [&] { return swap_routed(self, queue, desc, out, caller); }, [&] { return created_chain(out); });
+}
+HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    return lifecycle_call(2, self, creation_args(desc, full ? static_cast<unsigned>(full->Windowed) : 1),
+        [&] { return hwnd_routed(self, queue, hwnd, desc, full, restrict, out, caller); }, [&] { return created_chain(out); });
+}
+HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
+    IDXGIOutput* restrict, IDXGISwapChain1** out) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    return lifecycle_call(3, self, creation_args(desc, 1),
+        [&] { return core_routed(self, queue, window, desc, restrict, out, caller); }, [&] { return created_chain(out); });
+}
 template<class Routed, class Forward>
 auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& forward) {
     auto& s = *dispatch.load(); Call call(s);
@@ -307,7 +379,7 @@ auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& 
     if (!bypass_depth && s.accepting.load()) {
         std::lock_guard lock(s.mutex);
         if (s.accepting.load() && s.is_swap(self)) {
-            Bypass bypass;const auto value=routed(s,diagnostic);
+            Bypass bypass;routed_call=true;const auto value=routed(s,diagnostic);
             diagnostic.object=reinterpret_cast<std::uintptr_t>(self);
             diagnostic.result=static_cast<std::uint32_t>(value);s.record(diagnostic);
             return value;
@@ -354,8 +426,11 @@ HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID i
         [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); });
 }
 HRESULT STDMETHODCALLTYPE full_hook(IDXGISwapChain* self, BOOL full, IDXGIOutput* target) {
-    return route(self,{6,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{static_cast<unsigned>(full),reinterpret_cast<std::uintptr_t>(target)}}, [&](auto& s,auto&) { return s.proxy_swap->SetFullscreenState(full, target); },
-        [&](auto& s) { return original<FullFn>(s, 6)(self, full, target); });
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    return lifecycle_call(6, self, Args{static_cast<unsigned>(full), reinterpret_cast<std::uintptr_t>(target)}, [&] {
+        return route(self,{6,0,0,0,0,0,caller,0,0,{static_cast<unsigned>(full),reinterpret_cast<std::uintptr_t>(target)}}, [&](auto& s,auto&) { return s.proxy_swap->SetFullscreenState(full, target); },
+            [&](auto& s) { return original<FullFn>(s, 6)(self, full, target); });
+    }, [&] { return static_cast<IUnknown*>(self); });
 }
 HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* desc) {
     return route(self,{7,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto& v) {
@@ -366,7 +441,9 @@ HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* 
         [&](auto& s) { return original<DescFn>(s, 7)(self, desc); });
 }
 HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags) {
-    return route(self,{8,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    return lifecycle_call(8, self, Args{count, w, h, static_cast<unsigned>(format), flags}, [&] {
+    return route(self,{8,0,0,0,0,0,caller,0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
         const auto hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
         if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
 #ifdef MHW_FG_SCENE_PROBE
@@ -374,6 +451,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
 #endif
         return hr;
     }, [&](auto& s) { return original<ResizeFn>(s, 8)(self, count, w, h, format, flags); });
+    }, [&] { return static_cast<IUnknown*>(self); });
 }
 HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     return route(self,{9,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
@@ -413,7 +491,9 @@ UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
 }
 HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags,
     const UINT* masks, IUnknown* const* queues) {
-    return route(self,{11,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    return lifecycle_call(11, self, Args{count, w, h, static_cast<unsigned>(format), flags}, [&] {
+    return route(self,{11,0,0,0,0,0,caller,0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
         HRESULT hr{};
         if (s.contract == PresentationContract::sdk_paced) {
             // SDK 2.12 FG ResizeBuffers1 raised E_ABORT in the owned fixture.
@@ -436,6 +516,15 @@ HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w
 #endif
         return hr;
     }, [&](auto& s) { return original<Resize1Fn>(s, 11)(self, count, w, h, format, flags, masks, queues); });
+    }, [&] { return static_cast<IUnknown*>(self); });
+}
+// Observed and guarded only; the window/mode change itself stays native.
+HRESULT STDMETHODCALLTYPE target_hook(IDXGISwapChain* self, const DXGI_MODE_DESC* mode) {
+    auto& s = *dispatch.load();
+    const auto args = mode ? Args{mode->Width, mode->Height, static_cast<unsigned>(mode->Format), mode->RefreshRate.Numerator,
+                                  mode->RefreshRate.Denominator, static_cast<unsigned>(mode->Scaling)} : Args{};
+    return lifecycle_call(12, self, args, [&] { return original<TargetFn>(s, 12)(self, mode); },
+        [&] { return static_cast<IUnknown*>(self); });
 }
 }
 Presentation::Presentation(Streamline& sdk) : state_(new State(sdk)) {
@@ -533,7 +622,22 @@ bool Presentation::release_after_shutdown() noexcept {
     s.proxy_factory.Reset(); s.factory.Reset(); s.proxy_device.Reset(); s.device.Reset();
     s.released = true; return true;
 }
-const std::array<PresentationHook, 12>& Presentation::hooks() const noexcept { return state_->heads; }
+const std::array<PresentationHook, Presentation::hook_capacity>& Presentation::hooks() const noexcept { return state_->heads; }
+void Presentation::lifecycle(LifecycleListener listener) {
+    auto& s = *state_; std::lock_guard lock(s.mutex);
+    require(s.accepting.load() && !s.stopped && listener.context && listener.before && !s.listener.before,
+        "presentation-lifecycle-listener");
+    s.listener = listener;
+    s.listener_ready.store(true, std::memory_order_release);
+}
+unsigned Presentation::drain_lifecycle(std::array<LifecycleEvent, lifecycle_capacity>& out, std::uint64_t& dropped) noexcept {
+    auto& s = *state_; AcquireSRWLockExclusive(&s.lifecycle_lock);
+    const auto count = static_cast<unsigned>(s.lifecycle_written - s.lifecycle_read);
+    for (unsigned i = 0; i < count; ++i) out[i] = s.lifecycle_ring[(s.lifecycle_read + i) % lifecycle_capacity];
+    s.lifecycle_read = s.lifecycle_written; dropped = s.lifecycle_dropped;
+    ReleaseSRWLockExclusive(&s.lifecycle_lock);
+    return count;
+}
 #ifdef MHW_FG_SCENE_PROBE
 bool scene_presentation_buffers(frame_generation::PresentationBuffers& out) noexcept {
     auto* s = dispatch.load(); if (!s) return false;

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from fg_game import log_path, request_multiplier
+from fg_game import lifecycle, log_path, request_multiplier, status
 
 
 def rows(version='0.8.0', armed=True, stopped=False):
@@ -41,6 +41,16 @@ class FgGameTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     request_multiplier(args[0], log, args[1])
             self.assertFalse(list(Path(d).iterdir()))
+
+
+    def test_lifecycle_and_stop_reason(self):
+        r = rows() + [dict(event='swap_lifecycle', method=8, name='resize_buffers', guard_off=True),
+                      dict(event='fg_status', session=dict(on=True)),
+                      dict(event='presentation_state', resizes=5),
+                      dict(event='fg_stopped', reason='temporal_unhealthy', session=dict(on=False, lifecycle_offs=1))]
+        self.assertEqual([e['event'] for e in lifecycle(r)], ['swap_lifecycle', 'presentation_state'])
+        s = status(r)
+        self.assertEqual((s['event'], s['reason'], s['lifecycle_offs']), ('fg_stopped', 'temporal_unhealthy', 1))
 
 
 if __name__ == '__main__':

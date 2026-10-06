@@ -31,6 +31,24 @@ struct PresentationObserver {
     bool (*begin)(void*, std::uintptr_t native_swap, unsigned flags) noexcept{};
     void (*end)(void*, std::uintptr_t native_swap, unsigned flags, HRESULT native_result) noexcept{};
 };
+// Swap-chain lifecycle call made by the host (not by the SDK's own recursion).
+// Methods: 1..3 create (desc, hwnd, core window), 6 SetFullscreenState,
+// 8 ResizeBuffers, 11 ResizeBuffers1, 12 ResizeTarget. CPU metadata only.
+struct LifecycleEvent {
+    unsigned method{}, thread{};
+    bool host_thread{}, current_chain{}, routed{}, guard_off{};
+    std::uint32_t result{};
+    std::uint64_t sequence{}, began_qpc{}, ended_qpc{};
+    std::array<std::uint64_t, 6> args{};
+    bool described{}, windowed{};  // chain description after the call
+    std::uint32_t width{}, height{}, format{}, buffers{}, flags{};
+};
+// Called on the calling thread before a lifecycle call is forwarded, outside
+// the route mutex. Returns true if it turned an active feature Off.
+struct LifecycleListener {
+    void* context{};
+    bool (*before)(void*, unsigned method) noexcept{};
+};
 // One process-lived instance. Native interfaces stay in the host, including
 // every returned queue/swap-chain reference. Mandatory public COM calls use
 // owned SDK proxies; a TLS guard sends their native calls to the trampolines.
@@ -38,6 +56,9 @@ struct PresentationObserver {
 // No frame tokens, sleep, markers, resource tags or rendering work here.
 class Presentation final {
 public:
+    // The FG scene variant also hooks ResizeTarget (13); others install 12.
+    static constexpr unsigned hook_capacity = 13;
+    static constexpr unsigned lifecycle_capacity = 64;
     struct State;
     explicit Presentation(Streamline& sdk);
     Presentation(const Presentation&) = delete;
@@ -48,6 +69,11 @@ public:
     void install(ID3D12Device* native_device, IDXGIFactory2* native_factory,
                  PresentationContract contract = PresentationContract::synchronous_native);
     void observe(PresentationObserver observer);
+    // At most one listener, set once while routing.
+    void lifecycle(LifecycleListener listener);
+    // Copies lifecycle events recorded since the last call (oldest first) and
+    // the number lost to the bounded buffer. Never waits for the route mutex.
+    unsigned drain_lifecycle(std::array<LifecycleEvent, lifecycle_capacity>& out, std::uint64_t& dropped) noexcept;
     // Opt-in CPU metadata only, configured before install. No added hooks,
     // resource references, rendering calls or FG plugin initialization.
     void ownership(std::uintptr_t image, unsigned image_bytes);
@@ -57,7 +83,7 @@ public:
     bool stop() noexcept;
     // Requires successful stop and SDK shutdown. False retains all pins.
     bool release_after_shutdown() noexcept;
-    const std::array<PresentationHook, 12>& hooks() const noexcept;
+    const std::array<PresentationHook, hook_capacity>& hooks() const noexcept;
 private:
     // Retain dispatch/trampoline storage for stale entry pointers. Deliberately
     // no destructor that could call the SDK under process-detach loader lock.

@@ -41,6 +41,7 @@ namespace { bool fg_plugin = true; unsigned fg_multiplier = 2; }
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 namespace pb = mhw::projection_binding;
@@ -70,7 +71,7 @@ mhw::reflex::Presentation* presentation{};
 #ifdef MHW_REFLEX_OWNERSHIP_PROBE
 bool ownership_written{};
 #endif
-std::array<mhw::reflex::PresentationHook, 12> presentation_heads{};
+std::array<mhw::reflex::PresentationHook, mhw::reflex::Presentation::hook_capacity> presentation_heads{};
 static_assert(sizeof(mhw::reflex::PresentationHook) == 48, "versioned retained-head metadata");
 std::filesystem::path stop_file;
 #ifdef MHW_REFLEX_FRAME_PROBE
@@ -309,6 +310,9 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
                 // Streamline owns pacing, generated presentation and the host-visible buffers.
                 presentation->install(device_pin.Get(), factory_pin.Get(), fg_plugin ? mhw::reflex::PresentationContract::sdk_paced
                                                                                       : mhw::reflex::PresentationContract::synchronous_native);
+                // DLSS-G Off before any host window manipulation (guide 12.0).
+                presentation->lifecycle({presentation, [](void*, unsigned method) noexcept {
+                    return mhw::frame_generation::game::lifecycle_guard(method); }});
 #else
                 presentation->install(device_pin.Get(), factory_pin.Get());
 #endif
@@ -454,6 +458,39 @@ void log_fg_buffers(std::ostream& out, const char* phase) {
     char text[512]{}; const int n = fg_buffers_json(text, sizeof text);
     out << "{\"event\":\"fg_buffers\",\"phase\":\"" << phase << "\",\"buffers\":" << (n > 0 ? text : "null") << "}\n" << std::flush;
 }
+// Host swap-chain lifecycle calls recorded by the presentation hooks.
+std::uint64_t lifecycle_dropped_logged{};
+const char* stop_reason="not_armed";  // Why the FG worker loop ended.
+void log_lifecycle(std::ostream& out) {
+    if (!presentation) return;
+    std::array<mhw::reflex::LifecycleEvent, mhw::reflex::Presentation::lifecycle_capacity> events{};
+    std::uint64_t dropped{};
+    const auto count = presentation->drain_lifecycle(events, dropped);
+    if (!count && dropped == lifecycle_dropped_logged) return;
+    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+    constexpr const char* names[]{"", "create_swap_chain", "create_for_hwnd", "create_for_core_window", "", "", "set_fullscreen_state",
+                                  "", "resize_buffers", "", "", "resize_buffers1", "resize_target"};
+    for (unsigned i = 0; i < count; ++i) {
+        const auto& e = events[i];
+        out << "{\"event\":\"swap_lifecycle\",\"sequence\":" << e.sequence << ",\"method\":" << e.method << ",\"name\":\""
+            << (e.method < std::size(names) ? names[e.method] : "") << "\",\"thread\":" << e.thread << ",\"host_thread\":" << e.host_thread
+            << ",\"current_chain\":" << e.current_chain << ",\"routed\":" << e.routed << ",\"guard_off\":" << e.guard_off
+            << ",\"result\":" << e.result << ",\"qpc\":" << e.began_qpc << ",\"ms\":"
+            << (frequency.QuadPart ? double(e.ended_qpc - e.began_qpc) * 1000.0 / double(frequency.QuadPart) : 0.0) << ",\"args\":[";
+        for (unsigned n = 0; n < e.args.size(); ++n) out << (n ? "," : "") << e.args[n];
+        out << "],\"after\":";
+        if (e.described)
+            out << "{\"width\":" << e.width << ",\"height\":" << e.height << ",\"format\":" << e.format << ",\"buffers\":" << e.buffers
+                << ",\"flags\":" << e.flags << ",\"windowed\":" << e.windowed << "}";
+        else out << "null";
+        out << "}\n";
+    }
+    if (dropped != lifecycle_dropped_logged) {
+        out << "{\"event\":\"swap_lifecycle_dropped\",\"dropped\":" << dropped << "}\n";
+        lifecycle_dropped_logged = dropped;
+    }
+    out << std::flush;
+}
 #endif
 DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
@@ -507,7 +544,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.9.3\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.10.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -588,7 +625,11 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
             const auto wait_start=GetTickCount64();
             while(!std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file) && GetTickCount64()-wait_start<600000) {
-                const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;Sleep(100);
+                const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;
+#ifdef MHW_FG_GAME
+                log_lifecycle(log);
+#endif
+                Sleep(100);
             }
             if(std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file)) {
 #ifdef MHW_REFLEX_OWNERSHIP_PROBE
@@ -634,9 +675,15 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_FG_GAME
                 unsigned multiplier_requests{};
+                stop_reason="duration";
 #endif
                 while(!std::filesystem::exists(stop_file) && GetTickCount64()-started<capture_seconds*1000ULL) {
                     const auto frames=live_frames->snapshot();const auto stats=presentation->snapshot();
+#ifdef MHW_FG_GAME
+                    log_lifecycle(log);
+                    if(!frames.running || frames.faults){stop_reason="reflex_frames";break;}
+                    if(!stats.routing || stats.faults){stop_reason="presentation";break;}
+#endif
                     if(!frames.running || frames.faults || !stats.routing || stats.faults)break;
 #ifdef MHW_FG_SCENE_PROBE
                     if(frames.completed&&scene_requested<4) {
@@ -675,7 +722,12 @@ DWORD WINAPI worker(void*) noexcept {
                     }
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
-                    if(!mhw::reflex::temporal::healthy())break;
+                    if(!mhw::reflex::temporal::healthy()){
+#ifdef MHW_FG_GAME
+                        stop_reason="temporal_unhealthy";mhw::reflex::temporal::fault_snapshot();
+#endif
+                        break;
+                    }
 #endif
                     const auto now=GetTickCount64();
                     if(now-last>=5000) {
@@ -729,11 +781,29 @@ DWORD WINAPI worker(void*) noexcept {
             const auto fg_off_began=GetTickCount64();
             while(mhw::frame_generation::game::frame_generation_on() && GetTickCount64()-fg_off_began<3000)Sleep(10);
             const auto frames=live_frames->snapshot();
-            log << "{\"event\":\"fg_stopped\",\"off\":" << !mhw::frame_generation::game::frame_generation_on()
+            if(stop_reason==std::string_view("duration")&&std::filesystem::exists(stop_file))stop_reason="stop_request";
+            log_lifecycle(log);
+            log << "{\"event\":\"fg_stopped\",\"reason\":\"" << stop_reason << "\",\"off\":" << !mhw::frame_generation::game::frame_generation_on()
                 << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults << ",\"session\":";
             mhw::frame_generation::game::write(log);log << "}\n";
         }
         log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":true,\"temporal_active\":true}\n" << std::flush;
+        // Keep recording host lifecycle calls (resizes after FG ended) with a
+        // presentation heartbeat on change, until exit or 30 minutes.
+        {
+            const auto observed_from=GetTickCount64();std::uint64_t last_resizes=~0ULL,last_swapchains=~0ULL;
+            while(presentation&&GetTickCount64()-observed_from<1800000ULL){
+                log_lifecycle(log);
+                const auto stats=presentation->snapshot();
+                if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
+                    log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes
+                       <<",\"width\":"<<stats.width<<",\"height\":"<<stats.height<<",\"buffers\":"<<stats.buffers<<",\"faults\":"<<stats.faults
+                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<"}\n"<<std::flush;
+                    last_resizes=stats.resizes;last_swapchains=stats.swapchains;
+                }
+                Sleep(100);
+            }
+        }
         return 0;
 #endif
 #ifdef MHW_REFLEX_TEMPORAL

@@ -83,6 +83,13 @@ void sample(){
     if(samples<=12||(samples&(samples-1))==0)cd::write(events);
     require(bool(events),"temporal-heartbeat-log");
 }
+void fault_snapshot() noexcept {
+    try{
+        if(!installed||!events.is_open())return;
+        std::ofstream status(directory/(name+".status.json"),std::ios::binary|std::ios::trunc);cd::write(status);
+        events<<"{\"event\":\"fault_snapshot\"}\n";cd::write(events);events<<std::flush;
+    }catch(...){}
+}
 bool finish() noexcept {
     if(finished)return clean;
     finished=true;clean=!attempted;

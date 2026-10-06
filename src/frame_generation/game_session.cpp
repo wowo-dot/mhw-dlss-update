@@ -81,7 +81,7 @@ struct Session {
     sl::DLSSGState state{};
     bool state_valid{};
     std::uint64_t presents{}, tagged{}, recorded{}, record_failed{}, size_mismatch{}, state_failed{}, mode_changes{},
-        null_tags{}, unpresented{}, exceptions{};
+        null_tags{}, unpresented{}, exceptions{}, lifecycle_calls{}, lifecycle_offs{};
     std::atomic<unsigned> requested_multiplier{2};
     unsigned applied_generated{};  // 0 while Off
     std::uint64_t generated_changes{}, generated_limited{};
@@ -382,6 +382,27 @@ void reset(std::uint64_t list, std::uint64_t generation) noexcept {
 
 static void finish_pending(Session &s, bool presented);
 
+bool lifecycle_guard(unsigned) noexcept {
+    auto &s = session;
+    try {
+        std::lock_guard lock(s.mutex);
+        ++s.lifecycle_calls;
+        if (!s.sdk || !s.on.load()) return false;
+        // No frame token here: depth/motion/HUD-less stay tagged until the next
+        // Present (eValidUntilPresent) and are re-tagged or nulled there.
+        const auto result = s.sdk->frame_generation_off(viewport, true);
+        if (result != sl::Result::eOk) s.last_sdk_error = result;
+        s.on.store(false);
+        s.applied_generated = 0;
+        ++s.mode_changes;
+        ++s.lifecycle_offs;
+        return true;
+    } catch (...) {
+        ++session.exceptions;
+        return false;
+    }
+}
+
 void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noexcept {
     auto &s = session;
     try {
@@ -547,7 +568,7 @@ void write(std::ostream &o) {
       << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged
       << ",\"recorded\":" << s.recorded << ",\"record_failed\":" << s.record_failed << ",\"size_mismatch\":" << s.size_mismatch
       << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes << ",\"null_tags\":" << s.null_tags
-      << ",\"unpresented\":" << s.unpresented << ",\"exceptions\":" << s.exceptions << ",\"last_sdk_error\":" << static_cast<unsigned>(s.last_sdk_error) << ",\"off\":{";
+      << ",\"unpresented\":" << s.unpresented << ",\"lifecycle_calls\":" << s.lifecycle_calls << ",\"lifecycle_offs\":" << s.lifecycle_offs << ",\"exceptions\":" << s.exceptions << ",\"last_sdk_error\":" << static_cast<unsigned>(s.last_sdk_error) << ",\"off\":{";
     for (unsigned i = 0; i < s.off.size(); ++i) o << (i ? "," : "") << '"' << off_names[i] << "\":" << s.off[i];
     o << "},\"camera_failures\":[";
     for (unsigned i = 0; i < s.camera_failures.size(); ++i) o << (i ? "," : "") << s.camera_failures[i];

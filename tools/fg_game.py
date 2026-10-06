@@ -5,6 +5,8 @@
                            limited by the GPU's reported capability; v0.8+)
   stop    --run <folder>   FG Off; Streamline, DLSS and Reflex stay live
   status  --run <folder>   latest FG session counters
+  lifecycle --run <folder>  host swap-chain lifecycle calls (resize, full-screen,
+                           ResizeTarget, creation) and presentation state (v0.10+)
   summary --run <folder>   write summary.json from the run's logs
 
 Controls use the existing generation-checked marker files and process-identity
@@ -17,7 +19,7 @@ from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
 
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3')
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0')
 
 
 def log_path(run):
@@ -52,9 +54,17 @@ def status(rows):
     session = (s or {}).get('session', {})
     keys = ('armed', 'on', 'hudless', 'staged', 'staged_dropped', 'final_unstaged', 'final_mismatch', 'multiplier', 'generated', 'generated_changes', 'generated_limited', 'presented_frames',
             'presents', 'tagged', 'recorded', 'mode_changes', 'record_failed', 'exceptions', 'last_sdk_error', 'off',
+            'lifecycle_calls', 'lifecycle_offs',
             'present_delta', 'camera_failures')
-    return dict(event=(s or {}).get('event'), **{k: session.get(k) for k in keys},
+    return dict(event=(s or {}).get('event'), reason=(s or {}).get('reason'), **{k: session.get(k) for k in keys},
                 ring=session.get('ring'), sdk_state=session.get('state'))
+
+
+LIFECYCLE_EVENTS = ('swap_lifecycle', 'swap_lifecycle_dropped', 'presentation_state')
+
+
+def lifecycle(rows):
+    return [r for r in rows if r.get('event') in LIFECYCLE_EVENTS]
 
 
 def request_multiplier(rows, path, total):
@@ -93,13 +103,14 @@ def summary(rows, raw):
         tagged_progression=[s.get('tagged') for s in statuses],
         frames_presented_progression=[(s.get('state') or {}).get('frames_presented') for s in statuses],
         final=final, stopped=bool(stopped), off_after_stop=(stopped or {}).get('off'),
+        stop_reason=(stopped or {}).get('reason'), lifecycle=lifecycle(rows),
         retained=bool(one('fg_runtime_retained')),
         visual_quality_verified=False, latency_measured=False, performance_measured=False)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'summary'))
+    p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'lifecycle', 'summary'))
     p.add_argument('--run', type=Path, required=True)
     p.add_argument('--x', type=int, help='total frame multiplier for the multiplier action')
     a = p.parse_args()
@@ -112,6 +123,8 @@ def main():
         result = request_multiplier(rows, path, a.x or 0)
     elif a.action == 'status':
         result = status(rows)
+    elif a.action == 'lifecycle':
+        result = lifecycle(rows)
     else:
         result = summary(rows, raw)
         with (a.run / 'summary.json').open('x', encoding='utf-8') as f:

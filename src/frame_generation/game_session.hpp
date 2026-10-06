@@ -55,6 +55,13 @@ bool capture_wanted() noexcept;
 void submitted(std::uint64_t list, std::uint64_t generation, std::uint64_t batch) noexcept;
 void reset(std::uint64_t list, std::uint64_t generation) noexcept;
 
+// Presentation lifecycle listener (host thread, before a swap-chain resize,
+// full-screen change, ResizeTarget or creation is forwarded): DLSS-G must be
+// Off before any window manipulation (DLSS-G guide 12.0, 17.0). Turns it Off
+// now; a later Present turns it On again only through the normal path.
+// Returns whether it was On.
+bool lifecycle_guard(unsigned method) noexcept;
+
 void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noexcept;
 void present_end(bool presented) noexcept;
 

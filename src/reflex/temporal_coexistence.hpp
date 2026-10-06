@@ -14,6 +14,9 @@ void prepare(HMODULE, const std::filesystem::path&, std::uintptr_t);
 void arm(ID3D12Device*);
 bool healthy() noexcept;
 void sample();
+// Writes the runtime state to the input log and status file without requiring
+// health (for the record of why the runtime became unhealthy). No throw.
+void fault_snapshot() noexcept;
 bool finish() noexcept;
 void receipt(std::ostream&, const char* phase, ID3D12Device*);
 }
