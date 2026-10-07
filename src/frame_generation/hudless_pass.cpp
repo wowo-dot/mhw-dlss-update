@@ -13,10 +13,12 @@ void require(bool v, const char *why) { if (!v) throw std::runtime_error(why); }
 void hr(HRESULT v, const char *why) { require(SUCCEEDED(v), why); }
 constexpr std::uint32_t probe_magic = 0x48554431;   // "HUD1"
 constexpr std::uint32_t screen_magic = 0x53435231;  // "SCR1"
-constexpr unsigned probe_bytes = 32, state_bytes = 32;
+constexpr unsigned probe_bytes = 48, state_bytes = 48;
 
 // State buffer: [0] g, [4] fGammaCorrect, [8] 1, [12] SCREEN_MAGIC (last valid
-// capture); [16] attempts, [20] matches, [24..31] raw values of the last attempt.
+// capture); [16] attempts, [20] matches, [24..31] raw values of the last attempt;
+// [32..47] iRegion of the last valid capture (where the screen write places the
+// scene; logged for the aspect-ratio option, not used by the transform).
 //
 // Capture. CBSystem layout from the game's reflection: iRegion@0,
 // fSourceMipLevel@16, fGammaCorrect@20, fGammaCorrectEx@24. fGammaCorrect
@@ -31,6 +33,7 @@ RWByteAddressBuffer state : register(u0);
     state.Store2(24, uint2(asuint(fGammaCorrect), asuint(g)));
     if (ok) {
         state.Store4(0, uint4(asuint(g), asuint(fGammaCorrect), 1u, SCREEN_MAGIC));
+        state.Store4(32, iRegion);
         state.InterlockedAdd(20, 1u);
     }
 }
@@ -51,6 +54,7 @@ float encode(float c) { c = saturate(c); return c <= 0.0031308 ? 12.92 * c : 1.0
     if (id.x == 0 && id.y == 0) {
         probe.Store4(0, uint4(s.x, s.y, ok ? 1u : 0u, PROBE_MAGIC));
         probe.Store4(16, state.Load4(16));
+        probe.Store4(32, state.Load4(32));
     }
     uint w, h; hudless.GetDimensions(w, h);
     if (id.x >= w || id.y >= h) return;
@@ -228,7 +232,7 @@ HudlessPass::Probe HudlessPass::probe(unsigned slot) const noexcept {
     const auto *v = mapped_ + slot * (probe_bytes / 4);
     if (v[3] != probe_magic) return {};
     return {std::bit_cast<float>(v[0]), std::bit_cast<float>(v[1]), v[2] == 1, true, v[4], v[5],
-            std::bit_cast<float>(v[6]), std::bit_cast<float>(v[7])};
+            std::bit_cast<float>(v[6]), std::bit_cast<float>(v[7]), {v[8], v[9], v[10], v[11]}};
 }
 
 }  // namespace mhw::frame_generation

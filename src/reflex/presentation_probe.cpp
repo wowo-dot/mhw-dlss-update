@@ -544,7 +544,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.11.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.11.1\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -656,21 +656,26 @@ DWORD WINAPI worker(void*) noexcept {
                 live_frames->install(image,reinterpret_cast<std::uintptr_t>(device_pin.Get()),log);live_frames->describe(log,static_cast<unsigned>(capture_mode));
                 log << "{\"event\":\"frames_armed\",\"mode\":1,\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n" << std::flush;
 #ifdef MHW_FG_GAME
-                // FG needs the scene to fill the window until its letterbox and
-                // pillarbox placement exists; DLSS and Reflex continue either way.
+                // With MHW's aspect-ratio option the scene is letterboxed or
+                // pillarboxed in the back buffer, centred (checked against the
+                // screen write's iRegion and viewport in the FG status).
                 unsigned scene_width{}, scene_height{}, window_width{}, window_height{};
                 const bool scene_known = mhw::reflex::temporal::scene_extent(scene_width, scene_height, window_width, window_height);
-                if (const auto chain = presentation->snapshot(); !scene_known || scene_width != chain.width || scene_height != chain.height) {
+                if (const auto chain = presentation->snapshot(); !scene_known || !scene_width || !scene_height ||
+                    scene_width > chain.width || scene_height > chain.height || window_width != chain.width || window_height != chain.height) {
                     log << "{\"event\":\"fg_unsupported\",\"reason\":\"scene_rect\",\"scene_known\":" << scene_known
                         << ",\"scene\":[" << scene_width << ',' << scene_height << "],\"window\":[" << window_width << ',' << window_height
                         << "],\"chain\":[" << chain.width << ',' << chain.height << "]}\n" << std::flush;
                 } else {
-                    mhw::frame_generation::game::configure(sdk, chain.width, chain.height);
+                    const mhw::frame_generation::game::SceneRect scene{(chain.width - scene_width) / 2, (chain.height - scene_height) / 2,
+                                                                       scene_width, scene_height};
+                    mhw::frame_generation::game::configure(sdk, chain.width, chain.height, scene);
                     mhw::frame_generation::game::multiplier(fg_multiplier);
                     mhw::frame_generation::game::arm(true);
                     sl::DLSSGState fg_state{};
                     const auto fg_state_result = sdk.frame_generation_state(sl::ViewportHandle{0}, fg_state);
                     log << "{\"event\":\"fg_armed\",\"width\":" << chain.width << ",\"height\":" << chain.height
+                        << ",\"scene\":[" << scene.x << ',' << scene.y << ',' << scene.width << ',' << scene.height << ']'
                         << ",\"state_result\":" << static_cast<int>(fg_state_result) << ",\"status\":" << static_cast<unsigned>(fg_state.status)
                         << ",\"max_generated\":" << fg_state.numFramesToGenerateMax << ",\"min_width_or_height\":" << fg_state.minWidthOrHeight
                         << ",\"vsync_support\":" << static_cast<int>(fg_state.bIsVsyncSupportAvailable) << "}\n" << std::flush;

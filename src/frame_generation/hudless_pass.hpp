@@ -26,6 +26,7 @@ public:
         bool parameters_ok{}, valid{};  // A valid capture was used; probe written
         std::uint32_t attempts{}, matches{};  // Captures executed / accepted, lifetime
         float last_gamma{}, last_gamma_ex{};  // Raw values of the last attempt
+        std::array<std::uint32_t, 4> region{};  // CBSystem iRegion of the last valid capture
     };
     // A shader as the constructor builds it; throws with the compiler's
     // message. No device needed (offline tests use it).

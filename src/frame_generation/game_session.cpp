@@ -3,6 +3,7 @@
 #include "input_ring.hpp"
 #include "hudless_pass.hpp"
 #include "../temporal_present/bindings.hpp"
+#include "../temporal_present/observer.hpp"
 #include "../reflex/frame_generation_policy.hpp"
 #include "../reflex/streamline.hpp"
 #include <wrl/client.h>
@@ -57,6 +58,11 @@ struct Session {
     std::mutex mutex;
     reflex::Streamline *sdk{};
     unsigned output_width{}, output_height{};
+    SceneRect scene;  // In the back buffer; the HUD-less image is scene-sized
+    // Viewport (x, y, w, h) and scissor (l, t, r, b) of each capture candidate
+    // in the latest frame that had captures; the screen write is one of them.
+    std::array<std::array<int, 8>, capture_limit> candidates{};
+    unsigned candidate_count{};
     std::atomic<bool> armed{}, on{};
     InputRing<slot_count> ring;
     std::array<Images, slot_count> images;
@@ -126,6 +132,9 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
     // HUD-less is optional: any failure here leaves depth/motion-only FG.
     const auto scene_desc = scene->GetDesc();
     try {
+        // The HUD-less image covers exactly the scene rectangle.
+        if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
+            throw std::runtime_error("hudless scene extent");
         s.hudless = std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
         D3D12_RESOURCE_DESC h{};
         h.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -209,11 +218,12 @@ unsigned wanted_generated(Session &s) {
 
 }  // namespace
 
-void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_height) noexcept {
+void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_height, SceneRect scene) noexcept {
     std::lock_guard lock(session.mutex);
     session.sdk = &sdk;
     session.output_width = output_width;
     session.output_height = output_height;
+    session.scene = scene;
 }
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
@@ -357,6 +367,17 @@ void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &
             ++s.capture_limited;
             return;
         }
+        temporal_present::observer::RasterBindings raster;
+        auto &c = s.candidates[s.captures_this_frame];
+        c = {};
+        if (temporal_present::observer::raster_current(list, raster)) {
+            if (raster.viewport_known)
+                c = {static_cast<int>(raster.viewport.TopLeftX), static_cast<int>(raster.viewport.TopLeftY),
+                     static_cast<int>(raster.viewport.Width), static_cast<int>(raster.viewport.Height), 0, 0, 0, 0};
+            if (raster.scissor_known)
+                c[4] = raster.scissor.left, c[5] = raster.scissor.top, c[6] = raster.scissor.right, c[7] = raster.scissor.bottom;
+        }
+        s.candidate_count = s.captures_this_frame + 1;
         try {
             s.hudless->capture(list, system.address);
             ++s.captures_this_frame;
@@ -477,7 +498,8 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         sl::Resource depth{sl::ResourceType::eTex2d, image.depth.Get(), static_cast<std::uint32_t>(tag_state)};
         sl::Resource motion{sl::ResourceType::eTex2d, image.motion.Get(), static_cast<std::uint32_t>(tag_state)};
         sl::Extent render{0, 0, frame.render_width, frame.render_height};
-        sl::Extent output{0, 0, s.output_width, s.output_height};
+        // The back buffer's scene rectangle; the HUD-less image is that size.
+        sl::Extent output{s.scene.x, s.scene.y, s.scene.width, s.scene.height}, hudless_extent{0, 0, s.scene.width, s.scene.height};
         // A slot without HUD-less clears that tag explicitly (null resource).
         const bool with_hudless = s.slot_hudless[slot] && image.hudless;
         sl::Resource hudless{sl::ResourceType::eTex2d, with_hudless ? image.hudless.Get() : nullptr,
@@ -486,7 +508,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &render},
             {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &render},
             {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &output},
-            {with_hudless ? &hudless : nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &output}};
+            {with_hudless ? &hudless : nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &hudless_extent}};
         if (const auto r = s.sdk->tags(*token, viewport, tags, 4); r != sl::Result::eOk) {
             s.last_sdk_error = r;
             s.ring.untag(slot);
@@ -555,7 +577,14 @@ void write(std::ostream &o) {
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
       << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << ",\"gpu_attempts\":"
       << s.last_probe.attempts << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":["
-      << s.last_probe.last_gamma << ',' << s.last_probe.last_gamma_ex << "],\"captures\":" << s.captures
+      << s.last_probe.last_gamma << ',' << s.last_probe.last_gamma_ex << "],\"screen_region\":[" << s.last_probe.region[0] << ','
+      << s.last_probe.region[1] << ',' << s.last_probe.region[2] << ',' << s.last_probe.region[3] << "],\"candidates\":[";
+    for (unsigned i = 0; i < s.candidate_count; ++i) {
+        o << (i ? ",[" : "[");
+        for (unsigned j = 0; j < 8; ++j) o << (j ? "," : "") << s.candidates[i][j];
+        o << ']';
+    }
+    o << "],\"captures\":" << s.captures
       << ",\"capture_no_cbv\":" << s.capture_no_cbv << ",\"capture_limited\":" << s.capture_limited
       << ",\"capture_failed\":" << s.capture_failed << ",\"error\":\"" << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
       << ",\"staged_dropped\":" << s.staged_dropped << ",\"final_unstaged\":" << s.final_unstaged
@@ -564,7 +593,8 @@ void write(std::ostream &o) {
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"
       << ",\"created\":" << s.created << ",\"create_failed\":" << s.create_failed << ",\"output\":[" << s.output_width << ','
-      << s.output_height << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
+      << s.output_height << "],\"scene\":[" << s.scene.x << ',' << s.scene.y << ',' << s.scene.width << ',' << s.scene.height
+      << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
       << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged
       << ",\"recorded\":" << s.recorded << ",\"record_failed\":" << s.record_failed << ",\"size_mismatch\":" << s.size_mismatch
       << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes << ",\"null_tags\":" << s.null_tags

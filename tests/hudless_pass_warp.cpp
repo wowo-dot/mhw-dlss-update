@@ -47,16 +47,17 @@ struct Step {
     float gamma, gamma_ex;          // Last valid capture (probe), 0 before any
     std::uint32_t attempts, matches;
     float last_gamma, last_gamma_ex;  // Raw values of the last attempt
+    int region;                       // Candidate whose iRegion the state keeps (-1 none)
 };
 constexpr Step steps[]{
-    {{-1, -1}, false, 0.0f, 0.0f, 0, 0, 0.0f, 0.0f},
-    {{0, -1}, true, gamma_correct, 2.0f, 1, 1, gamma_correct, 2.0f},
-    {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f},  // bad layout: keep 2
-    {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f},
-    {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f},  // out of range: keep 0.5
-    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f},           // valid then invalid
-    {{6, -1}, true, gamma_correct, 0.1f, 7, 4, gamma_correct, 0.1f},  // the game's minimum
-    {{7, -1}, true, gamma_correct, 3.0f, 8, 5, gamma_correct, 3.0f}}; // and maximum
+    {{-1, -1}, false, 0.0f, 0.0f, 0, 0, 0.0f, 0.0f, -1},
+    {{0, -1}, true, gamma_correct, 2.0f, 1, 1, gamma_correct, 2.0f, 0},
+    {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f, 0},  // bad layout: keep 2
+    {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f, 2},
+    {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f, 2},  // out of range: keep 0.5
+    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f, 4},           // valid then invalid
+    {{6, -1}, true, gamma_correct, 0.1f, 7, 4, gamma_correct, 0.1f, 6},  // the game's minimum
+    {{7, -1}, true, gamma_correct, 3.0f, 8, 5, gamma_correct, 3.0f, 7}}; // and maximum
 
 struct Device {
     ComPtr<ID3D12Device> device;
@@ -180,13 +181,15 @@ int main() {
         b.Width = 256 * std::size(candidates);
         auto constants = f.resource(b, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 
-        // CBSystem per candidate at 256-byte strides: fGammaCorrect@20, fGammaCorrectEx@24.
+        // CBSystem per candidate at 256-byte strides: iRegion@0, fGammaCorrect@20, fGammaCorrectEx@24.
         std::byte *cb{};
         const D3D12_RANGE none{};
         hr(constants->Map(0, &none, reinterpret_cast<void **>(&cb)), "map constants");
         for (unsigned i = 0; i < std::size(candidates); ++i) {
             const float values[3]{candidates[i][0], candidates[i][1], 7.0f};
+            const std::uint32_t region[4]{i, 10 + i, 100 + i, 200 + i};
             std::memset(cb + 256 * i, 0, 256);
+            std::memcpy(cb + 256 * i, region, sizeof(region));
             std::memcpy(cb + 256 * i + 20, values, sizeof(values));
         }
         constants->Unmap(0, nullptr);
@@ -241,7 +244,10 @@ int main() {
             const auto probe = pass.probe(slot);
             require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex && probe.parameters_ok == c.ok &&
                         probe.attempts == c.attempts && probe.matches == c.matches && probe.last_gamma == c.last_gamma &&
-                        probe.last_gamma_ex == c.last_gamma_ex,
+                        probe.last_gamma_ex == c.last_gamma_ex &&
+                        probe.region == (c.region < 0 ? std::array<std::uint32_t, 4>{}
+                                                      : std::array<std::uint32_t, 4>{unsigned(c.region), 10u + c.region,
+                                                                                     100u + c.region, 200u + c.region}),
                     "probe step " + std::to_string(i) + ": attempts " + std::to_string(probe.attempts) + " matches " +
                         std::to_string(probe.matches) + " g " + std::to_string(probe.gamma_ex));
             const float g = c.ok ? c.gamma_ex : 1.0f;
