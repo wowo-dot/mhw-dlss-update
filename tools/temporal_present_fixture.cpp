@@ -192,6 +192,9 @@ float4 ps(float4 p:SV_Position):SV_Target { return float4(src.SampleLevel(samp,p
         rejects([&]{tp::Output invalid(device.Get(),tp::SpatialSource{sw,sh,sw+1,ah},w,h);});
         rejects([&]{tp::Output invalid(device.Get(),tp::SpatialSource{sw,sh,0,ah},w,h);});
         rejects([&]{tp::Output invalid(device.Get(),tp::SpatialSource{sw,sh,aw+1,ah},w,h);});
+        // The truncated half of an odd output (a pillarboxed 3413-wide scene).
+        if(w&1){tp::Output half(device.Get(),tp::SpatialSource{sw,sh,w/2,h/2},w,h);}
+        else rejects([&]{tp::Output invalid(device.Get(),tp::SpatialSource{sw,sh,w/2+1,h/2},w,h);});
     }
     rejects([&]{output.record(list.Get());});rejects([&]{output.bind(source.Get(),source.Get());});
     rejects([&]{output.bind(source.Get(),follow.Get());});
