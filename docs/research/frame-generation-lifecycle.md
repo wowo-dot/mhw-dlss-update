@@ -70,14 +70,58 @@ Expected: no hang or crash. The first size change stops DLSS and FG
 records show what MHW calls, on which thread, and how long each call takes
 with FG just turned Off.
 
-## Phase 2 (planned): resume at the new size
+### Phase 1 result (game-11, 2026-10-07)
 
-A size change becomes a controlled lifecycle stop, distinct from a fault:
-1. Turn FG Off and stop the DLSS route, restoring the native path.
-2. Wait until the game's renderer and swap chain are stable at the new size.
-3. Rebuild the DLSS route: discovery, NGX feature, stream route,
-   render-scale target. This also removes the 2560x1440 hard-codes.
-4. Recreate the FG session resources and re-arm FG with the new output
-   extent.
+- **MHW applies resolution and screen-mode changes only on restart.** It
+  never resizes or recreates its swap chain to change size in a running game.
+  The run folder holds three launches: 2560x1440, 1920x1080, then 2560x1440
+  again (windowed), with no hang or crash.
+- **At startup** MHW creates the chain once (`create_for_hwnd`: 3 buffers,
+  flags 2114, windowed; the chain then reports 6 buffers) and calls
+  `ResizeBuffers` 4 times at the same size, the last about 13 s after creation.
+  All of these come before arming, so the guard never had to act.
+- **While armed** (third launch, about 7.5 minutes at 2x, then a normal exit)
+  there were no lifecycle calls at all. FG went Off and On only through the
+  usual missing-frame path (`no_ready` 464, `mode_changes` 11, both during
+  loading).
+- The guard stays in place: it is the documented contract, and it costs
+  nothing when no call arrives.
 
-The details depend on the Phase 1 observations.
+## Phase 2 (replaced): start at any resolution
+
+There is no live size change to recover from. The mod instead has to work at
+whatever size the game starts at; until now it had only run at 2560x1440. An
+audit of the FG DLL's sources found:
+
+1. **DOF admission accepted only 1440p** (`stream_route.cpp`,
+   `dof_native_sequence.hpp`). At other sizes, frames with DOF fell back to
+   native, and FG blinked off on them. **Fixed in v0.10.1:** sizes and
+   dispatch counts are derived from the screen size (20-pixel tiles from the
+   pass 0 shader, half-size blur, the documented group sizes). The CBScreen
+   check is derived too, with one ULP allowed on the reciprocals. The first
+   mismatch is logged as `dof_native_sequence.miss`.
+2. **TAA dispatch rounding** is assumed to be ceil(render/16)
+   (`temporal_bindings/inputs.cpp`). It divides exactly at 1440p, so the
+   1080p run is its first real check.
+3. **4K and other sizes over 4,194,304 pixels** fail at startup: the
+   `valid_extent` ceiling, the 80 MiB readback cap and the 400 MiB budget in
+   `dlss_sdk/inline.cpp`, plus the ceilings in `temporal_present` and
+   `filter_shader.cpp`. The large readbacks only serve diagnostic captures, so
+   this goes together with the alpha cleanup.
+4. **Display widths that are not a multiple of 32** (3440, 1366, 1680) fail
+   at startup. The game rounds its render width down to a multiple of 16, so
+   the render size is no longer exactly half. Supporting them needs the game's
+   actual render size throughout instead of width/2.
+5. **Even sizes are required** (odd widths or heights fail at startup).
+
+### v0.10.1 test (game-12)
+
+Launch at 1920x1080 windowed. Arm at the main menu, play at 2x in an area
+with DOF (cutscenes, Gallery, focus-heavy scenes), then exit. Expect:
+- DLSS frames at 960x540, with no `temporal_unhealthy` stop;
+- `dof_native_sequence.qualified` rising, with `mismatches` at 0;
+- HUD-less tagging and the brightness capture as at 1440p.
+
+If any mismatch appears, `miss` gives the observed value. A later launch
+should cover borderless and fullscreen at startup:
+`render_resolution` requires the game's display size to equal the chain's.

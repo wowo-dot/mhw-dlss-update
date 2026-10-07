@@ -5,10 +5,12 @@ MHW** on the DLSS Performance path with Reflex On. The multiplier changes live
 from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. Since
 v0.9.1 DLSS-G also gets a **HUD-less colour** input, and the HUD stays stable
 in generated frames. v0.9.2 takes the brightness from the game's own screen
-write. The current build is v0.10.0 (git tag `v0.10.0`), Phase 1 of the resize
-milestone. DLAA, DLSS Performance
-and Reflex keep working. Next: resize, then the configuration-based alpha with
-performance cleanup.
+write. MHW applies resolution and screen-mode changes only on restart, so the
+resize milestone became "start at any resolution". The current build is
+v0.10.1 (git tag `v0.10.1`), which derives the DOF sequence from the screen
+size (`frame-generation-lifecycle.md`). DLAA, DLSS Performance and Reflex keep
+working. Next: confirm 1080p, then the configuration-based alpha with
+performance cleanup (including 4K).
 
 ## Latest result
 
@@ -43,21 +45,27 @@ Things to know:
 
 ## Plan
 
-1. Lifecycle: resolution change and swap-chain recreation with FG On.
+1. Start at any resolution: 1080p (v0.10.1), then borderless and fullscreen
+   at startup.
 2. Configuration-based alpha: remove the diagnostic readers and overhead,
-   restore the base frame rate, keep the research build separate.
+   restore the base frame rate, keep the research build separate. Lift the
+   4K limits there (the large readbacks only serve diagnostics). Widths that
+   are not a multiple of 32 (3440 ultrawide) need the game's actual render
+   size.
 
 UI colour+alpha (DLSS-G recomposition) is deferred. HUD-less colour alone gave
 a stable HUD, and the game blends its UI in linear space before the brightness
 curve, so exact recomposition is not possible
 (`frame-generation-hudless-capture-result.md`).
 
-## Installed now: v0.10.0
+## Installed now: v0.10.1
 
-`mhw_fg_game_probe` (lifecycle observation and DLSS-G Off guard,
-`frame-generation-lifecycle.md`) is in the MO2 slot with its run folder
-`local/fg-game-20261006/game-11` (latest sealed run: `game-09`, v0.9.2;
-`game-10` holds an unlaunched v0.9.3 install). Install or restore with
+`mhw_fg_game_probe` (DOF sequence from the screen size, plus the v0.10.0
+lifecycle guard) is in the MO2 slot with its run folder
+`local/fg-game-20261006/game-12` (latest sealed run: `game-11`, v0.10.0 with
+three launches; `game-10` holds an unlaunched v0.9.3 install). A run folder
+can hold several launches when MHW is restarted for a setting; `fg_game.py`
+uses the newest, or `--pid`. Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).
 `<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
 starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
