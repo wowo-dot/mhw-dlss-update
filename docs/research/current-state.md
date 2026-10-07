@@ -29,9 +29,11 @@ Working so far (`frame-generation-lifecycle.md`):
 
 The current build is v0.11.7 (git tag `v0.11.7`).
 
-**Next**
-- Re-check both 21:9 layouts with v0.11.7 (the real rectangle and HUD-less).
-- Then the configuration-based alpha with performance cleanup (including 4K).
+Both 21:9 layouts were re-checked with v0.11.7 (game-29, game-30): HUD-less was
+accepted on every frame, with zero Streamline errors and a stable HUD.
+
+**Next:** the configuration-based alpha with performance cleanup (including
+4K).
 
 ## Latest result
 
@@ -69,7 +71,6 @@ Things to know:
 1. **Start at any resolution.**
    - Done: 1080p, 1440p, borderless, exclusive fullscreen, 21:9 letterboxed,
      21:9 and 16:9 pillarboxed in 5120x1440 (DLSS, DOF and FG).
-   - Re-check both 21:9 layouts with v0.11.7's FG rectangle.
    - Open: 4K (needs DSR).
    - The arming-time right-edge tint at odd widths: re-check once the alpha
      arms at startup.
@@ -96,8 +97,8 @@ curve, so exact recomposition is not possible
 - the DOF sequence from the screen size;
 - the v0.10.0 lifecycle guard.
 
-The latest sealed run is `local/fg-game-20261006/game-28` (16:9 in 5120x1440,
-DOF and FG). `fg_game.py stop` also ends the status logging. A run
+The latest sealed run is `local/fg-game-20261006/game-30` (21:9 letterbox,
+FG with HUD-less). `fg_game.py stop` also ends the status logging. A run
 folder can hold several launches when MHW is restarted for a setting;
 `fg_game.py` uses the newest, or `--pid`. Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).

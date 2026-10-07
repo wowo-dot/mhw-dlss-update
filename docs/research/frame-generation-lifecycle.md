@@ -390,7 +390,26 @@ whole window, not on the scene.**
   full-window 16:9 runs (game-15), so it comes from before the first tagged
   frame.
 
-**Still to re-check with v0.11.7:** both 21:9 layouts, where FG now gets the
-real rectangle and HUD-less for the first time:
-- the letterbox (2560x1440 window), which uses `top`;
-- the odd 3413-wide pillarbox (5120x1440 window).
+**Both 21:9 layouts re-checked with v0.11.7.** FG now gets the real
+rectangle and HUD-less for the first time.
+
+| Run | Layout | Scene | Presented as 2 | HUD-less tagged | Streamline errors | User |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| game-29 | 21:9 pillarbox, 5120x1440 window | `[853,0,3413,1440]` | 1,460 | 2,040 | 0 | "hud looked stable" |
+| game-30 | 21:9 letterbox, 2560x1440 window | `[0,180,2560,1080]` | 1,363 | 2,182 | 0 | "hud looked stable" |
+
+The windowed 2560x1440 runs log a few flip-metering notes ("FC feedback: 1";
+game-19 had 11). They are not errors.
+
+**Start at any resolution: status (v0.11.7)**
+- Done, with DLSS, DOF and FG:
+  - 16:9 at 1080p and 1440p;
+  - windowed, borderless and exclusive fullscreen;
+  - 21:9 letterboxed (2560x1440 window);
+  - 21:9 pillarboxed (5120x1440 window, odd 3413 width);
+  - 16:9 pillarboxed (5120x1440 window).
+- **Open:**
+  - 4K, which needs DSR;
+  - the live aspect change, which fails closed;
+  - the right-edge tint at odd widths after arming mid-session. Re-check it
+    when the alpha arms at startup.
