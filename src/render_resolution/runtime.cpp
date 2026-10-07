@@ -53,10 +53,14 @@ Snapshot baseline{},reduced{},last{},restoration{};
 // in-session snapshots (an aspect-ratio change applies live, game-15).
 Snapshot startup{},first_unqualified{},last_unqualified{};
 // Views whose own scale is the truncated render/display ratio (1706/3413 for a
-// pillarboxed odd scene) rather than the requested 0.5. A new title-screen view
-// reported it (game-22). Admitted, but input_stamp still requires the
-// requested scale, so those frames skip reconstruction.
+// pillarboxed odd scene) rather than the requested 0.5. The title-screen view
+// keeps it (game-22, game-23) while rendering the same 1706x720 viewport, so it
+// counts as the planned scale; the input checks still verify the rectangle.
 std::uint64_t truncated_views{};Snapshot first_truncated{};
+float truncated_ratio() noexcept {return static_cast<float>(target.render.width)/static_cast<float>(target.display.width);}
+// The view scale of the planned extent: the quantized request, or its
+// truncated ratio (identical, 0.5, for 2:1 scenes).
+bool planned_view_scale(float value) noexcept {return value==target.quantized||value==truncated_ratio();}
 struct ViewportSample {std::uint64_t tick{};std::uintptr_t caller{};std::array<float,6> values{};};
 ViewportSample first_reduced_viewport{},last_reduced_viewport{};
 void fail(unsigned reason) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,reason);requested=false;}
@@ -100,7 +104,7 @@ bool snapshot(Snapshot &s) noexcept {
     if(s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F)return stop(16);
     // A view may hold the truncated ratio of the planned render extent, just
     // under 0.5 for an odd scene; 2:1 scenes keep the 0.5 floor exactly.
-    const float view_floor=std::min(.5F,static_cast<float>(target.render.width)/static_cast<float>(target.display.width));
+    const float view_floor=std::min(.5F,truncated_ratio());
     if(s.desired<.5F||s.desired>1.F||s.applied<.5F||s.applied>1.F||s.view_scale<view_floor||s.view_scale>1.F)return stop(17);
     if(s.view_flags&0x840000)return stop(18);
     std::uintptr_t container{},texture{};unsigned packed{};
@@ -137,7 +141,7 @@ void update(pb::Frame *f) {
     Lock lock;
     ++visits;last=s;
     if(s.view_scale<.5F){if(!truncated_views++)first_truncated=s;}
-    if(s.applied==target.quantized&&s.view_scale==target.quantized&&s.combined==target.quantized&&s.view_combined==target.quantized){
+    if(s.applied==target.quantized&&planned_view_scale(s.view_scale)&&s.combined==target.quantized&&s.view_combined==target.quantized){
         ++scaled_observed;reduced=s;
     }
     if(!requested.load()){
@@ -230,7 +234,7 @@ bool active_ready() noexcept {Lock lock;return requested.load()&&!fault.load()&&
 bool input_stamp(std::uintptr_t view,InputStamp &out) noexcept {
     Lock lock;Snapshot s{};
     if(!requested.load()||fault.load()||!snapshot(s)||s.view!=view||
-       s.applied!=target.quantized||s.view_scale!=target.quantized||s.combined!=target.quantized||s.view_combined!=target.quantized)return false;
+       s.applied!=target.quantized||!planned_view_scale(s.view_scale)||s.combined!=target.quantized||s.view_combined!=target.quantized)return false;
     out={s.frame,s.view,s.width,s.height,target.render.width,target.render.height,s.applied,s.content};return true;
 }
 bool healthy() noexcept {return fault.load()==0;}

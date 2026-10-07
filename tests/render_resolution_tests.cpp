@@ -76,6 +76,7 @@ int main(){
     put(view.p+0x628,depth.p);put(depth.p+0xa0,texture.p);put(texture.p+0x88,2560U|(1440U<<16));
     rr::Snapshot captured{};
     check(rr::snapshot(captured)&&captured.width_override==0&&captured.basis_width==2560,"display width route admitted");
+    check(rr::planned_view_scale(.5F)&&!rr::planned_view_scale(.49F)&&rr::truncated_ratio()==.5F,"2:1 scenes plan exactly half");
     put(config.p+0x2cda,static_cast<unsigned char>(1));put(config.p+0x2cd0,2560U);put(config.p+0x2cd4,1440U);
     check(rr::snapshot(captured)&&captured.width_override==1&&captured.basis_width==2560,"live-shaped config width route admitted");
     put(config.p+0x2cd0,1920U);check(!rr::snapshot(captured),"reject alternate width mismatch");put(config.p+0x2cd0,2560U);
@@ -86,6 +87,7 @@ int main(){
         const auto saved=rr::target;rr::target=pillar;rr::discovered.window_width=5120;rr::discovered.window_height=1440;
         put(renderer.p+0x198,3413U);put(config.p+0x2cd0,5120U);
         put(view.p+0x6b0,1706.F/3413.F);check(rr::snapshot(captured)&&captured.basis_width==5120,"truncated view ratio admitted");
+        check(rr::planned_view_scale(1706.F/3413.F)&&rr::planned_view_scale(.5F)&&!rr::planned_view_scale(1705.F/3413.F),"truncated ratio is the planned view scale");
         put(view.p+0x6b0,1705.F/3413.F);check(!rr::snapshot(captured)&&captured.check==17,"view scale below the truncated ratio refused");
         rr::target=p;check(!rr::snapshot(captured)&&captured.check==15,"pillarbox snapshot needs its own plan");
         put(view.p+0x6b0,1.F);put(renderer.p+0x198,2560U);put(config.p+0x2cd0,2560U);rr::target=saved;
