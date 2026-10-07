@@ -179,3 +179,20 @@ Test (game-13): 1080p, the same DOF cutscene, at 2x.
   the typeless CoC and bit 31 on roles 2-8.
 
 Test (game-14): the same cutscene at 1080p.
+
+### v0.10.3 result (game-14, 1920x1080): DLSS, FG and DOF work
+
+The user saw DLSS and FG on through the DOF cutscene.
+- **DOF:** 795 sequences qualified and 794 completed, all six passes on each,
+  with 1,588 adapted dispatches restored. The composition draw counted 794
+  times. No rejections, failures or mismatches.
+- **DLSS:** 1,106 frames at 960x540 → 1920x1080, with 3 skips and no faults.
+- **FG:** 1,230 frames tagged with HUD-less at 2x. It was On through the
+  cutscene; the Off periods (`no_ready`) were loading and transitions.
+- **A same-size `ResizeBuffers` came during play.** It is the first lifecycle
+  call seen while armed, from the host thread. FG was Off at that moment
+  (loading), so the guard had nothing to do. The buffer generation advanced
+  (7 → 8), and FG came back On afterwards.
+- **`fg_stopped` with reason `reflex_frames`** (`reflex_faults` 1) came at
+  game exit, after the last present (7,808). Reflex hit one error during
+  shutdown; this does not happen during play.
