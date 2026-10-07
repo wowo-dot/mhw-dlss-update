@@ -9,6 +9,7 @@
 #include <array>
 #include <iomanip>
 #include <ostream>
+#include <string>
 
 // Shared worker-side COM discovery; no projection recorder hooks are enabled.
 namespace mhw::projection_binding {bool discover(std::uintptr_t,Runtime &,std::string &);}
@@ -42,8 +43,14 @@ struct Snapshot {
     unsigned width{},height{},view_flags{},depth_width{},depth_height{},width_override{},basis_width{},basis_height{};
     float desired{},applied{},previous{},content_desired{},content{},combined{},view_scale{},view_content{},view_combined{};
     bool depth_metadata{};
+    // Which snapshot check failed (0 = qualified; see snapshot()), with the
+    // renderer's sizing word and whether a backend wrapper was present.
+    unsigned check{},sizing{};bool wrapper{};
 };
 Snapshot baseline{},reduced{},last{},restoration{};
+// The startup admission snapshot, and the first and last unqualified
+// in-session snapshots (an aspect-ratio change applies live, game-15).
+Snapshot startup{},first_unqualified{},last_unqualified{};
 struct ViewportSample {std::uint64_t tick{};std::uintptr_t caller{};std::array<float,6> values{};};
 ViewportSample first_reduced_viewport{},last_reduced_viewport{};
 void fail(unsigned reason) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,reason);requested=false;}
@@ -52,34 +59,48 @@ bool write_request(float value) noexcept {
     __except(EXCEPTION_EXECUTE_HANDLER){return false;}
 }
 bool snapshot(Snapshot &s) noexcept {
+    // Every value is read before any is judged, so a refused snapshot still
+    // records what the renderer reported. Checks: 1 renderer, 2 API, 3 backend,
+    // 4 view, 5 sizing word, 6 backend wrapper, 7 config, 8 renderer/view
+    // values, 9 scale basis; then 10 sizing in progress, 11 wrapper present,
+    // 12 width override, 13 basis differs from display, 14 non-finite scale,
+    // 15 display differs from the swap chain, 16 content scale not 1,
+    // 17 scale out of range, 18 view flags, 19 renderer or view changed.
+    const auto stop=[&](unsigned check){s.check=check;return false;};
     std::uintptr_t root{},backend{},view{},config{},wrapper{};unsigned char api{},override_width{};unsigned sizing{};
-    if(!pb::read(image+0x51c4480,root)||root!=renderer||
-       !pb::read(image+0x51cc080,api)||api!=1||
-       !pb::read(renderer+0x78,backend)||backend!=discovered.backend||
-       !pb::read(renderer+0x1f450,view)||!view||view>UINTPTR_MAX-0x6d8||
-       !pb::read(renderer+0xb4,sizing)||(sizing&1)||
-       !pb::read(backend+0x42700,wrapper)||wrapper||
-       !pb::read(image+0x51c5320,config)||!config||config>UINTPTR_MAX-0x2cdb||
-       !pb::read(config+0x2cda,override_width)||override_width>1)return false;
-    s.tick=GetTickCount64();s.view=view;
+    if(!pb::read(image+0x51c4480,root)||root!=renderer)return stop(1);
+    if(!pb::read(image+0x51cc080,api)||api!=1)return stop(2);
+    if(!pb::read(renderer+0x78,backend)||backend!=discovered.backend)return stop(3);
+    if(!pb::read(renderer+0x1f450,view)||!view||view>UINTPTR_MAX-0x6d8)return stop(4);
+    if(!pb::read(renderer+0xb4,sizing))return stop(5);
+    s.sizing=sizing;
+    if(!pb::read(backend+0x42700,wrapper))return stop(6);
+    s.wrapper=wrapper!=0;
+    if(!pb::read(image+0x51c5320,config)||!config||config>UINTPTR_MAX-0x2cdb||!pb::read(config+0x2cda,override_width))return stop(7);
+    s.tick=GetTickCount64();s.view=view;s.width_override=override_width;
     if(!pb::read(renderer+0x1f210,s.frame)||!pb::read(renderer+0x198,s.width)||!pb::read(renderer+0x19c,s.height)||
        !pb::read(renderer+0x1f0,s.desired)||!pb::read(renderer+0x1f4,s.applied)||!pb::read(renderer+0x1f8,s.previous)||
        !pb::read(renderer+0x200,s.content_desired)||!pb::read(renderer+0x204,s.content)||!pb::read(renderer+0x208,s.combined)||
        !pb::read(view+0x58,s.view_flags)||!pb::read(view+0x6b0,s.view_scale)||
-       !pb::read(view+0x6b4,s.view_content)||!pb::read(view+0x6b8,s.view_combined))return false;
-    s.width_override=override_width;s.basis_width=s.width;s.basis_height=s.height;
-    if(override_width&&(!pb::read(config+0x2cd0,s.basis_width)||!pb::read(config+0x2cd4,s.basis_height)))return false;
-    if(!matching_basis({s.width,s.height},s.width_override,{s.basis_width,s.basis_height}))return false;
-    for(float value:{s.desired,s.applied,s.previous,s.content_desired,s.content,s.combined,s.view_scale,s.view_content,s.view_combined})if(!std::isfinite(value))return false;
-    if(s.width!=target.display.width||s.height!=target.display.height||s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F||
-       !std::isfinite(s.desired)||s.desired<.5F||s.desired>1.F||!std::isfinite(s.applied)||s.applied<.5F||s.applied>1.F||
-       !std::isfinite(s.view_scale)||s.view_scale<.5F||s.view_scale>1.F||(s.view_flags&0x840000))return false;
+       !pb::read(view+0x6b4,s.view_content)||!pb::read(view+0x6b8,s.view_combined))return stop(8);
+    s.basis_width=s.width;s.basis_height=s.height;
+    if(override_width&&(!pb::read(config+0x2cd0,s.basis_width)||!pb::read(config+0x2cd4,s.basis_height)))return stop(9);
+    if(sizing&1)return stop(10);
+    if(wrapper)return stop(11);
+    if(override_width>1)return stop(12);
+    if(!matching_basis({s.width,s.height},s.width_override,{s.basis_width,s.basis_height}))return stop(13);
+    for(float value:{s.desired,s.applied,s.previous,s.content_desired,s.content,s.combined,s.view_scale,s.view_content,s.view_combined})if(!std::isfinite(value))return stop(14);
+    if(s.width!=target.display.width||s.height!=target.display.height)return stop(15);
+    if(s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F)return stop(16);
+    if(s.desired<.5F||s.desired>1.F||s.applied<.5F||s.applied>1.F||s.view_scale<.5F||s.view_scale>1.F)return stop(17);
+    if(s.view_flags&0x840000)return stop(18);
     std::uintptr_t container{},texture{};unsigned packed{};
     s.depth_metadata=pb::read(view+0x628,container)&&container&&container<=UINTPTR_MAX-0xa8&&
         pb::read(container+0xa0,texture)&&texture&&texture<=UINTPTR_MAX-0x90&&pb::read(texture+0x88,packed);
     if(s.depth_metadata){s.depth_width=packed&0xffff;s.depth_height=(packed>>16)&0x3fff;}
     std::uintptr_t again{};
-    return pb::read(renderer+0x1f450,again)&&again==view&&pb::read(image+0x51c4480,again)&&again==renderer;
+    if(!pb::read(renderer+0x1f450,again)||again!=view||!pb::read(image+0x51c4480,again)||again!=renderer)return stop(19);
+    s.check=0;return true;
 }
 bool current_renderer() noexcept {std::uintptr_t r{};return pb::read(image+0x51c4480,r)&&r==renderer;}
 void update(pb::Frame *f) {
@@ -102,7 +123,7 @@ void update(pb::Frame *f) {
     }
     mhw_binding_forward(original,f);
     Snapshot s{};
-    if(!snapshot(s)){Lock lock;++unqualified;if(overrides)fail(4);return;}
+    if(!snapshot(s)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;if(overrides)fail(4);return;}
     {
     Lock lock;
     ++visits;last=s;
@@ -150,7 +171,8 @@ void write_snapshot(std::ostream &out,const Snapshot &s) {
     out<<"{\"tick\":"<<s.tick<<",\"frame\":"<<s.frame<<",\"view\":"<<s.view<<",\"display\":["<<s.width<<','<<s.height
        <<"],\"scales\":["<<s.desired<<','<<s.applied<<','<<s.previous<<','<<s.content_desired<<','<<s.content<<','<<s.combined<<','<<s.view_scale<<','<<s.view_content<<','<<s.view_combined
        <<"],\"native_width_override\":"<<s.width_override<<",\"native_scale_basis\":["<<s.basis_width<<','<<s.basis_height
-       <<"],\"view_flags\":"<<s.view_flags<<",\"depth_metadata\":"<<s.depth_metadata<<",\"depth_extent\":["<<s.depth_width<<','<<s.depth_height<<"]}";
+       <<"],\"view_flags\":"<<s.view_flags<<",\"depth_metadata\":"<<s.depth_metadata<<",\"depth_extent\":["<<s.depth_width<<','<<s.depth_height
+       <<"],\"check\":"<<s.check<<",\"sizing\":"<<s.sizing<<",\"wrapper\":"<<s.wrapper<<"}";
 }
 void write_viewport(std::ostream &out,const ViewportSample &s) {
     out<<"{\"tick\":"<<s.tick<<",\"caller\":"<<s.caller<<",\"values\":[";
@@ -182,7 +204,8 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     for(const auto &gate:gates)if(!pb::verify_code(base,gate.rva,gate.bytes,gate.sha)){reason="native sizing code gate";return false;}
     if(!pb::read(base+0x51c4480,renderer)||!renderer||renderer>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     image=base;expected_return=base+0x22982e7;setter=reinterpret_cast<Setter>(base+0x229bd70);
-    Snapshot s{};if(!snapshot(s)){reason="native sizing admission";return false;}
+    Snapshot s{};const bool admitted=snapshot(s);{Lock lock;startup=s;}
+    if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     targets={base+0x229ed30,discovered.targets[pb::viewport]};
     if(MH_CreateHook(reinterpret_cast<void *>(targets[0]),reinterpret_cast<void *>(mhw_resolution_entry),&original)!=MH_OK||
        (!shared_viewport&&MH_CreateHook(reinterpret_cast<void *>(targets[1]),reinterpret_cast<void *>(viewport_call),reinterpret_cast<void **>(&original_viewport))!=MH_OK)){reason="hook creation";return false;}
@@ -221,6 +244,8 @@ void write(std::ostream &out) {
        <<",\"shared_viewport\":"<<shared_viewport<<",\"owned_hooks\":"<<(shared_viewport?1:2)
        <<",\"viewport_counts\":["<<viewport_counts[0]<<','<<viewport_counts[1]<<','<<viewport_counts[2]<<"],\"viewport_unreadable\":"<<viewport_unreadable
        <<",\"baseline\":";write_snapshot(out,baseline);out<<",\"reduced\":";write_snapshot(out,reduced);out<<",\"last\":";write_snapshot(out,last);out<<",\"restoration\":";write_snapshot(out,restoration);
+    out<<",\"startup\":";write_snapshot(out,startup);out<<",\"first_unqualified\":";write_snapshot(out,first_unqualified);
+    out<<",\"last_unqualified\":";write_snapshot(out,last_unqualified);
     out<<",\"first_reduced_viewport\":";write_viewport(out,first_reduced_viewport);out<<",\"last_reduced_viewport\":";write_viewport(out,last_reduced_viewport);
     out<<",\"gpu_resource_descriptions_verified\":false,\"viewport_scene_attribution_verified\":false,\"dlss_evaluations\":0,\"injected_gpu_commands\":0,\"settings_writes\":0}\n"<<std::flush;
 }
