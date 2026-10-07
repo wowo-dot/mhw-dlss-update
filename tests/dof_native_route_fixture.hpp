@@ -13,7 +13,7 @@ struct Arena {
  template<class T>static void put(std::uintptr_t p,const T &v){std::memcpy(reinterpret_cast<void *>(p),&v,sizeof(v));}
 };
 struct Route {
- Arena a;std::array<std::vector<std::byte>,6> shaders;unsigned negatives{};
+ Arena a;std::array<std::vector<std::byte>,6> shaders;unsigned negatives{};sf::DofLayout layout{};
  std::uintptr_t state{},executor{},backend_context{};std::array<std::uintptr_t,9> owners{};
  ID3D12GraphicsCommandList *list{};std::uint64_t generation{1};
  Route(ID3D12Device *device,ID3D12GraphicsCommandList *command,std::span<const ComPtr<ID3D12Resource>> textures,
@@ -22,7 +22,7 @@ struct Route {
   const auto resolver=[](std::uintptr_t p,unsigned slot,std::uintptr_t &out)noexcept{out=(*reinterpret_cast<std::uintptr_t **>(p))[slot];return out!=0;};
   const bool installed=obs::install(device,resolver,reason,true,nullptr,true);require(installed,reason.c_str());obs::begin();obs::reset(list,generation,nullptr);
   r::cfg={};r::cfg.device=reinterpret_cast<std::uintptr_t>(device);r::cfg.image=0x10000000;r::cfg.backend=a.take(16);
-  r::width=2560;r::height=1440;r::accepting=true;
+  r::width=2560;r::height=1440;r::accepting=true;layout=sf::dof_layout(r::width,r::height);
   auto &p=r::plans[0];p.dof=std::make_shared<sf::DofNativeSequence>();auto &d=*p.dof;d.count=6;d.key=0x78006595;d.stage=4;
   p.stamp.frame=32;p.stamp.epoch=1;p.stamp.context=a.take(0x3000);p.stamp.view=a.take(8);
   for(unsigned i=0;i<5;++i)p.resources[i]=textures[i];
@@ -30,7 +30,7 @@ struct Route {
   auto queue=a.take(16*20);Arena::put(p.stamp.context+0x2b78,queue);
   for(unsigned i=0;i<9;++i){owners[i]=a.take(0x100);const auto back=a.take(0x40),srv=a.take(0x20),uav=a.take(0x20);
    Arena::put(owners[i]+0x60,back);Arena::put(back+0x20,reinterpret_cast<std::uintptr_t>(textures[i].Get()));
-   Arena::put(owners[i]+0x88,sf::DofNativeSequence::sizes[i][0]|(sf::DofNativeSequence::sizes[i][1]<<16));
+   Arena::put(owners[i]+0x88,layout.sizes[i][0]|(layout.sizes[i][1]<<16));
    Arena::put(owners[i]+0x90,sf::DofNativeSequence::engine_formats[i]);Arena::put(owners[i]+0x94,UINT_MAX);
    Arena::put(owners[i]+0x78,srv);Arena::put(owners[i]+0x80,uav);
    // Opaque native view handles are only compared by the route, never decoded,
@@ -43,7 +43,7 @@ struct Route {
    auto &c=d.passes[pass];shaders[pass]=read(shader_dir/(std::string(hashes[pass])+".cs.dxbc"));
    const auto packet=a.take(0x30),graphics=a.take(0x300),handle=a.take(8),set=a.take(0x100),words=a.take(512),ids=a.take(256),modes=a.take(64),entry=a.take(0x20),shader=a.take(0x10);
    c.packet=packet;c.index=10+pass;Arena::put(packet,6U);Arena::put(packet+0x10,graphics);
-   Arena::put(packet+0x18,std::array<unsigned,3>{sf::DofNativeSequence::groups[pass][0],sf::DofNativeSequence::groups[pass][1],1});
+   Arena::put(packet+0x18,std::array<unsigned,3>{layout.groups[pass][0],layout.groups[pass][1],1});
    Arena::put(packet+0x24,0xa55a0100U);Arena::put(graphics+8,handle);Arena::put(handle,set);
    Arena::put(graphics+0x10,modes);Arena::put(graphics+0x18,sf::DofNativeSequence::techniques[pass]);
    Arena::put(set,words);Arena::put(set+0x80,ids);Arena::put(set+0x88,sf::DofNativeSequence::counts[pass]);
@@ -62,7 +62,7 @@ struct Route {
   Arena::put(queue+16*16,d.key);Arena::put(queue+16*16+8,p.draws[4].draw.packet);
   require(r::dof_qualify(p),"complete native DOF recipe/actual resources");
   std::array<std::uint64_t,5> comp{};for(unsigned i=0;i<5;++i)comp[i]=owners[roles[i]];
-  const auto reject=[&]{require(!d.qualify(owners[1],comp),"malformed six-pass contract rejected");++negatives;};
+  const auto reject=[&]{require(!d.qualify(r::width,r::height,owners[1],comp),"malformed six-pass contract rejected");++negatives;};
   ++d.passes[0].prefix[6];reject();--d.passes[0].prefix[6];
   ++d.passes[2].index;reject();--d.passes[2].index;
   d.passes[3].modes[2]=1;reject();d.passes[3].modes[2]=0;
@@ -70,14 +70,14 @@ struct Route {
   d.passes[1].shader.bytes[100]^=1;reject();d.passes[1].shader.bytes[100]^=1;
   const auto old=comp[1];comp[1]=comp[0];reject();comp[1]=old;
   d.passes[4].constants[0].bytes[0]^=1;reject();d.passes[4].constants[0].bytes[0]^=1;
-  require(d.qualify(owners[1],comp),"valid contract recovers");
+  require(d.qualify(r::width,r::height,owners[1],comp),"valid contract recovers");
   state=a.take(0x200);executor=a.take(16);backend_context=a.take(16);
   Arena::put(state+0x20,reinterpret_cast<std::uintptr_t>(list));Arena::put(executor+8,state);Arena::put(backend_context+8,r::cfg.backend);
   p.built=true;
  }
  void warm(unsigned pass){auto &p=r::plans[0];auto &d=*p.dof;Arena::put(state+0x158,d.passes[pass].packet);
   const auto token=r::compute_before(executor,backend_context,d.passes[pass].packet);
-  require(token==12,"native compute scope token");const auto &g=sf::DofNativeSequence::groups[pass];
+  require(token==12,"native compute scope token");const auto &g=layout.groups[pass];
   require(!r::compute_dispatch(list,g[0],g[1],g[2],r::cfg.image+0x259cfca),"warmup preserves native dispatch");r::compute_after(token,true);
  }
  void prepare(){auto &p=r::plans[0];p.dof->entered=p.dof->returned=p.dof->dispatched=0;
@@ -93,7 +93,7 @@ struct Route {
   // Resource-state planning mutates only packet+8 between CPU preparation and execution.
   Arena::put(p.dof->passes[pass].packet+8,std::uintptr_t{0x12345678});
   const auto token=r::compute_before(executor,backend_context,p.dof->passes[pass].packet);require(token==12,"prepared native compute entry");
-  const auto &g=sf::DofNativeSequence::groups[pass];const bool replaced=r::compute_dispatch(list,g[0],g[1],g[2],r::cfg.image+0x259cfca);
+  const auto &g=layout.groups[pass];const bool replaced=r::compute_dispatch(list,g[0],g[1],g[2],r::cfg.image+0x259cfca);
   require(r::healthy(),r::failure.c_str());require(replaced==(pass==0||pass==3),"only two adapted native dispatches");
   if(!replaced)list->Dispatch(g[0],g[1],g[2]);r::compute_after(token,true);require(r::healthy(),"compute return");
  }

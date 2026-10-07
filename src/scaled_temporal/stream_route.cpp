@@ -596,7 +596,7 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
     // Multiple distinct draws may share one descriptor. State-list packets
     // remain native; every draw below retains its own complete qualification.
     else if((raw&31)==6){
-     if(width!=2560||height!=1440||!overlay->source||overlay->seen||
+     if(!overlay->source||overlay->seen||
         (p.dof&&(p.dof->key!=c.key||p.dof->count==6)))
       return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true,overlay->seen);
      if(!p.dof){p.dof=std::make_shared<DofNativeSequence>();p.dof->key=c.key;}
@@ -1097,7 +1097,7 @@ void compute_diagnostic_dispatch(ID3D12GraphicsCommandList *list,unsigned x,unsi
   auto &capture=compute_depth_pixels[s];unsigned depth_use=UINT_MAX,count{};
   for(unsigned u=0;u<pass.use_count;++u)if((pass.uses[u][0]&15)==2&&(pass.uses[u][0]>>24)==0){depth_use=u;++count;}
   obs::Predicate predicate;
-  if(count!=1||std::array<unsigned,3>{x,y,z}!=std::array<unsigned,3>{8,1440,1}||width!=2560||height!=1440||
+  if(count!=1||std::array<unsigned,3>{x,y,z}!=std::array<unsigned,3>{(width+319)/320,height,1}||
      pb::bytes_sha256(cpu.shader.bytes.data(),cpu.shader.size)!="98c622bab8c0e113eeb4062dcc78fec129441854bcf67f61db6ed6239ca68e3c")capture.reject(1);
   else if(!pass.states[depth_use][0]||(pass.states[depth_use][1]!=0x40&&pass.states[depth_use][1]!=0xc0))capture.reject(2);
   else if(!obs::predicate_current(list,predicate)||!predicate.known||predicate.buffer)capture.reject(3);

@@ -1,9 +1,33 @@
 #pragma once
 #include "output_dependencies.hpp"
 #include "dof_compute_shader.hpp"
+#include <bit>
 #include <cstring>
 
 namespace mhw::scaled_temporal {
+// Texture sizes and dispatch counts of the native DOF at a given screen size.
+// The shaders use fixed 20-pixel tiles (pass 0 divides its thread index by 20)
+// and work at half the screen size; group sizes are 320x1, 1x320, 8x8 and
+// 16x16 (dof-compute-bundle-result.md). At 2560x1440 this gives the captured
+// 128x1440, 128x72 and 1280x720 textures and groups {8,1440}, {128,5}, {16,9}
+// and {80,45}. A partial tile is assumed to round up (not yet observed: every
+// common 16:9 size divides by 20). With DLSS Performance the half size is also
+// the render size.
+struct DofLayout {
+ std::array<std::array<unsigned,2>,9> sizes{};
+ std::array<std::array<unsigned,3>,6> groups{};
+};
+constexpr DofLayout dof_layout(unsigned width,unsigned height){
+ const auto up=[](unsigned v,unsigned d){return (v+d-1)/d;};
+ const unsigned tw=up(width,20),th=up(height,20),hw=width/2,hh=height/2;
+ DofLayout l{};
+ l.sizes={{{width,height},{width,height},{tw,height},{tw,th},{tw,th},{hw,hh},{hw,hh},{hw,hh},{hw,hh}}};
+ l.groups={{{up(tw,16),height,1},{tw,up(height,320),1},{up(tw,8),up(th,8),1},{up(hw,16),up(hh,16),1},{up(hw,16),up(hh,16),1},{up(hw,16),up(hh,16),1}}};
+ return l;
+}
+// The game computes the reciprocals on the CPU; allow one unit in the last place.
+inline bool dof_near(float a,float b){std::int32_t x{},y{};std::memcpy(&x,&a,4);std::memcpy(&y,&b,4);return x==y||x==y+1||x+1==y;}
+
 // Six native dispatches followed by the already-qualified composition draw.
 // Native views/constants/states remain bound. No descriptor is reconstructed.
 struct DofNativeSequence {
@@ -15,18 +39,23 @@ struct DofNativeSequence {
  // depth, scene, TileH, TileV, Neighbor, CoC, Image, packed blur, alpha
  static constexpr int reads[6][3]={{0,-1,-1},{2,-1,-1},{3,-1,-1},{0,1,4},{5,6,4},{7,-1,-1}};
  static constexpr int writes[6][2]={{2,-1},{3,-1},{4,-1},{5,6},{7,8},{6,-1}};
- static constexpr unsigned sizes[9][2]={{2560,1440},{2560,1440},{128,1440},{128,72},{128,72},{1280,720},{1280,720},{1280,720},{1280,720}};
  static constexpr unsigned formats[9]={41,26,26,26,26,10,26,42,61};
  static constexpr unsigned engine_formats[9]={16,34,34,34,34,2,34,38,21};
- static constexpr unsigned groups[6][3]={{8,1440,1},{128,5,1},{16,9,1},{80,45,1},{80,45,1},{80,45,1}};
  static constexpr unsigned words[6][9]={{282626,4243475,45088,16826416,52383808},
   {1470466,1474579,16826400},{1912834,1916947},
   {274433,282642,17068066,35594290,3989571,18718803,45152,16826480,52383872},
   {274433,2035730,17063970,35594290,2043971,18825299,16826464,52383856},
   {1937410,1941523}};
  static constexpr unsigned counts[6]={5,3,2,9,8,2},techniques[6]={43866,1382,15479,42573,4322,41772};
- bool qualify(std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
-  if(count!=6||!scene_owner)return false;
+ DofLayout layout{};
+ // First size/dispatch/constant mismatch of the last qualify: {check, index,
+ // observed, expected} (check 1 = texture size, 2 = groups, 3 = screen constant).
+ std::array<unsigned,4> miss{};
+ bool qualify(unsigned width,unsigned height,std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
+  miss={};
+  if(count!=6||!scene_owner||!width||!height||(width|height)&1)return false;
+  layout=dof_layout(width,height);
+  const auto mismatch=[&](unsigned check,unsigned index,unsigned observed,unsigned expected){miss={check,index,observed,expected};return false;};
   textures={};
   std::array<const OutputDependencies::Constant *,4> constants{};
   for(unsigned p=0;p<6;++p){const auto &d=passes[p];
@@ -35,7 +64,7 @@ struct DofNativeSequence {
       !std::equal(words[p],words[p]+counts[p],d.bindings.words.begin())||
       !dof_compute_identity(std::as_bytes(std::span(d.shader.bytes).first(d.shader.size)),p))return false;
    if(p&&d.index!=passes[p-1].index+1)return false;
-   for(unsigned i=0;i<3;++i)if(d.prefix[6+i]!=groups[p][i])return false;
+   for(unsigned i=0;i<3;++i)if(d.prefix[6+i]!=layout.groups[p][i])return mismatch(2,p*3+i,d.prefix[6+i],layout.groups[p][i]);
    for(unsigned i=0;i<d.owner_count;++i)if(d.modes[i]||!d.objects[i])return false;
    for(unsigned j=0;j<counts[p];++j){const unsigned word=d.bindings.words[j],kind=word&15,index=(word>>4)&255,reg=word>>24;
     if(index>=d.owner_count||d.ids[index]!=((word>>12)&4095))return false;
@@ -43,7 +72,8 @@ struct DofNativeSequence {
     if(reg>=(kind==2?3U:2U))return false;
     const auto role=kind==2?reads[p][reg]:writes[p][reg];if(role<0||!d.views[j][0]||!d.views[j][1])return false;
     const auto &t=d.textures[index];const auto &v=t.fields;
-    if(!d.texture_used[index]||v[0]!=d.objects[index]||!v[3]||v[4]!=(sizes[role][0]|(sizes[role][1]<<16))||v[5]!=engine_formats[role])return false;
+    if(!d.texture_used[index]||v[0]!=d.objects[index]||!v[3]||v[5]!=engine_formats[role])return false;
+    if(const unsigned packed=layout.sizes[role][0]|(layout.sizes[role][1]<<16);v[4]!=packed)return mismatch(1,static_cast<unsigned>(role),static_cast<unsigned>(v[4]),packed);
     if(textures[role].fields[0]&&textures[role]!=t)return false;textures[role]=t;
    }
    for(unsigned i=0;i<d.constant_count;++i){const auto &c=d.constants[i];const auto reg=c.word>>24;
@@ -58,9 +88,14 @@ struct DofNativeSequence {
   if(textures[1].fields[0]!=scene_owner||!constants[0]||!constants[1]||!constants[3])return false;
   std::array<float,28> screen{};std::memcpy(screen.data(),constants[1]->bytes.data(),112);
   const auto raw=[&](unsigned i){unsigned value{};std::memcpy(&value,&screen[i],4);return value;};
-  if(screen[4]!=2560||screen[5]!=1440||screen[6]!=1.F/2560||screen[7]!=1.F/1440||screen[8]||screen[9]||
-     raw(10)!=1280||raw(11)!=720||screen[12]||screen[13]||screen[14]!=1280||screen[15]!=720||
-     screen[16]!=1.F/1280||screen[17]!=1.F/720||screen[26])return false;
+  // CBScreen: fScreenSize, its inverse, iViewSize (integers) and the half size
+  // with its inverse; the remaining checked words are zero.
+  const float w=static_cast<float>(width),h=static_cast<float>(height),hw=static_cast<float>(width/2),hh=static_cast<float>(height/2);
+  const std::array<float,8> sizes_f{w,h,1.F/w,1.F/h,hw,hh,1.F/hw,1.F/hh};constexpr unsigned at[]{4,5,6,7,14,15,16,17};
+  for(unsigned i=0;i<8;++i)if(i<2||i==4||i==5?screen[at[i]]!=sizes_f[i]:!dof_near(screen[at[i]],sizes_f[i]))return mismatch(3,at[i],raw(at[i]),std::bit_cast<unsigned>(sizes_f[i]));
+  if(raw(10)!=width/2)return mismatch(3,10,raw(10),width/2);
+  if(raw(11)!=height/2)return mismatch(3,11,raw(11),height/2);
+  if(screen[8]||screen[9]||screen[12]||screen[13]||screen[26])return false;
   std::array<unsigned,24> blur{};std::memcpy(blur.data(),constants[3]->bytes.data(),96);
   return blur[11]==1&&blur[12]==1&&blur[13]==0x3f800000&&blur[14]==0x3f800000;
  }
