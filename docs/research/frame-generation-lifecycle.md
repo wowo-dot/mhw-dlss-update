@@ -233,3 +233,25 @@ The user saw DLSS and FG on through the DOF cutscene.
 - **The live aspect change** is a real in-session size change. That needs
   Phase 2's controlled stop and restart at the new scene size, which is no
   longer moot for this one setting.
+
+### v0.11.0 result (game-18, 2560x1440 window, 21:9): DLSS works
+
+v0.11.0 reports the renderer's scene size and keeps the window size
+separately. Both are accepted only when the game's aspect basis explains the
+difference.
+- **DLSS:** 4,368 frames at 1280x540 → 2560x1080 with no faults. The
+  render-scale override ran 7,740 times with 0 unqualified snapshots, and the
+  depth extent followed the scene (2560x1080).
+- **DOF at 21:9:** 841 qualified and 840 completed with zero rejections, using
+  the derived 64:27 sizes.
+- **User check:** "played a bit with dof, looked fine".
+- **FG** stayed off as designed (`fg_unsupported`: scene 2560x1080, window
+  2560x1440).
+- **The exit stop** was again `reflex_frames` at shutdown.
+
+**Next (v0.11.1): FG with the scene rectangle.**
+- Log where the screen write places the scene: the screen-write viewport at
+  list Close, and CBSystem `iRegion` through the capture shader.
+- Configure DLSS-G with the window as output, and tag the back buffer and
+  HUD-less with the scene rectangle as their extent.
+- Have the HUD-less pass write the scene at that offset, with black outside.
