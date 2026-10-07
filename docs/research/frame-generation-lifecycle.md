@@ -125,3 +125,33 @@ with DOF (cutscenes, Gallery, focus-heavy scenes), then exit. Expect:
 If any mismatch appears, `miss` gives the observed value. A later launch
 should cover borderless and fullscreen at startup:
 `render_resolution` requires the game's display size to equal the chain's.
+
+### v0.10.1 result (game-12, 1920x1080)
+
+- **What worked:**
+  - DLSS ran at 960x540 → 1920x1080 with no faults, which confirms the
+    ceil(render/16) TAA dispatch.
+  - FG at 2x tagged HUD-less on every frame, and the brightness was captured.
+- **What failed:**
+  - In a DOF cutscene, every frame fell back to native: 1,629 plan
+    rejections. The user saw DLSS and FG off.
+  - The rejection came from dependency discovery for the DOF composition
+    (`input_bindings`, qualification 12), before the DOF sequence check.
+  - The cause: the first DOF texture, the CoC (engine format 2, 960x540), is
+    backed by `R16G16B16A16_TYPELESS` (DXGI 9) instead of the 1440p
+    `R16G16B16A16_FLOAT`.
+- **Not a 1080p regression as such:** none of the earlier FG runs met a DOF
+  scene (zero DOF draws in game-05 to game-11). The only DOF game test was the
+  DLSS-only Gallery run at 1440p (v1.25.41, 884 complete sequences).
+
+**v0.10.2** accepts the TYPELESS member of the expected format's family, in
+dependency discovery and in the DOF sequence check. This is safe because the
+route only samples these textures through the game's own typed views.
+- **Diagnostics:** `dependency_route.texture_check` and `first_failure` (the
+  first discovery failure, with the texture's role and formats), plus format
+  and size misses in `dof_native_sequence.miss`.
+- **Fixture:** the DOF route fixture has a typeless-CoC mode
+  (`MHW_DOF_TYPELESS_COC=1`). It replays exactly on WARP and on the hardware
+  adapter, and fails under the old exact-format rule.
+
+Test (game-13): 1080p, the same DOF cutscene, at 2x.
