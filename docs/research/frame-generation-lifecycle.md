@@ -352,3 +352,45 @@ counters matter, such as DOF.
   - 16:9 pillarboxed in the 5120x1440 window (2560x1440 at x = 1280).
   - 4K, which needs DSR.
   - The live aspect change. It still fails closed.
+
+### FG sub-rectangle fixed: v0.11.7 (game-27, game-28)
+
+**Every letterbox and pillarbox FG run before v0.11.7 ran DLSS-G on the
+whole window, not on the scene.**
+- **The bug:** Streamline's `sl::Extent` is `{top, left, width, height}`, but
+  the back-buffer tag passed the scene rectangle as `{x, y, ...}`. Every
+  letterboxed or pillarboxed rectangle then fell outside the back buffer.
+- **What Streamline did with it:** reset the subrect to the full back buffer
+  ("Invalid backbuffer resource extent ... Resetting extent to full backbuffer
+  resource size"). It then ignored the scene-sized HUD-less image on every
+  frame ("HUD-less buffer extent does not match color buffer size"):
+  - game-19: 4,523 times;
+  - game-22: 1,893;
+  - game-26: 1,190;
+  - game-27: 7,797.
+- **Consequence:** the scene's motion was mapped across the whole window:
+  - 1.33x vertically in the 21:9 letterbox;
+  - 1.5x horizontally for 21:9 on the 5120x1440 window;
+  - 2x with a 1280-pixel shift for 16:9 on the 5120x1440 window.
+- **Why it went unnoticed:** only the last case was obvious. The user recorded
+  scene content warped into the side bars (game-27). The earlier 21:9 "looked
+  fine" checks therefore judged FG without HUD-less and with misplaced motion.
+- **Fix (v0.11.7):** the correct field order, with a `static_assert` on the
+  `sl::Extent` layout and unit tests for both pillarboxes and the letterbox.
+- **Tooling:** `fg_game.py status` and `summary` now count Streamline's own
+  errors and warnings from `sl.log`. Our tag counters show only that a tag was
+  set, not that DLSS-G used it.
+
+**game-28 (16:9 in the 5120x1440 window, scene `[1280,0,2560,1440]`):**
+- **FG 2x:** 1,961 frames presented as 2.
+- **HUD-less:** tagged on all 2,250 frames, with **0 Streamline errors**.
+- **DOF:** 296 sequences completed and none refused.
+- **User check:** "much cleaner, nothing spilled to the black bars".
+- **The one remaining sanitize warning** appears once per run, also in
+  full-window 16:9 runs (game-15), so it comes from before the first tagged
+  frame.
+
+**Still to re-check with v0.11.7:** both 21:9 layouts, where FG now gets the
+real rectangle and HUD-less for the first time:
+- the letterbox (2560x1440 window), which uses `top`;
+- the odd 3413-wide pillarbox (5120x1440 window).
