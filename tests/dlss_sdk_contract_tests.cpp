@@ -43,6 +43,9 @@ int main(){
     bad=upscale;bad.mode=ReconstructionMode::dlaa;if(valid_geometry(bad))return 23;
     bad=upscale;bad.render=bad.output;if(valid_geometry(bad))return 24;
     bad=upscale;bad.mode=static_cast<ReconstructionMode>(99);if(valid_geometry(bad))return 25;
+    // 4K, 5120x1440 (32:9) and 5120x2880 fit the pixel ceiling; 8K does not.
+    for(Extent e: {Extent{3840,2160},{5120,1440},{5120,2880}})if(!valid_extent(e))return 32;
+    if(valid_extent({7680,4320})||valid_extent({4097,4096}))return 33;
     for(Extent e: {Extent{0,720},{31,720},{8193,32},{8192,8192},{UINT32_MAX,UINT32_MAX}}){
         bad=upscale;bad.allocation=e;if(valid_geometry(bad))return 26;
         bad=upscale;bad.render=e;if(valid_geometry(bad))return 27;

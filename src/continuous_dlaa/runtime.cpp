@@ -861,6 +861,10 @@ void native_seh(unsigned kind,NativeFrame *f){
 }
 }
 void native(unsigned kind,NativeFrame *f){pending.fetch_add(1);__try{native_seh(kind,f);}__finally{pending.fetch_sub(1);}}
+bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
+    if(!pass)return false;
+    scene_width=runtime.width;scene_height=runtime.height;window_width=runtime.window_width;window_height=runtime.window_height;return true;
+}
 bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &reason){
     try {
         if(pass){reason="continuous-already-prepared";return false;}
@@ -886,7 +890,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         #ifdef MHW_CONTINUOUS_SCALED
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},dlss_sdk::ReconstructionMode::performance};
-        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true);
+        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
 #else
         pass=std::make_unique<dlss_sdk::InlineFrame>(device,runtime.width,runtime.height,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true);

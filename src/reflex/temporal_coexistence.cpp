@@ -77,6 +77,8 @@ void arm(ID3D12Device* device){
     cd::write(events);require(installed,reason.c_str());require(bool(events),"temporal-arm-log");
 }
 bool healthy() noexcept{return installed&&!finished&&cd::healthy()&&bool(events);}
+bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
+    return installed&&cd::scene_extent(scene_width,scene_height,window_width,window_height);}
 void sample(){
     require(healthy(),"temporal-runtime-fault");++samples;cd::save_compute_depth(directory/name);
     {std::ofstream status(directory/(name+".status.json"),std::ios::binary|std::ios::trunc);cd::write(status);require(bool(status),"temporal-status");}

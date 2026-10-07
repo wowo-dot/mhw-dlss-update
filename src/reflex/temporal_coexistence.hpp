@@ -13,6 +13,8 @@ const char* version() noexcept;
 void prepare(HMODULE, const std::filesystem::path&, std::uintptr_t);
 void arm(ID3D12Device*);
 bool healthy() noexcept;
+// The continuous runtime's scene and window sizes (see continuous_dlaa).
+bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept;
 void sample();
 // Writes the runtime state to the input log and status file without requiring
 // health (for the record of why the runtime became unhealthy). No throw.

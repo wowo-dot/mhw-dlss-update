@@ -6,6 +6,9 @@ namespace mhw::continuous_dlaa {
 bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
 void stop() noexcept;
 bool healthy() noexcept;
+// Scene and window sizes from discovery (equal unless the aspect-ratio option
+// letterboxes or pillarboxes the scene). False before install.
+bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept;
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;

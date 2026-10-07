@@ -20,9 +20,11 @@ struct Geometry {
         return {{w,h},{w,h},{w,h},ReconstructionMode::dlaa};
     }
 };
+// Up to 16,777,216 pixels: 3840x2160, 5120x1440 and 5120x2880 fit; 8K does not.
+constexpr std::uint64_t max_pixels=16777216;
 constexpr bool valid_extent(Extent e) noexcept {
     return e.width>=32&&e.height>=32&&e.width<=8192&&e.height<=8192&&
-        std::uint64_t(e.width)*e.height<=4194304;
+        std::uint64_t(e.width)*e.height<=max_pixels;
 }
 constexpr bool valid_geometry(const Geometry &g) noexcept {
     if(!valid_extent(g.allocation)||!valid_extent(g.render)||!valid_extent(g.output)||

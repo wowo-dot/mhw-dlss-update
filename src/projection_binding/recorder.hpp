@@ -139,7 +139,11 @@ struct Capture {
 };
 struct Runtime {
   std::uintptr_t backend{},device{},swapchain{},cpu_resource{},gpu_resource{};
+  // width/height: the game's scene size (renderer display). It differs from
+  // the swap chain (window_*) only with the aspect-ratio option, which draws
+  // the scene letterboxed or pillarboxed in the window (scene_override 1).
   unsigned mode{},format{},width{},height{},buffers{},luid_low{};
+  unsigned window_width{},window_height{},scene_override{};
   int luid_high{};
   std::uint64_t cpu_gpu_base{},gpu_base{},cpu_bytes{},gpu_bytes{};
   std::array<std::uintptr_t,kind_count> targets{};

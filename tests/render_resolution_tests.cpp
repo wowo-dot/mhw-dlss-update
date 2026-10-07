@@ -50,8 +50,12 @@ int main(){
     check(!rr::plan({65,64},.5F).valid,"reject native clamp disagreement");
     for(float scale:{0.F,.49F,1.01F,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})check(!rr::plan({2560,1440},scale).valid,"invalid scale");
     check(!rr::plan({0,1440},.5F).valid&&!rr::plan({8193,1440},.5F).valid,"invalid display extent");
-    check(rr::matching_basis({2560,1440},1,{2560,1440}),"matching native override dimensions");
-    check(!rr::matching_basis({2560,1440},1,{1920,1080})&&!rr::matching_basis({2560,1440},2,{2560,1440}),"reject different or unknown sizing basis");
+    check(rr::matching_basis({2560,1440},1,{2560,1440},{2560,1440}),"matching native override dimensions");
+    check(!rr::matching_basis({2560,1440},1,{1920,1080},{2560,1440})&&!rr::matching_basis({2560,1440},2,{2560,1440},{2560,1440}),"reject different or unknown sizing basis");
+    // 21:9 in a 2560x1440 window (game-17) and pillarboxed in 5120x1440.
+    check(rr::matching_basis({2560,1080},1,{2560,1440},{2560,1440})&&rr::matching_basis({3440,1440},1,{5120,1440},{5120,1440}),"aspect basis is the window");
+    check(!rr::matching_basis({2560,1080},0,{2560,1440},{2560,1440})&&!rr::matching_basis({2560,1080},1,{2560,1440},{1920,1080})&&
+          !rr::matching_basis({2560,1600},1,{2560,1440},{2560,1440}),"aspect basis needs the flag, the window size and a scene inside it");
     rr::Ownership owner;float restore{};check(!owner.before(1.F,restore)&&restore==1.F,"unowned request untouched");
     owner.after(1.F,.5F);check(owner.before(.5F,restore)&&restore==1.F&&!owner.owned,"restore ours before native policy");
     owner.after(1.F,.5F);check(!owner.before(.75F,restore)&&restore==.75F&&!owner.owned,"foreign request wins");

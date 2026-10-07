@@ -93,6 +93,23 @@ bool discover(std::uintptr_t base,Runtime &r,std::string &reason) {
   if(!read_arena(r.backend,a)) {reason="arena-read";return false;}
   r.mode=a.mode;r.cpu_resource=a.cpu_resource;r.gpu_resource=a.gpu_resource;
   if(!discover_objects(r,reason))return false;
+  // MHW's aspect-ratio option (e.g. 21:9 in a 16:9 window) renders the scene
+  // into a rectangle: renderer+0x198 holds the scene size, while the config
+  // keeps the window size as its scale basis with the override flag set
+  // (game-17: scene 2560x1080, basis 2560x1440). Without the option the scene
+  // is the window.
+  r.window_width=r.width;r.window_height=r.height;r.scene_override=0;
+  {
+    std::uintptr_t config{};unsigned char override_width{};unsigned scene_width{},scene_height{},basis_width{},basis_height{};
+    if(!read(renderer+0x198,scene_width) || !read(renderer+0x19c,scene_height) || !read(base+0x51c5320,config) || !config ||
+       config>UINTPTR_MAX-0x2cdb || !read(config+0x2cda,override_width)) {reason="scene-extent-read";return false;}
+    if(scene_width!=r.width || scene_height!=r.height) {
+      if(override_width!=1 || !read(config+0x2cd0,basis_width) || !read(config+0x2cd4,basis_height) ||
+         basis_width!=r.window_width || basis_height!=r.window_height || !scene_width || !scene_height ||
+         scene_width>r.window_width || scene_height>r.window_height) {reason="scene-extent";return false;}
+      r.width=scene_width;r.height=scene_height;r.scene_override=1;
+    }
+  }
   Arena b{};std::uintptr_t after{},device_after{},swap_after{};
   if(!read(renderer+0x78,after) || after!=r.backend || !read_arena(r.backend,b) ||
      !read(r.backend+0x18,device_after) || device_after!=r.device || !read(r.backend+0x1470,swap_after) || swap_after!=r.swapchain ||

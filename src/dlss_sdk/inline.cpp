@@ -51,7 +51,7 @@ struct InlineFrame::Impl {
     unsigned width{},height{},create_result{},evaluate_result{},release_result{},destroy_result{};
     Geometry geometry;Extent optimal{},minimum{},maximum{};unsigned optimal_result{},quality{};float sharpness{};
     bool creation_completed{},attempted{},issued{},restored{},copied{},collected{},released{};
-    bool continuous{},caller_retained{},reset{true},captured{};float frame_ms{diagnostic_frame_ms};
+    bool continuous{},caller_retained{},capture_buffers{true},reset{true},captured{};float frame_ms{diagnostic_frame_ms};
     std::uintptr_t native_identity{},list_identity{};
     RecordAttempt last;
     std::uint64_t evaluations{},resets{},captures{};
@@ -61,8 +61,9 @@ InlineFrame::InlineFrame(ID3D12Device *device,unsigned w,unsigned h,const std::a
                         const std::filesystem::path &runtime,const BorrowedInitialization &initialization,bool continuous,bool caller_retained):
     InlineFrame(device,Geometry::dlaa(w,h),raw,runtime,initialization,continuous,caller_retained){}
 InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array<ID3D12Resource *,3> &raw,
-                        const std::filesystem::path &runtime,const BorrowedInitialization &initialization,bool continuous,bool caller_retained):impl_(std::make_unique<Impl>()){
-    auto &p=*impl_;
+                        const std::filesystem::path &runtime,const BorrowedInitialization &initialization,bool continuous,bool caller_retained,
+                        bool captures):impl_(std::make_unique<Impl>()){
+    auto &p=*impl_;p.capture_buffers=captures;
     try {
         require(device&&device->GetNodeCount()==1&&valid_geometry(geometry),"inline extent/device");
         const auto w=geometry.render.width,h=geometry.render.height,ow=geometry.output.width,oh=geometry.output.height;
@@ -83,13 +84,13 @@ InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array
         for(unsigned i=0;i<3;++i){same_device(raw[i],device);const auto d=raw[i]->GetDesc();
             require(d.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D&&d.Width==geometry.allocation.width&&d.Height==geometry.allocation.height&&d.DepthOrArraySize==1&&d.MipLevels==1&&d.SampleDesc.Count==1&&d.SampleDesc.Quality==0&&d.Format==inputs[i]&&d.Flags==0,"inline input layout");
             for(unsigned j=0;j<i;++j)require(raw[i]!=raw[j],"inline input alias");p.raw[i]=raw[i];
-            auto desc=texture(w,h,outputs[i]);p.converted[i]=resource(device,desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);p.readbacks[i].prepare(device,desc,pixel_bytes[i]);
+            auto desc=texture(w,h,outputs[i]);p.converted[i]=resource(device,desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);if(captures)p.readbacks[i].prepare(device,desc,pixel_bytes[i]);
         }
-        auto out=texture(ow,oh,DXGI_FORMAT_R32G32B32A32_FLOAT);p.output=resource(device,out,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);p.readbacks[3].prepare(device,out,16);
-        p.readbacks[4].prepare(device,texture(ow,oh,DXGI_FORMAT_R11G11B10_FLOAT),4);p.handoff=std::make_unique<temporal_present::Output>(device,ow,oh,continuous,caller_retained);
+        auto out=texture(ow,oh,DXGI_FORMAT_R32G32B32A32_FLOAT);p.output=resource(device,out,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);if(captures){p.readbacks[3].prepare(device,out,16);
+        p.readbacks[4].prepare(device,texture(ow,oh,DXGI_FORMAT_R11G11B10_FLOAT),4);}p.handoff=std::make_unique<temporal_present::Output>(device,ow,oh,continuous,caller_retained);
         const auto account=[&](ID3D12Resource *r){const auto desc=r->GetDesc();const auto bytes=device->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
             require(bytes&&bytes!=UINT64_MAX&&bytes<=419430400-p.allocation_bytes,"inline image allocation budget");p.allocation_bytes+=bytes;};
-        for(const auto &r:p.converted)account(r.Get());account(p.output.Get());account(p.handoff->packed());for(const auto &r:p.readbacks)account(r.buffer.Get());
+        for(const auto &r:p.converted)account(r.Get());account(p.output.Get());account(p.handoff->packed());for(const auto &r:p.readbacks)if(r.buffer)account(r.buffer.Get());
         D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,7,D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,0};
         hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&p.heap)),"inline heap");const auto step=device->GetDescriptorHandleIncrementSize(hd.Type);
         const auto start=p.heap->GetCPUDescriptorHandleForHeapStart().ptr;
@@ -144,6 +145,7 @@ bool InlineFrame::record_frame(ID3D12GraphicsCommandList *list,ID3D12Resource *n
     try {
         require(p.creation_completed&&state.ready()&&history.frame&&history.epoch&&std::isfinite(history.jitter_x)&&std::isfinite(history.jitter_y)&&std::abs(history.jitter_x)<=.5F&&std::abs(history.jitter_y)<=.5F,"inline recording contract");
         require(std::isfinite(frame_ms)&&frame_ms>0&&frame_ms<=1000&&(p.evaluations||reset),"inline history timing/reset");
+        require(!capture||p.capture_buffers,"inline captures disabled");
         require(!p.evaluations||history.frame>p.history.frame,"inline monotonic history");
         same_device(list,p.device.Get());require(list->GetType()==D3D12_COMMAND_LIST_TYPE_DIRECT,"inline DIRECT list");
         p.handoff->bind(p.output.Get(),native);temporal_present::RestoreBindings restore(list,state);

@@ -94,14 +94,14 @@ Output::Output(ID3D12Device *device,unsigned w,unsigned h,bool continuous,bool c
 Output::Output(ID3D12Device *device,SpatialSource source,unsigned w,unsigned h,bool continuous,bool caller_retained)
     : Output(device,w,h,continuous,caller_retained,&source) {}
 Output::Output(ID3D12Device *device, unsigned w, unsigned h, bool continuous,bool caller_retained,const SpatialSource *source) : impl_(std::make_unique<Impl>()) {
-    require(device && w && h && w <= 8192 && h <= 8192 && UINT64(w)*h <= 4194304,
+    require(device && w && h && w <= 8192 && h <= 8192 && UINT64(w)*h <= 16777216,
             "presentation extent/device");
     require(!caller_retained||continuous,"presentation caller retention mode");
     auto &p = *impl_; p.device = device; p.width = w; p.height = h;p.continuous=continuous;p.caller_retained=caller_retained;
     p.spatial=source!=nullptr;p.region=source?*source:SpatialSource{w,h,w,h};
     const auto &r=p.region;
     require(r.width&&r.height&&r.width<=r.allocation_width&&r.height<=r.allocation_height&&r.width<=w&&r.height<=h&&
-        r.allocation_width<=8192&&r.allocation_height<=8192&&UINT64(r.allocation_width)*r.allocation_height<=4194304&&
+        r.allocation_width<=8192&&r.allocation_height<=8192&&UINT64(r.allocation_width)*r.allocation_height<=16777216&&
         UINT64(r.width)*h==UINT64(r.height)*w,"presentation source region");
     D3D12_FEATURE_DATA_FORMAT_SUPPORT support{DXGI_FORMAT_R11G11B10_FLOAT};
     hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)), "presentation format query");

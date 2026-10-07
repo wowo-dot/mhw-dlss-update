@@ -88,7 +88,7 @@ bool snapshot(Snapshot &s) noexcept {
     if(sizing&1)return stop(10);
     if(wrapper)return stop(11);
     if(override_width>1)return stop(12);
-    if(!matching_basis({s.width,s.height},s.width_override,{s.basis_width,s.basis_height}))return stop(13);
+    if(!matching_basis({s.width,s.height},s.width_override,{s.basis_width,s.basis_height},{discovered.window_width,discovered.window_height}))return stop(13);
     for(float value:{s.desired,s.applied,s.previous,s.content_desired,s.content,s.combined,s.view_scale,s.view_content,s.view_combined})if(!std::isfinite(value))return stop(14);
     if(s.width!=target.display.width||s.height!=target.display.height)return stop(15);
     if(s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F)return stop(16);

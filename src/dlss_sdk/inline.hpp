@@ -23,8 +23,11 @@ class InlineFrame {
 public:
     InlineFrame(ID3D12Device *,unsigned,unsigned,const std::array<ID3D12Resource *,3> &,
                 const std::filesystem::path &,const BorrowedInitialization &,bool continuous=false,bool caller_retained=false);
+    // captures=false skips the five diagnostic readback buffers (about 450 MB
+    // at 4K); record_continuous() then refuses capture=true.
     InlineFrame(ID3D12Device *,Geometry,const std::array<ID3D12Resource *,3> &,
-                const std::filesystem::path &,const BorrowedInitialization &,bool continuous=false,bool caller_retained=false);
+                const std::filesystem::path &,const BorrowedInitialization &,bool continuous=false,bool caller_retained=false,
+                bool captures=true);
     ~InlineFrame();
     InlineFrame(const InlineFrame &)=delete;
     InlineFrame &operator=(const InlineFrame &)=delete;

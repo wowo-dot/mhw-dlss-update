@@ -8,8 +8,11 @@ struct Plan { Extent display{},render{}; float requested{},quantized{}; bool val
 
 // The native setter selects config dimensions when its override flag is set.
 // Admit that route only when it describes the same fixed display extent.
-inline bool matching_basis(Extent display,unsigned override_enabled,Extent basis) noexcept {
-    return override_enabled<=1 && basis==display;
+// The scale basis is the display (scene) size, or with the aspect-ratio
+// option (scene letterboxed or pillarboxed) the window size.
+inline bool matching_basis(Extent display,unsigned override_enabled,Extent basis,Extent window) noexcept {
+    return override_enabled<=1 && (basis==display || (override_enabled==1 && basis==window &&
+        display.width<=window.width && display.height<=window.height));
 }
 
 // Match the pinned native setter: clamp to [0.5/content,1], truncate width,
