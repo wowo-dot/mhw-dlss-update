@@ -27,7 +27,9 @@ inline bool brackets(float actual,float expected,unsigned channel){
  v={actual,actual,actual,1};const auto encoded=(pack(v)>>shift)&mask;
  return unpack(pack(v))[channel]==actual&&encoded>=lower&&encoded<=upper;
 }
-inline bool typeless_coc(){char value[2]{};std::size_t n{};return !getenv_s(&n,value,"MHW_DOF_TYPELESS_COC")&&n==2&&value[0]=='1';}
+// MHW_DOF_POOLED=1 reproduces the 1920x1080 DOF textures: the CoC backed by
+// its TYPELESS family and engine extents carrying flag bit 31.
+inline bool pooled(){char value[2]{};std::size_t n{};return !getenv_s(&n,value,"MHW_DOF_POOLED")&&n==2&&value[0]=='1';}
 // Views of a TYPELESS resource use the typed member the game's views use.
 inline DXGI_FORMAT view(DXGI_FORMAT f){return f==DXGI_FORMAT_R16G16B16A16_TYPELESS?DXGI_FORMAT_R16G16B16A16_FLOAT:f;}
 inline std::vector<float> decode(const std::vector<float> &raw,DXGI_FORMAT format){

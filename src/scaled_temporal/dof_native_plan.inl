@@ -6,7 +6,9 @@ struct DofCounters {
  std::uint64_t qualified{},warmups{},dispatches{},adapted{},completed{},rejected{},restored{};
  std::array<std::uint64_t,6> passes{};
  unsigned reason{},pass{};
- std::uint64_t mismatches{};std::array<unsigned,4> miss{}; // first size/dispatch/constant mismatch
+ // Failed qualifications, and the first one's diagnostics (DofNativeSequence).
+ std::uint64_t failures{};unsigned failed_at{},miss_count{},flagged{};std::array<std::array<unsigned,4>,8> misses{};
+ void latch(const DofNativeSequence &d){if(failures++)return;failed_at=d.failed_at;miss_count=d.miss_count;flagged=d.flagged;misses=d.misses;}
 } dof_stats;
 bool dof_read(OutputDependencies::Compute &d){
  if(!OutputDependencies::compute_reread(d,dof_scratch,[](std::uint64_t at,void *out,std::size_t size){
@@ -37,21 +39,21 @@ bool dof_qualify(Plan &p){
  if(matching!=1)return reject(3);
  const auto &b=p.dependency_bindings[d.stage-4];std::array<std::uint64_t,5> composite{};
  for(unsigned i=0;i<5;++i)composite[i]=b.textures[i].object;
- if(!d.qualify(width,height,p.draws[d.stage].dependency_source,composite)){
-  if(d.miss[0]&&!dof_stats.mismatches++)dof_stats.miss=d.miss;
-  return reject(4);}
+ if(!d.qualify(width,height,p.draws[d.stage].dependency_source,composite)){dof_stats.latch(d);return reject(4);}
  std::uintptr_t queue{},next{};unsigned key{};
  if(!field(p.stamp.context,0x2b78,queue)||!field(queue,static_cast<unsigned>(16*(d.passes[5].index+1)),key)||key!=d.key||
     !field(queue,static_cast<unsigned>(16*(d.passes[5].index+1)+8),next)||next!=p.draws[d.stage].draw.packet)return reject(5);
+ bool described=true;
  for(unsigned i=0;i<9;++i){const auto &t=d.textures[i];const auto &v=t.fields;std::uintptr_t method{};
   if(!compute_texture_stable(t))return reject(6);
   for(unsigned slot:{0U,1U,2U,7U,10U})if(!pb::system_method(v[3],slot,method))return reject(7);
   ID3D12Resource *raw{};D3D12_RESOURCE_DESC desc{};unsigned planes{};
   if(!compute_describe(v[3],&raw,&desc,&planes))return reject(8);ComPtr<ID3D12Resource> held;held.Attach(raw);
-  const auto note=[&](unsigned check,unsigned observed,unsigned expected){if(!dof_stats.mismatches++)dof_stats.miss={check,i,observed,expected};};
-  if(!dof_format_matches(unsigned(desc.Format),DofNativeSequence::formats[i])){note(4,unsigned(desc.Format),DofNativeSequence::formats[i]);return reject(9);}
+  // Format and size mismatches are collected for all nine textures first.
+  if(!dof_format_matches(unsigned(desc.Format),DofNativeSequence::formats[i])){d.note(4,i,unsigned(desc.Format),DofNativeSequence::formats[i]);described=false;}
   if(desc.Width!=d.layout.sizes[i][0]||desc.Height!=d.layout.sizes[i][1]){
-   note(5,static_cast<unsigned>(desc.Width)|(desc.Height<<16),d.layout.sizes[i][0]|(d.layout.sizes[i][1]<<16));return reject(9);}
+   d.note(5,i,static_cast<unsigned>(desc.Width)|(desc.Height<<16),d.layout.sizes[i][0]|(d.layout.sizes[i][1]<<16));described=false;}
+  if(!described)continue;
   if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||desc.MipLevels!=1||
      desc.DepthOrArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality||planes!=1||
      (desc.Flags&D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)||
@@ -60,6 +62,7 @@ bool dof_qualify(Plan &p){
   if(index==resource_count(p)){if(index==resource_capacity)return reject(10);p.resources[index]=std::move(held);++p.extra_resources;}
   d.resources[i]=index;
  }
+ if(!described){dof_stats.latch(d);return reject(9);}
  for(const auto &pass:d.passes)if(!dof_stable(pass))return reject(11);
  ++dof_stats.qualified;return true;
 }
@@ -69,5 +72,8 @@ void dof_write(std::ostream &o){
   <<",\"completed\":"<<dof_stats.completed<<",\"rejected\":"<<dof_stats.rejected<<",\"restored\":"<<dof_stats.restored
   <<",\"reason\":"<<dof_stats.reason<<",\"pass\":"<<dof_stats.pass<<",\"passes\":[";
  for(unsigned i=0;i<6;++i){if(i)o<<',';o<<dof_stats.passes[i];}
- o<<"],\"mismatches\":"<<dof_stats.mismatches<<",\"miss\":["<<dof_stats.miss[0]<<','<<dof_stats.miss[1]<<','<<dof_stats.miss[2]<<','<<dof_stats.miss[3]<<"]}";
+ o<<"],\"failures\":"<<dof_stats.failures<<",\"failed_at\":"<<dof_stats.failed_at<<",\"flagged\":"<<dof_stats.flagged
+  <<",\"miss_count\":"<<dof_stats.miss_count<<",\"misses\":[";
+ for(unsigned i=0;i<dof_stats.misses.size()&&i<dof_stats.miss_count;++i){const auto &m=dof_stats.misses[i];if(i)o<<',';o<<'['<<m[0]<<','<<m[1]<<','<<m[2]<<','<<m[3]<<']';}
+ o<<"]}";
 }

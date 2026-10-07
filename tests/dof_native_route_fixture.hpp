@@ -30,7 +30,7 @@ struct Route {
   auto queue=a.take(16*20);Arena::put(p.stamp.context+0x2b78,queue);
   for(unsigned i=0;i<9;++i){owners[i]=a.take(0x100);const auto back=a.take(0x40),srv=a.take(0x20),uav=a.take(0x20);
    Arena::put(owners[i]+0x60,back);Arena::put(back+0x20,reinterpret_cast<std::uintptr_t>(textures[i].Get()));
-   Arena::put(owners[i]+0x88,layout.sizes[i][0]|(layout.sizes[i][1]<<16));
+   Arena::put(owners[i]+0x88,layout.sizes[i][0]|(layout.sizes[i][1]<<16)|(dof_formats::pooled()&&i>=2?0x80000000U:0U));
    Arena::put(owners[i]+0x90,sf::DofNativeSequence::engine_formats[i]);Arena::put(owners[i]+0x94,UINT_MAX);
    Arena::put(owners[i]+0x78,srv);Arena::put(owners[i]+0x80,uav);
    // Opaque native view handles are only compared by the route, never decoded,
@@ -61,6 +61,7 @@ struct Route {
   constexpr unsigned roles[]{5,6,1,4,8};for(unsigned i=0;i<5;++i)p.dependency_bindings[0].textures[i].object=owners[roles[i]];
   Arena::put(queue+16*16,d.key);Arena::put(queue+16*16+8,p.draws[4].draw.packet);
   require(r::dof_qualify(p),"complete native DOF recipe/actual resources");
+  require(d.flagged==(dof_formats::pooled()?0x1fcU:0U)&&!d.failed_at&&!d.miss_count,"engine extent flags and clean diagnostics");
   std::array<std::uint64_t,5> comp{};for(unsigned i=0;i<5;++i)comp[i]=owners[roles[i]];
   const auto reject=[&]{require(!d.qualify(r::width,r::height,owners[1],comp),"malformed six-pass contract rejected");++negatives;};
   ++d.passes[0].prefix[6];reject();--d.passes[0].prefix[6];

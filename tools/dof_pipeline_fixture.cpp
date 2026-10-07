@@ -140,8 +140,8 @@ struct Pipeline : Gpu {
   std::array<ComPtr<ID3D12Resource>,11> resources;std::vector<Pixels> uploads;uploads.reserve(resource_count);
   std::array<D3D12_RESOURCE_STATES,11> states;states.fill(D3D12_RESOURCE_STATE_COPY_DEST);
   for(unsigned i=0;i<resource_count;++i){auto desc=texture(dims[i][0],dims[i][1],native_formats?dof_formats::formats[i]:i==0?DXGI_FORMAT_R32_FLOAT:i==7?DXGI_FORMAT_R32_UINT:i==8?DXGI_FORMAT_R8_UNORM:DXGI_FORMAT_R32G32B32A32_FLOAT);
-   // MHW_DOF_TYPELESS_COC=1: back the CoC with its TYPELESS family, as the game does at 1920x1080.
-   if(native_formats&&i==5&&dof_formats::typeless_coc())desc.Format=DXGI_FORMAT_R16G16B16A16_TYPELESS;
+   // MHW_DOF_POOLED=1: back the CoC with its TYPELESS family, as the game does at 1920x1080.
+   if(native_formats&&i==5&&dof_formats::pooled())desc.Format=DXGI_FORMAT_R16G16B16A16_TYPELESS;
    if(i>=2&&i<10)desc.Flags=i==9?D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET:D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
    resources[i]=resource(device.Get(),desc,D3D12_HEAP_TYPE_DEFAULT,states[i]);uploads.emplace_back(device.Get(),desc,D3D12_HEAP_TYPE_UPLOAD);
    std::vector<std::byte> bytes(static_cast<size_t>(uploads.back().row)*dims[i][1]);
