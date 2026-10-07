@@ -52,5 +52,7 @@ int main(int argc,char **argv){try{
     for(const auto bad:std::array<sf::FilterGeometry,7>{{{0,720,2560,1440},{1280,0,2560,1440},{1280,720,1920,1080},{1280,720,2560,720},{2560,1440,1280,720},{UINT_MAX,720,2560,1440},{17,9,34,18}}})
         for(auto stage:{sf::EffectStage::motion_filter,sf::EffectStage::color_grade,sf::EffectStage::final_screen,sf::EffectStage::haze})rejects([&]{sf::effect_vertices(stage,bad,true);});
     rejects([]{sf::effect_vertices(static_cast<sf::EffectStage>(7),{64,32,128,64},true);});
+    // A pillarboxed odd scene renders at the truncated half (game-20).
+    check(sf::valid_filter_geometry({1706,720,3413,1440})&&!sf::valid_filter_geometry({1707,720,3413,1440})&&!sf::valid_filter_geometry({1705,720,3413,1440}),"truncated half");
     std::cout<<"PASS: "<<cases<<" geometry cases, 29 rejected configurations\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

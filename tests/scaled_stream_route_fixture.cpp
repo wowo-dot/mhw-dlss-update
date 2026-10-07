@@ -33,7 +33,7 @@ int wmain(int argc,wchar_t **argv){try{
     require(obs::install(f.device.Get(),resolver,reason,true,ViewportFeed::observe,true),reason.c_str());obs::begin();
     ViewportFeed::expected=f.list.Get();
     route::cfg.device=reinterpret_cast<std::uintptr_t>(f.device.Get());route::originals[2]=reinterpret_cast<void *>(copy_forward);
-    route::width=128;route::height=64;route::begin();
+    route::width=128;route::height=64;route::render_w=64;route::render_h=32;route::begin();
     if(mode=="indexed-ownership"){check_indexed_ownership(f);require(obs::finish(),"indexed observer cleanup");return 0;}
 #include "compute_depth_pixels_fixture.inl"
     if(mode=="compute_descriptions"){

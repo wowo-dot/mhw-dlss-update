@@ -89,7 +89,7 @@ SilhouettePipeline *silhouette_pipeline(const std::shared_ptr<SilhouetteCpu> &r,
  SilhouettePipeline *slot{};for(auto &p:silhouette_pipelines)if(!p.draw){slot=&p;break;}if(!slot)return nullptr;
  auto &layout_record=r->layout;auto input=layout_record.elements;
  for(unsigned i=0;i<r->native.input_count;++i)input[i].SemanticName=layout_record.semantics[i].data();
- SilhouetteRecipe recipe;recipe.geometry={width/2,height/2,width,height};auto &d=recipe.native;
+ SilhouetteRecipe recipe;recipe.geometry={render_w,render_h,width,height};auto &d=recipe.native;
  d.pRootSignature=root;d.VS={r->bytes[0].data(),r->bytes[0].size()};d.PS={r->bytes[1].data(),r->bytes[1].size()};
  std::memcpy(&d.BlendState,r->native.blend.data(),sizeof(d.BlendState));std::memcpy(&d.RasterizerState,r->native.raster.data(),sizeof(d.RasterizerState));
  std::memcpy(&d.DepthStencilState,r->native.depth.data(),sizeof(d.DepthStencilState));
@@ -128,13 +128,13 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
     rs.ForcedSampleCount||rs.ConservativeRaster!=D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF)return native(2);
  for(unsigned i=0;i<3;++i){std::uintptr_t extra{};if(!field(r.recipe->set,0x60+8*i,extra)||extra)return native(3);}
  const auto &v=raster.viewport;const auto &sc=raster.scissor;
- if(v.TopLeftX||v.TopLeftY||v.Width!=width/2||v.Height!=height/2||v.MinDepth||v.MaxDepth!=1||sc.left||sc.top||sc.right!=LONG(width/2)||sc.bottom!=LONG(height/2))return native(4);
+ if(v.TopLeftX||v.TopLeftY||v.Width!=render_w||v.Height!=render_h||v.MinDepth||v.MaxDepth!=1||sc.left||sc.top||sc.right!=LONG(render_w)||sc.bottom!=LONG(render_h))return native(4);
  const auto state=recording_states.get(reinterpret_cast<std::uintptr_t>(list),roots.generation,now.views[0].resource);
  if(!state.known||state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5);
  std::array<ComPtr<ID3D12Resource>,2> textures,buffers;std::array<unsigned,28> screen{};std::array<unsigned,5> material{};
  if(!silhouette_bindings(r,screen,material,textures)||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
     screen[4]!=std::bit_cast<unsigned>(float(width))||screen[5]!=std::bit_cast<unsigned>(float(height))||screen[6]!=std::bit_cast<unsigned>(1.F/width)||screen[7]!=std::bit_cast<unsigned>(1.F/height)||
-    screen[10]!=width/2||screen[11]!=height/2||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(width/2))||screen[15]!=std::bit_cast<unsigned>(float(height/2))||
+    screen[10]!=render_w||screen[11]!=render_h||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(render_w))||screen[15]!=std::bit_cast<unsigned>(float(render_h))||
     screen[16]!=std::bit_cast<unsigned>(2.F/width)||screen[17]!=std::bit_cast<unsigned>(2.F/height))return native(6);
  for(unsigned i=0;i<2;++i){const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
     d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))return native(7);}

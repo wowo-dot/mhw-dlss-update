@@ -32,16 +32,25 @@ constexpr bool valid_geometry(const Geometry &g) noexcept {
        g.render.width>g.output.width||g.render.height>g.output.height)return false;
     if(g.mode==ReconstructionMode::dlaa)return g.render==g.output;
     if(g.mode!=ReconstructionMode::performance)return false;
-    return g.render.width<g.output.width&&g.render.height<g.output.height&&
-        std::uint64_t(g.render.width)*g.output.height==std::uint64_t(g.render.height)*g.output.width;
+    // One scale for both axes, each truncated by the game: render = floor(output*q).
+    // That holds when the intervals [r/o,(r+1)/o) of both axes overlap. Exact
+    // 2:1 sizes satisfy it; so does a 3413x1440 scene rendered at 1706x720.
+    const std::uint64_t rw=g.render.width,rh=g.render.height,ow=g.output.width,oh=g.output.height;
+    return rw<ow&&rh<oh&&rw*oh<(rh+1)*ow&&rh*ow<(rw+1)*oh;
 }
-// This first upscale route is static. Accept only the SDK's exact recommended
-// extent, with sane reported bounds; do not silently resize captured inputs.
+// This upscale route is static: the render extent is the game's. Accept the
+// SDK's recommended extent within one pixel per axis (the SDK rounds a half
+// pixel where the game truncates), inside sane reported bounds; do not
+// silently resize captured inputs.
 constexpr bool optimal_matches(const Geometry &g,Extent optimal,Extent minimum,Extent maximum) noexcept {
+    const auto within_one=[](unsigned a,unsigned b){return a+1>=b&&b+1>=a;};
     return valid_geometry(g)&&valid_extent(optimal)&&valid_extent(minimum)&&valid_extent(maximum)&&
-        g.render==optimal&&minimum.width<=optimal.width&&minimum.height<=optimal.height&&
+        within_one(g.render.width,optimal.width)&&within_one(g.render.height,optimal.height)&&
+        minimum.width<=optimal.width&&minimum.height<=optimal.height&&
         maximum.width>=optimal.width&&maximum.height>=optimal.height&&
-        maximum.width<=g.output.width&&maximum.height<=g.output.height;
+        maximum.width<=g.output.width&&maximum.height<=g.output.height&&
+        g.render.width+1>=minimum.width&&g.render.height+1>=minimum.height&&
+        g.render.width<=maximum.width&&g.render.height<=maximum.height;
 }
 struct PixelJitter {float x{},y{};};
 // The native projection adds native/viewport to clip coordinates. Convert that

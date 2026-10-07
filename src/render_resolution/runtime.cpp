@@ -191,7 +191,8 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     if(image){reason="already prepared";return false;}
     shared_viewport=shared;
     if(!pb::discover(base,discovered,reason))return false;
-    target=plan({discovered.width,discovered.height},scale);
+    // A pillarboxed scene quantizes its scale against the window (config basis).
+    target=plan({discovered.width,discovered.height},discovered.scene_override?discovered.window_width:discovered.width,scale);
     if(!target.valid||scale==1.F){reason="reduced extent plan";return false;}
     struct Gate{unsigned rva,bytes;const char *sha;};
     constexpr Gate gates[]{

@@ -83,7 +83,9 @@ struct DofNativeSequence {
   // 91 shared texture, 92 composition inputs, 93 scene/constants, 94 screen
   // zero words, 95 blur constants.
   const auto bad=[&](unsigned code){failed_at=code;return false;};
-  if(count!=6||!scene_owner||!width||!height||(width|height)&1)return bad(1);
+  // An odd scene (3413x1440 pillarboxed) takes the truncated half; the size
+  // and constant checks below record the game's actual sizes if it differs.
+  if(count!=6||!scene_owner||!width||!height)return bad(1);
   layout=dof_layout(width,height);
   textures={};
   std::array<const OutputDependencies::Constant *,4> constants{};

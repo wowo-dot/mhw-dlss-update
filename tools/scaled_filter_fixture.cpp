@@ -177,13 +177,45 @@ struct Fixture {
         if(m->Severity<=D3D12_MESSAGE_SEVERITY_WARNING){++failures;std::cerr<<m->pDescription<<'\n';}}
         require(failures==0,"GPU validation warning/error");}
 };
+// The truncated half (a pillarboxed odd scene: 3413x1440 renders at 1706x720;
+// here 129x65 at 64x32). Mirror the adapter's float mapping: the raster
+// position goes to the render lattice, takes the native half-texel clamp there,
+// and expands back for the full-size t0 read. Interior pixels land on t0 texel
+// centres to float precision and must match exactly; the clamped last row and
+// column sample between texels, where hardware bilinear weights carry eight
+// fractional bits, so they are bounded by the neighbour difference / 256.
+float truncated_error(std::span<const float> pixels,sf::FilterGeometry g,bool constant,unsigned &edges){
+    const float sx=float(g.render_width)/g.output_width,sy=float(g.render_height)/g.output_height;
+    const float ix=float(g.output_width)/g.render_width,iy=float(g.output_height)/g.render_height;
+    const auto t0=[&](unsigned v,float s,float i,unsigned r){return double(std::min((float(v)+.5F)*s,float(r)-.5F)*i)-.5;};
+    float worst=0;edges=0;
+    for(unsigned y=0;y<g.output_height;++y)for(unsigned x=0;x<g.output_width;++x){
+        const double px=t0(x,sx,ix,g.render_width),py=t0(y,sy,iy,g.render_height);
+        const bool exact=std::abs(px-std::round(px))<1e-3&&std::abs(py-std::round(py))<1e-3;
+        const auto x0=static_cast<unsigned>(std::max(0.,std::floor(exact?std::round(px):px))),y0=static_cast<unsigned>(std::max(0.,std::floor(exact?std::round(py):py)));
+        const auto x1=std::min(x0+1,g.output_width-1),y1=std::min(y0+1,g.output_height-1);
+        const double fx=exact?0:px-x0,fy=exact?0:py-y0;edges+=!exact;
+        const auto a=color(x0,y0,g.output_width,constant),b=color(x1,y0,g.output_width,constant),c=color(x0,y1,g.output_width,constant),d=color(x1,y1,g.output_width,constant);
+        for(unsigned k=0;k<4;++k){
+            const double ref=k==3?color(x,y,g.output_width,constant)[3]:(1-fy)*((1-fx)*a[k]+fx*b[k])+fy*((1-fx)*c[k]+fx*d[k]);
+            const double spread=std::max({std::abs(double(a[k])-b[k]),std::abs(double(a[k])-c[k]),std::abs(double(a[k])-d[k])});
+            const double bound=(k==3||exact?0:2*spread/256)+.00003;
+            const auto v=pixels[(std::size_t(y)*g.output_width+x)*4+k];require(std::isfinite(v),"truncated finite output");
+            const auto error=static_cast<float>(std::abs(v-ref));require(error<=bound,"truncated-half pixel oracle");
+            if(exact||k==3)worst=std::max(worst,error);
+        }
+    }
+    return worst;
+}
 void run(int argc,wchar_t **argv){
     const bool warp=argc==4&&std::wstring_view(argv[1])==L"--warp";
     require(warp||(argc==6&&std::wstring_view(argv[1])==L"--hardware"),"usage: --warp shader.dxbc output-dir OR --hardware luid-low luid-high shader.dxbc output-dir");
     const auto shader_path=std::filesystem::path(argv[warp?2:4]),out=std::filesystem::path(argv[warp?3:5]);
     require(!std::filesystem::exists(out),"preserve results");std::filesystem::create_directories(out);
     const auto native=read(shader_path);const sf::FilterGeometry identity{64,32,64,32},scaled{64,32,128,64};
+    const sf::FilterGeometry truncated{64,32,129,65};
     auto one=sf::make_filter_shader(native,identity),two=sf::make_filter_shader(native,scaled),reference=expanded_texture_reference(two);
+    const auto odd=sf::make_filter_shader(native,truncated);save(out/"truncated.dxbc",odd);
     reflection(native,one);reflection(native,two);save(out/"identity.dxbc",one);save(out/"scaled.dxbc",two);disassemble(out/"scaled.asm",two);
     save(out/"expanded-texture-reference.dxbc",reference);disassemble(out/"expanded-texture-reference.asm",reference);
     unsigned rejections=0;
@@ -214,6 +246,10 @@ void run(int argc,wchar_t **argv){
         }
         maximum=std::max(maximum,error);report<<"{\"case\":\"scaled-"<<scenario<<"\",\"compared\":"<<pixels.size()<<",\"max_abs_error\":"<<error<<"}\n";report.flush();
         require(error<=.00003F,"scaled pixel oracle");
+        {unsigned edges{};const auto odd_pixels=f.draw(odd,truncated,scenario,constant);const auto odd_error=truncated_error(odd_pixels,truncated,constant,edges);
+         comparisons+=static_cast<unsigned>(odd_pixels.size());maximum=std::max(maximum,odd_error);
+         report<<"{\"case\":\"truncated-"<<scenario<<"\",\"compared\":"<<odd_pixels.size()<<",\"edge_pixels\":"<<edges<<",\"max_interior_error\":"<<odd_error<<"}\n";report.flush();
+         save(out/("truncated-"+std::to_string(scenario)+".rgba32f"),std::as_bytes(std::span(odd_pixels)));}
         save(out/("scaled-"+std::to_string(scenario)+".rgba32f"),std::as_bytes(std::span(pixels)));
         if(scenario>=2){const auto original_layout=f.draw(reference,scaled,scenario,false,true),changed_layout=f.draw(two,scaled,scenario,false);
             require(original_layout.size()==changed_layout.size(),"expanded texture lengths");
@@ -223,8 +259,8 @@ void run(int argc,wchar_t **argv){
         }
     }
     f.check_messages();hr(f.allocator->Reset(),"final allocator retirement");hr(f.list->Reset(f.allocator.Get(),nullptr),"final recording retirement");hr(f.list->Close(),"final close");
-    std::ofstream summary(out/"result.json");summary<<"{\"passed\":true,\"warp\":"<<(warp?"true":"false")<<",\"adapter_luid\":["<<f.actual_luid.HighPart<<','<<f.actual_luid.LowPart<<"],\"vendor\":"<<f.vendor<<",\"device\":"<<f.device_id<<",\"draws\":16,\"rejections\":"<<rejections<<",\"float_comparisons\":"<<comparisons<<",\"max_abs_error\":"<<maximum<<",\"gpu_warnings_errors\":0,\"reflection_unchanged\":true,\"recordings_retired\":true}\n";
-    require(bool(summary),"result write");std::cout<<"PASS: 16 draws; "<<comparisons<<" float comparisons; "<<rejections<<" rejected inputs; max error "<<maximum<<"\n";
+    std::ofstream summary(out/"result.json");summary<<"{\"passed\":true,\"warp\":"<<(warp?"true":"false")<<",\"adapter_luid\":["<<f.actual_luid.HighPart<<','<<f.actual_luid.LowPart<<"],\"vendor\":"<<f.vendor<<",\"device\":"<<f.device_id<<",\"draws\":20,\"rejections\":"<<rejections<<",\"float_comparisons\":"<<comparisons<<",\"max_abs_error\":"<<maximum<<",\"gpu_warnings_errors\":0,\"reflection_unchanged\":true,\"recordings_retired\":true}\n";
+    require(bool(summary),"result write");std::cout<<"PASS: 20 draws (including the truncated half); "<<comparisons<<" float comparisons; "<<rejections<<" rejected inputs; max error "<<maximum<<"\n";
 }
 }
 int wmain(int argc,wchar_t **argv){try{run(argc,argv);return 0;}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -52,7 +52,15 @@ int main(){
         bad=upscale;bad.output=e;if(valid_geometry(bad))return 28;
     }
     if(!optimal_matches(upscale,{1280,720},{640,360},{2560,1440}))return 29;
-    if(optimal_matches(upscale,{1279,720},{640,360},{2560,1440})||
+    // A pillarboxed 21:9 scene in a 5120x1440 window: the game truncates
+    // 1706.5 where the SDK may round to 1707 (game-20).
+    const Geometry pillar{{3413,1440},{1706,720},{3413,1440},ReconstructionMode::performance};
+    if(!valid_geometry(pillar)||!optimal_matches(pillar,{1707,720},{1707,720},{3413,1440})||
+       !optimal_matches(pillar,{1706,720},{1706,720},{3413,1440}))return 38;
+    bad=pillar;bad.render={1706,721};if(valid_geometry(bad))return 39;
+    bad=pillar;bad.render={1704,720};if(valid_geometry(bad)||optimal_matches(bad,{1707,720},{1707,720},{3413,1440}))return 40;
+    if(optimal_matches(pillar,{1708,720},{1708,720},{3413,1440})||optimal_matches(pillar,{1707,720},{1707,720},{1705,1440}))return 41;
+    if(optimal_matches(upscale,{1278,720},{640,360},{2560,1440})||
        optimal_matches(upscale,{1280,720},{1281,720},{2560,1440})||
        optimal_matches(upscale,{1280,720},{640,360},{1279,720})||
        optimal_matches(upscale,{1280,720},{640,360},{2561,1440})||

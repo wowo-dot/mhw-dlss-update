@@ -16,7 +16,9 @@ using FinalSceneObserver = void (*)(ID3D12GraphicsCommandList *, const temporal_
 void observe_final_scene(FinalSceneObserver) noexcept;
 // Hook creation is queued; the owning continuous runtime applies it only after
 // every participant is prepared. This module never owns Reset/Execute/barriers.
-bool prepare(const temporal_bindings::Config &,unsigned width,unsigned height,std::string &);
+// width/height: the output (scene) extent; render_width/render_height: the
+// game's render extent inside it (render_resolution::plan).
+bool prepare(const temporal_bindings::Config &,unsigned width,unsigned height,unsigned render_width,unsigned render_height,std::string &);
 void begin() noexcept;
 void publish(const temporal_bindings::Snapshot &,const temporal_bindings::Packet &) noexcept;
 // Called after the admitted native postqueue returns successfully, before its

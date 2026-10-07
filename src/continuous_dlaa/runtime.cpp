@@ -3,6 +3,7 @@
 #include "../scaled_temporal/stream_route.hpp"
 #include "../scaled_temporal/resolve.hpp"
 #include "../render_resolution/runtime.hpp"
+#include "../render_resolution/control.hpp"
 #include "scaled_depth_trace.hpp"
 #include "depth_schedule_trace.hpp"
 #include "depth_consumer_admission.hpp"
@@ -60,7 +61,10 @@ constexpr auto runtime_history_policy=HistoryPolicy::distance_only_comparison;
 std::unique_ptr<temporal_present::Output> spatial;
 std::uint64_t spatial_recordings{},route_only_signals{};
 dlss_sdk::Geometry scaled_geometry;
-unsigned render_width(){return runtime.width/2;}unsigned render_height(){return runtime.height/2;}
+// The game's render extent at scale 0.5 (render_resolution::plan): 2:1 for
+// even scenes, truncated per axis for a pillarboxed odd scene (3413 -> 1706).
+dlss_sdk::Extent scaled_render{};
+unsigned render_width(){return scaled_render.width;}unsigned render_height(){return scaled_render.height;}
 #else
 constexpr unsigned hook_count=11;
 constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
@@ -889,6 +893,8 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&raw[i]))))throw std::runtime_error("continuous raw allocation");}
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         #ifdef MHW_CONTINUOUS_SCALED
+        {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,.5F);
+         if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};}
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},dlss_sdk::ReconstructionMode::performance};
         pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
@@ -917,7 +923,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         // The sizing gates must be checked before activation modifies their callees.
         if(!render_resolution::install(image,.5F,reason,true))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
-        if(!sr::prepare(cfg,runtime.width,runtime.height,reason))throw std::runtime_error(reason);
+        if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
 #ifdef MHW_FG_GAME
         sr::observe_final_scene(&fg_final_scene);
 #endif

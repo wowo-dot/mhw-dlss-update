@@ -74,8 +74,10 @@ bool valid_filter_geometry(FilterGeometry g) noexcept {
     if(g.render_width<32||g.render_height<32||g.render_width>8192||g.render_height>8192||g.output_width>8192||g.output_height>8192||
        std::uint64_t(g.output_width)*g.output_height>16777216)return false;
     const bool identity=g.render_width==g.output_width&&g.render_height==g.output_height;
-    const bool two=g.output_width==2*g.render_width&&g.output_height==2*g.render_height;
-    return identity||two;
+    // Half, truncated per axis: exact 2:1, or a pillarboxed odd scene
+    // (3413x1440 rendered at 1706x720).
+    const bool half=g.render_width==g.output_width/2&&g.render_height==g.output_height/2;
+    return identity||half;
 }
 std::vector<std::byte> make_filter_shader(std::span<const std::byte> native,FilterGeometry g){
     require(valid_filter_geometry(g),"filter geometry");require(known(native),"unrecognized native filter shader");

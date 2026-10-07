@@ -15,7 +15,7 @@ template<class T>void put(std::uintptr_t p,const T &v){std::memcpy(reinterpret_c
 #include "scaled_queue_completion_fixture.hpp"
 unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<const std::byte> haze_ps={},std::span<const std::byte> overlay_ps={},std::span<const std::byte> overlay_vs={},const std::filesystem::path &dependency_dir={},const std::filesystem::path &dof_dir={}){
  namespace tb=mhw::temporal_bindings;Arena image(0x5200000),a(0x50000);const auto renderer=a.take(0x21000),context=renderer+0x710,view=a.take(0x1000),layer=a.take(0x200),motion=a.take(0x1000),grade=a.take(0x1000),filters=a.take(0x200);
- const auto saved=route::cfg;route::cfg={image.base,renderer,0,reinterpret_cast<std::uintptr_t>(f.device.Get())};route::width=128;route::height=64;
+ const auto saved=route::cfg;route::cfg={image.base,renderer,0,reinterpret_cast<std::uintptr_t>(f.device.Get())};route::width=128;route::height=64;route::render_w=64;route::render_h=32;
  auto storage=std::make_unique<route::Plan>();auto &p=*storage;auto &s=p.stamp;s.context=context;s.view=view;s.layer=layer;s.frame=77;s.epoch=77;s.rectangle={0,0,64,32};s.async=1;
  // Native +93 is one byte; its neighbours are unrelated nonzero flags.
  put(renderer+0x93,0xa55a0101U);

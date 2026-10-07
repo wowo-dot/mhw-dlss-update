@@ -137,6 +137,15 @@ unsigned output_index(const Plan &p,unsigned stage){return stage<4?2+stage:p.tar
 unsigned resource_count(const Plan &p){return (p.has_haze?9U:5U)+p.extra_resources;}
 struct Pipeline {std::unique_ptr<Effect> effect;std::string signature;ComPtr<ID3D12RootSignature> root;};
 tb::Config cfg;unsigned width{},height{};
+// The game's render extent inside the output (render_resolution::plan): 2:1
+// for even scenes, truncated per axis for a pillarboxed odd scene (3413 -> 1706).
+unsigned render_w{},render_h{};
+// The first render-extent mismatch of each kind, for scenes whose render extent
+// is not an exact half: a draw vertex {stage, index, observed bits, expected
+// bits}; a draw rectangle {stage, left, top, right, bottom}; the final quad's
+// source rectangle and the scene copy box {left, top, right, bottom}.
+std::array<unsigned,4> vertex_miss{},final_miss{},copy_miss{};std::array<int,5> rect_miss{};
+bool vertex_missed{},rect_missed{},final_missed{},copy_missed{};
 std::array<Plan,32> plans;
 // tBaseMap is a mutable shader binding. Capture it while the final quad is
 // enqueued, before later filter preparation replaces that context slot.
@@ -270,7 +279,7 @@ std::string signature(const EffectRecipe &r){
 }
 
 EffectRecipe recipe(Record &r,unsigned stage,ID3D12RootSignature *root){
- EffectRecipe result;result.stage=static_cast<EffectStage>(stage);result.geometry={width/2,height/2,width,height};result.root=root;
+ EffectRecipe result;result.stage=static_cast<EffectStage>(stage);result.geometry={render_w,render_h,width,height};result.root=root;
  result.vertex_shader=std::span(r.shaders[0].bytes).first(r.shaders[0].size);result.pixel_shader=std::span(r.shaders[1].bytes).first(r.shaders[1].size);
  static_assert(sizeof(result.depth)==sizeof(r.before.pipeline.depth)&&sizeof(result.blend)==sizeof(r.before.pipeline.blend)&&sizeof(result.raster)==sizeof(r.before.pipeline.raster));
  std::memcpy(&result.depth,r.before.pipeline.depth.data(),sizeof(result.depth));std::memcpy(&result.blend,r.before.pipeline.blend.data(),sizeof(result.blend));std::memcpy(&result.raster,r.before.pipeline.raster.data(),sizeof(result.raster));
@@ -313,10 +322,14 @@ bool geometry(Record &r,std::uintptr_t context,unsigned stage){
  if(!overlay){
   if(!pb::copy_memory(arena+vertex_start,r.vertices.data(),r.vertex_floats*4))return false;
   plan_qualification=(stage<<16)|5U;
-  const auto expected=effect_vertices(static_cast<EffectStage>(stage),{width/2,height/2,width,height},false);
-  for(unsigned i=0;i<r.vertex_floats;++i)if(!std::isfinite(r.vertices[i])||std::abs(r.vertices[i]-expected.values[i])>0.000001F)return false;}
- const auto w=stage==2?width:width/2,h=stage==2?height:height/2;
+  const auto expected=effect_vertices(static_cast<EffectStage>(stage),{render_w,render_h,width,height},false);
+  for(unsigned i=0;i<r.vertex_floats;++i)if(!std::isfinite(r.vertices[i])||std::abs(r.vertices[i]-expected.values[i])>0.000001F){
+   if(!vertex_missed){vertex_missed=true;vertex_miss={stage,i,std::bit_cast<unsigned>(r.vertices[i]),std::bit_cast<unsigned>(expected.values[i])};}
+   return false;}}
+ const auto w=stage==2?width:render_w,h=stage==2?height:render_h;
  plan_qualification=(stage<<16)|6U;
+ if(r.rectangle!=std::array<int,4>{0,0,static_cast<int>(w),static_cast<int>(h)}&&!rect_missed){
+  rect_missed=true;rect_miss={static_cast<int>(stage),r.rectangle[0],r.rectangle[1],r.rectangle[2],r.rectangle[3]};}
  if(r.rectangle!=std::array<int,4>{0,0,static_cast<int>(w),static_cast<int>(h)}||
     !pb::snapshot_native_pipeline(cfg.image,r.draw.packet,r.before.pipeline)||
     (overlay?(r.before.pipeline.input_count<2||r.before.pipeline.input_count>32):r.before.pipeline.input_count!=2)||
@@ -391,14 +404,16 @@ unsigned final_before(const pb::Frame &f){
  if(!field(cfg.renderer,0x93,async)){++final_rejected;return UINT_MAX;}s.async=async;
  const bool ok=field(cfg.renderer,0x1f208,s.epoch)&&field(cfg.renderer,0x1f200,s.bank)&&
   field(s.context,0x1d0,s.view)&&same_stamp(s)&&
-  field(f.gpr[3],0,rectangle)&&rectangle==std::array<unsigned,4>{0,0,width/2,height/2}&&
+  field(f.gpr[3],0,rectangle)&&rectangle==std::array<unsigned,4>{0,0,render_w,render_h}&&
   field(f.gpr[4],0,dimensions)&&dimensions==std::array<unsigned,2>{width,height}&&
   field(f.stack[0],0,offset)&&offset==std::array<float,2>{-.5F/width,-.5F/height}&&(f.stack[1]&255)==1&&
   field(s.context,0x5c,viewport)&&viewport==std::array<unsigned,4>{0,0,width,height}&&
   field(cfg.image,0x4be7450,q.base_id)&&q.base_id!=UINT_MAX&&field(s.context,0x710+8*(q.base_id&0xfff),source)&&owner(source,q.source)&&
   field(s.view,0x460,q.attachment)&&field(q.attachment,0x58,destination)&&owner(destination,q.destination)&&q.source.resource!=q.destination.resource&&
   field(s.context,0x2b80,q.before)&&q.before<65534&&field(s.context,0x2b78,q.queue)&&q.queue&&q.queue<=UINTPTR_MAX-16ULL*(q.before+1);
- if(!ok){++final_rejected;return UINT_MAX;}q.entered=true;return slot;
+ if(!ok){++final_rejected;
+  if(rectangle[2]&&rectangle!=std::array<unsigned,4>{0,0,render_w,render_h}&&!final_missed){final_missed=true;final_miss=rectangle;}
+  return UINT_MAX;}q.entered=true;return slot;
 }
 void final_after(unsigned slot,bool returned){
  if(slot==UINT_MAX)return;Lock lock;auto &q=final_quads[slot];
@@ -733,7 +748,7 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
   if(!cache.effect){cache.effect=std::make_unique<Effect>(reinterpret_cast<ID3D12Device *>(cfg.device),prepared,true);cache.signature=r.signature;cache.root=prepared.root;}
   if(cache.signature!=r.signature||cache.root.Get()!=prepared.root)throw std::runtime_error("stream effect recipe changed");}
  if(!p.prepared){++warmups;return false;}
- const FilterGeometry overlay_extent{width/2,height/2,width,height};
+ const FilterGeometry overlay_extent{render_w,render_h,width,height};
  if(overlay&&(!overlay_raster(b,overlay_extent)||!overlay_inputs(p,r)))throw std::runtime_error("stream overlay contract changed");
  obs::RasterBindings raster;temporal_present::Bindings roots;
  if(!obs::inspect(b.list,roots)||!roots.known||!roots.valid)throw std::runtime_error("stream draw generation");
@@ -817,7 +832,9 @@ bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCA
     !field(copy_recording,0x158,packet)||packet!=p.copy||!field(copy_recording,0x20,command)||command!=reinterpret_cast<std::uintptr_t>(list)||
     !pb::copy_memory(p.copy+0x10,fields.data(),64)||fields!=p.copy_fields||
     d.Type!=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX||s.Type!=d.Type||d.SubresourceIndex||s.SubresourceIndex||
-    !box||!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||b.left||b.top||b.front||b.back!=1||b.right!=width/2||b.bottom!=height/2){fail(5);return false;}
+    !box||!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||b.left||b.top||b.front||b.back!=1||b.right!=render_w||b.bottom!=render_h){
+  if(box&&b.right&&(b.right!=render_w||b.bottom!=render_h)&&!copy_missed){copy_missed=true;copy_miss={b.left,b.top,b.right,b.bottom};}
+  fail(5);return false;}
  if(!retain_recording(p,list,bindings.generation)||p.handoff.record(1,p.copy,{reinterpret_cast<std::uintptr_t>(list),bindings.generation})!=FrameHandoff::Result::ok){fail(5);return false;}
  {PredicateScope predicate(list);predicate.native(p.selector.Get());reinterpret_cast<CopyFn>(originals[2])(list,destination,0,0,0,source,box);
   predicate.full(p.selector.Get());const D3D12_BOX full{0,0,0,width,height,1};reinterpret_cast<CopyFn>(originals[2])(list,destination,0,0,0,source,&full);}
@@ -943,9 +960,9 @@ bool draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,unsigned
  }catch(const std::exception &e){injecting=false;failure=e.what();fail(6);}
  return replaced;
 }
-bool prepare(const tb::Config &c,unsigned w,unsigned h,std::string &reason){
- cfg=c;width=w;height=h;
- if(!w||!h||(w&1)||(h&1)){reason="stream extent";return false;}
+bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,std::string &reason){
+ cfg=c;width=w;height=h;render_w=rw;render_h=rh;
+ if(!valid_filter_geometry({rw,rh,w,h})||(rw==w&&rh==h)){reason="stream extent";return false;}
  struct Gate{unsigned rva,bytes;const char *sha;};
  constexpr Gate gates[]{
   {0x23d2370,1047,"0cf82d2b8b6259fbb5cad0c7468a780bb7026d9a20f720e9bbd8b5cd501fffc3"},
@@ -1292,6 +1309,10 @@ void write(std::ostream &o){
  for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}
  o<<"],\"texture_check\":"<<dependency_texture_check<<",\"failures\":"<<dependency_failures<<",\"first_failure\":[";
  for(unsigned i=0;i<dependency_first_failure.size();++i){if(i)o<<',';o<<dependency_first_failure[i];}o<<"]}";
+ o<<",\"extent\":{\"render\":["<<render_w<<','<<render_h<<"],\"output\":["<<width<<','<<height<<"],\"vertex_miss\":["<<vertex_miss[0]<<','<<vertex_miss[1]<<','<<vertex_miss[2]<<','<<vertex_miss[3]
+  <<"],\"rect_miss\":["<<rect_miss[0]<<','<<rect_miss[1]<<','<<rect_miss[2]<<','<<rect_miss[3]<<','<<rect_miss[4]
+  <<"],\"final_miss\":["<<final_miss[0]<<','<<final_miss[1]<<','<<final_miss[2]<<','<<final_miss[3]
+  <<"],\"copy_miss\":["<<copy_miss[0]<<','<<copy_miss[1]<<','<<copy_miss[2]<<','<<copy_miss[3]<<"]}";
  o<<",\"dependency_binding_checks\":";dependency_binding_trace.write(o);
  o<<",\"dependency_refresh\":";dependency_refresh.write(o);
  o<<",\"dependencies\":";dependencies.write(o);

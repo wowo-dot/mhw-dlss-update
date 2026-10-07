@@ -14,6 +14,9 @@ int main(){
  constexpr auto hd=sf::dof_layout(1920,1080);
  static_assert(hd.sizes[2]==std::array<unsigned,2>{96,1080}&&hd.sizes[3]==std::array<unsigned,2>{96,54}&&hd.sizes[8]==std::array<unsigned,2>{960,540});
  static_assert(hd.groups==Groups{{{6,1080,1},{96,4,1},{12,7,1},{60,34,1},{60,34,1},{60,34,1}}});
+ // Pillarboxed 21:9 in a 5120x1440 window: an odd width takes the truncated
+ // half (unconfirmed in game; the plan records the actual sizes).
+ static_assert(sf::dof_layout(3413,1440).sizes[2]==std::array<unsigned,2>{171,1440}&&sf::dof_layout(3413,1440).sizes[5]==std::array<unsigned,2>{1706,720});
  // 3840x2160 and 1600x900 (odd half height).
  static_assert(sf::dof_layout(3840,2160).groups[0]==std::array<unsigned,3>{12,2160,1}&&sf::dof_layout(3840,2160).sizes[4]==std::array<unsigned,2>{192,108});
  static_assert(sf::dof_layout(1600,900).sizes[5]==std::array<unsigned,2>{800,450}&&sf::dof_layout(1600,900).groups[3]==std::array<unsigned,3>{50,29,1});

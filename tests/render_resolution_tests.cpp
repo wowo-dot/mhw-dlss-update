@@ -47,6 +47,13 @@ int main(){
     const auto q=rr::plan({2560,1440},2.F/3.F);check(q.valid&&q.render==rr::Extent{1696,954},"native 16-pixel quantization");
     check(rr::plan({3840,2160},.5F).render==rr::Extent{1920,1080},"4K geometry without allocation claim");
     check(rr::plan({5120,1440},.5F).render==rr::Extent{2560,720},"ultrawide geometry");
+    // 21:9 pillarboxed in a 5120x1440 window: the scale quantizes against the
+    // window (exactly 0.5), and the odd scene width truncates (game-20).
+    const auto pillar=rr::plan({3413,1440},5120,.5F);
+    check(pillar.valid&&pillar.quantized==.5F&&pillar.render==rr::Extent{1706,720},"pillarbox plan against the window basis");
+    check(!rr::plan({3413,1440},.5F).valid,"odd scene alone quantizes below half");
+    check(rr::plan({2560,1080},2560,.5F).render==rr::Extent{1280,540},"letterbox plan");
+    check(!rr::plan({3413,1440},3412,.5F).valid,"basis narrower than the scene");
     check(!rr::plan({65,64},.5F).valid,"reject native clamp disagreement");
     for(float scale:{0.F,.49F,1.01F,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})check(!rr::plan({2560,1440},scale).valid,"invalid scale");
     check(!rr::plan({0,1440},.5F).valid&&!rr::plan({8193,1440},.5F).valid,"invalid display extent");

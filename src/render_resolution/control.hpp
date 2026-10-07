@@ -15,15 +15,20 @@ inline bool matching_basis(Extent display,unsigned override_enabled,Extent basis
         display.width<=window.width && display.height<=window.height));
 }
 
-// Match the pinned native setter: clamp to [0.5/content,1], truncate width,
-// align it down to 16 pixels, then divide by display width. This first
-// experiment requires content==1 and preserves allocation/display dimensions.
-inline Plan plan(Extent display,float requested) noexcept {
+// Match the pinned native setter (RVA 0x229bd70): clamp to [0.5/content,1],
+// truncate basis-width times scale, align it down to 16 pixels, then divide by
+// the basis width. The basis is the display (scene) width, or the config basis
+// (the window width) when the aspect-ratio option sets the override flag, so a
+// pillarboxed 3413-wide scene in a 5120 window quantizes against 5120. The
+// render extent is the scene times that scale, truncated per dimension. This
+// requires content==1 and preserves allocation/display dimensions.
+inline Plan plan(Extent display,unsigned basis_width,float requested) noexcept {
     Plan p{display,{},requested};
     if(display.width<64||display.height<64||display.width>8192||display.height>8192||
+       basis_width<display.width||basis_width>8192||
        !std::isfinite(requested)||requested<.5F||requested>1.F)return p;
-    const auto width=static_cast<unsigned>(static_cast<float>(display.width)*requested)&~15U;
-    p.quantized=static_cast<float>(width)/static_cast<float>(display.width);
+    const auto width=static_cast<unsigned>(static_cast<float>(basis_width)*requested)&~15U;
+    p.quantized=static_cast<float>(width)/static_cast<float>(basis_width);
     p.render={static_cast<unsigned>(static_cast<float>(display.width)*p.quantized),
               static_cast<unsigned>(static_cast<float>(display.height)*p.quantized)};
     // The native view helper clamps again. Reject plans that the two stages
@@ -31,6 +36,7 @@ inline Plan plan(Extent display,float requested) noexcept {
     p.valid=p.quantized>=.5F&&p.quantized<=1.F&&p.render.width>=32&&p.render.height>=32;
     return p;
 }
+inline Plan plan(Extent display,float requested) noexcept {return plan(display,display.width,requested);}
 
 // Renderer-thread only. Restore our pending request before native policy runs,
 // so a cached/no-op native update never treats our prior override as its own.

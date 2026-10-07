@@ -22,7 +22,7 @@ struct Route {
   const auto resolver=[](std::uintptr_t p,unsigned slot,std::uintptr_t &out)noexcept{out=(*reinterpret_cast<std::uintptr_t **>(p))[slot];return out!=0;};
   const bool installed=obs::install(device,resolver,reason,true,nullptr,true);require(installed,reason.c_str());obs::begin();obs::reset(list,generation,nullptr);
   r::cfg={};r::cfg.device=reinterpret_cast<std::uintptr_t>(device);r::cfg.image=0x10000000;r::cfg.backend=a.take(16);
-  r::width=2560;r::height=1440;r::accepting=true;layout=sf::dof_layout(r::width,r::height);
+  r::width=2560;r::height=1440;r::render_w=1280;r::render_h=720;r::accepting=true;layout=sf::dof_layout(r::width,r::height);
   auto &p=r::plans[0];p.dof=std::make_shared<sf::DofNativeSequence>();auto &d=*p.dof;d.count=6;d.key=0x78006595;d.stage=4;
   p.stamp.frame=32;p.stamp.epoch=1;p.stamp.context=a.take(0x3000);p.stamp.view=a.take(8);
   for(unsigned i=0;i<5;++i)p.resources[i]=textures[i];
