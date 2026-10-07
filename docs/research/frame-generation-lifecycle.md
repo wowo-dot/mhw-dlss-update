@@ -155,3 +155,27 @@ route only samples these textures through the game's own typed views.
   adapter, and fails under the old exact-format rule.
 
 Test (game-13): 1080p, the same DOF cutscene, at 2x.
+
+### v0.10.2 result (game-13, 1920x1080)
+
+- **Dependency discovery now passes** with the typeless CoC.
+- **The DOF sequence check refused all 864 cutscene frames** on one value:
+  - The TileMaxH engine extent was `0x84380060`, against an expected
+    `0x04380060`. The derived 96x1080 size is correct.
+  - Owner+0x88 packs a 16-bit width, a 14-bit height and two flag bits. Bit 31
+    was set; it accompanies a secondary backing, which the route already
+    follows to find the resource.
+  - Every other check after that point went unevaluated, because the check
+    stopped at the first mismatch.
+
+**v0.10.3:**
+- The size check masks the two flag bits, as `temporal_bindings` already does.
+- `qualify()` now records the first structural failure (`failed_at`) and
+  collects up to eight size, dispatch and CBScreen mismatches instead of
+  stopping at the first. The plan's resource format and size checks do the
+  same across all nine textures.
+- `flagged` lists the roles whose extent carries flag bits.
+- The fixture's `MHW_DOF_POOLED=1` mode reproduces both 1080p differences:
+  the typeless CoC and bit 31 on roles 2-8.
+
+Test (game-14): the same cutscene at 1080p.

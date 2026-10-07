@@ -7,8 +7,8 @@ v0.9.1 DLSS-G also gets a **HUD-less colour** input, and the HUD stays stable
 in generated frames. v0.9.2 takes the brightness from the game's own screen
 write. MHW applies resolution and screen-mode changes only on restart, so the
 resize milestone became "start at any resolution". The current build is
-v0.10.2 (git tag `v0.10.2`), which derives the DOF sequence from the screen
-size and accepts the TYPELESS DOF textures seen at 1080p
+v0.10.3 (git tag `v0.10.3`), which derives the DOF sequence from the screen
+size and accepts the TYPELESS textures and flagged extents seen at 1080p
 (`frame-generation-lifecycle.md`). DLAA, DLSS Performance and Reflex keep
 working. Next: confirm 1080p, then the configuration-based alpha with
 performance cleanup (including 4K).
@@ -46,7 +46,7 @@ Things to know:
 
 ## Plan
 
-1. Start at any resolution: 1080p with DOF (v0.10.2), then borderless and fullscreen
+1. Start at any resolution: 1080p with DOF (v0.10.3), then borderless and fullscreen
    at startup.
 2. Configuration-based alpha: remove the diagnostic readers and overhead,
    restore the base frame rate, keep the research build separate. Lift the
@@ -59,11 +59,11 @@ a stable HUD, and the game blends its UI in linear space before the brightness
 curve, so exact recomposition is not possible
 (`frame-generation-hudless-capture-result.md`).
 
-## Installed now: v0.10.2
+## Installed now: v0.10.3
 
 `mhw_fg_game_probe` (DOF sequence from the screen size, TYPELESS DOF textures
-accepted, plus the v0.10.0 lifecycle guard) is in the MO2 slot with its run
-folder `local/fg-game-20261006/game-13` (latest sealed run: `game-12`,
+and flagged extents accepted, plus the v0.10.0 lifecycle guard) is in the MO2 slot with its run
+folder `local/fg-game-20261006/game-14` (latest sealed run: `game-13`,
 v0.10.1 at 1440p and 1080p; `game-10` holds an unlaunched v0.9.3 install). A run folder
 can hold several launches when MHW is restarted for a setting; `fg_game.py`
 uses the newest, or `--pid`. Install or restore with
