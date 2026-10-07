@@ -255,3 +255,38 @@ difference.
 - Configure DLSS-G with the window as output, and tag the back buffer and
   HUD-less with the scene rectangle as their extent.
 - Have the HUD-less pass write the scene at that offset, with black outside.
+
+### v0.11.1 result (game-19, 2560x1440 window, 21:9): FG works
+
+v0.11.1 gives DLSS-G the window as its output and the 21:9 scene as a
+rectangle inside it.
+- **Armed with scene `[0,180,2560,1080]`**, i.e. centred with 180 rows of
+  letterbox above and below.
+- **FG 2x:** 4,523 host frames presented as 2 frames and 4,633 tagged. Zero SDK
+  errors, exceptions or camera failures.
+- **HUD-less:** tagged on 4,633 of 4,634 recorded frames, with no skips.
+- **DOF under FG at 2560x1080:** 764 sequences completed and none refused.
+- **Lifecycle:** two mid-session same-size `ResizeBuffers` passed with
+  `lifecycle_offs` 0, and the session stopped at exit (`reflex_frames`).
+- **User check:** a DOF cutscene with FG "looked fine". No vertical shake, HUD
+  ghosting or bleed into the bars was reported.
+- **Where the scene lands.** The captured screen write renders into a
+  scene-sized intermediate (viewport and scissor `0,0,2560,1080`), and a later
+  pass places it in the window. CBSystem `iRegion` carries no position in this
+  shader variant: its words hold stale constants, last
+  `{2/2560, -2/1080, -1, 1}`, a pixel-to-clip transform for a 2560x1080
+  target. The centred rectangle therefore rests on the visual check, which
+  passed. The HUD-less image stays scene-sized and is tagged with extent
+  `{0,0,2560,1080}`; it is not padded to the window.
+- The `no_ready` presents (2,724) follow the earlier runs' pattern of menu and
+  loading presents with no tagged game frame (game-14 1,876, game-15 3,655).
+
+**Start at any resolution: status**
+- 16:9 at 1080p and 1440p: done.
+- Windowed, borderless and exclusive fullscreen at startup: done.
+- 21:9 letterbox, DLSS and FG: done.
+- **Open:**
+  - The 5120x1440 window, at 32:9 (full window) and at 21:9 (pillarbox).
+  - 4K, which needs DSR.
+  - The live aspect change. It still fails closed; recovery needs a
+    controlled stop and restart at the new scene size.

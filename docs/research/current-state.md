@@ -1,17 +1,29 @@
 # Current state
 
-Updated 2026-10-06. **DLSS Frame Generation and multi-frame generation work in
-MHW** on the DLSS Performance path with Reflex On. The multiplier changes live
-from 2x to 6x on the RTX 5090; the user saw smooth 60/90/120/180 fps. Since
-v0.9.1 DLSS-G also gets a **HUD-less colour** input, and the HUD stays stable
-in generated frames. v0.9.2 takes the brightness from the game's own screen
-write. MHW applies resolution and screen-mode changes only on restart, so the
-resize milestone became "start at any resolution". The current build is
-v0.10.3 (git tag `v0.10.3`), which derives the DOF sequence from the screen
-size and accepts the TYPELESS textures and flagged extents seen at 1080p
-(`frame-generation-lifecycle.md`). DLAA, DLSS Performance and Reflex keep
-working. Next: confirm 1080p, then the configuration-based alpha with
-performance cleanup (including 4K).
+Updated 2026-10-07.
+
+**What works**
+- **DLSS Frame Generation and multi-frame generation**, on the DLSS
+  Performance path with Reflex On. The multiplier changes live from 2x to 6x on
+  the RTX 5090; the user saw smooth 60/90/120/180 fps.
+- **HUD-less colour input** (since v0.9.1). The HUD stays stable in generated
+  frames, and v0.9.2 takes the brightness from the game's own screen write.
+- **DLAA, DLSS Performance and Reflex** keep working.
+
+**Start at any resolution.** MHW applies resolution and screen-mode changes
+only on restart, so the resize milestone became "start at any resolution".
+Working so far (`frame-generation-lifecycle.md`):
+- 1080p and 1440p.
+- Windowed, borderless and exclusive fullscreen.
+- The **21:9 aspect option**, which letterboxes a 2560x1080 scene in the
+  window: DLSS and DOF since v0.11.0, FG since v0.11.1. DLSS-G gets the scene
+  as a rectangle inside the window.
+
+The current build is v0.11.1 (git tag `v0.11.1`).
+
+**Next**
+- The 5120x1440 window, at 32:9 and at 21:9 (pillarbox).
+- Then the configuration-based alpha with performance cleanup (including 4K).
 
 ## Latest result
 
@@ -46,27 +58,35 @@ Things to know:
 
 ## Plan
 
-1. Start at any resolution: 1080p with DOF (v0.10.3), then borderless and fullscreen
-   at startup.
-2. Configuration-based alpha: remove the diagnostic readers and overhead,
-   restore the base frame rate, keep the research build separate. Lift the
-   4K limits there (the large readbacks only serve diagnostics). Widths that
-   are not a multiple of 32 (3440 ultrawide) need the game's actual render
-   size.
+1. **Start at any resolution.**
+   - Done: 1080p, 1440p, borderless, exclusive fullscreen, and 21:9 with DLSS
+     and FG.
+   - Open: the 5120x1440 window (32:9 and 21:9), and 4K (needs DSR).
+   - The live aspect change fails closed. Recovering from it needs a
+     controlled stop and restart at the new scene size.
+2. **Configuration-based alpha.**
+   - Remove the diagnostic readers and overhead, and restore the base frame
+     rate.
+   - Keep the research build separate.
+   - The pixel ceiling is 16,777,216 since v0.11.0, and the DLSS readbacks are
+     off in the game.
 
 UI colour+alpha (DLSS-G recomposition) is deferred. HUD-less colour alone gave
 a stable HUD, and the game blends its UI in linear space before the brightness
 curve, so exact recomposition is not possible
 (`frame-generation-hudless-capture-result.md`).
 
-## Installed now: v0.10.3
+## Installed now: v0.11.1
 
-`mhw_fg_game_probe` (DOF sequence from the screen size, TYPELESS DOF textures
-and flagged extents accepted, plus the v0.10.0 lifecycle guard) is in the MO2 slot with its run
-folder `local/fg-game-20261006/game-15` (latest sealed run: `game-14`, v0.10.3 at
-v0.10.1 at 1440p and 1080p; `game-10` holds an unlaunched v0.9.3 install). A run folder
-can hold several launches when MHW is restarted for a setting; `fg_game.py`
-uses the newest, or `--pid`. Install or restore with
+`mhw_fg_game_probe` is in the MO2 slot. It includes:
+- the scene extent for the aspect option;
+- the FG scene rectangle;
+- the DOF sequence from the screen size;
+- the v0.10.0 lifecycle guard.
+
+The latest sealed run is `local/fg-game-20261006/game-19` (21:9 FG). A run
+folder can hold several launches when MHW is restarted for a setting;
+`fg_game.py` uses the newest, or `--pid`. Install or restore with
 `tools/mo2_slot.py` (the receipt in the run folder has the restore command).
 `<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
 starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
