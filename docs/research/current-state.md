@@ -63,7 +63,7 @@ curve, so exact recomposition is not possible
 
 `mhw_fg_game_probe` (DOF sequence from the screen size, TYPELESS DOF textures
 and flagged extents accepted, plus the v0.10.0 lifecycle guard) is in the MO2 slot with its run
-folder `local/fg-game-20261006/game-14` (latest sealed run: `game-13`,
+folder `local/fg-game-20261006/game-15` (latest sealed run: `game-14`, v0.10.3 at
 v0.10.1 at 1440p and 1080p; `game-10` holds an unlaunched v0.9.3 install). A run folder
 can hold several launches when MHW is restarted for a setting; `fg_game.py`
 uses the newest, or `--pid`. Install or restore with
