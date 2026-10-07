@@ -48,8 +48,11 @@ bool dof_qualify(Plan &p){
   for(unsigned slot:{0U,1U,2U,7U,10U})if(!pb::system_method(v[3],slot,method))return reject(7);
   ID3D12Resource *raw{};D3D12_RESOURCE_DESC desc{};unsigned planes{};
   if(!compute_describe(v[3],&raw,&desc,&planes))return reject(8);ComPtr<ID3D12Resource> held;held.Attach(raw);
-  if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||desc.Width!=d.layout.sizes[i][0]||
-     desc.Height!=d.layout.sizes[i][1]||unsigned(desc.Format)!=DofNativeSequence::formats[i]||desc.MipLevels!=1||
+  const auto note=[&](unsigned check,unsigned observed,unsigned expected){if(!dof_stats.mismatches++)dof_stats.miss={check,i,observed,expected};};
+  if(!dof_format_matches(unsigned(desc.Format),DofNativeSequence::formats[i])){note(4,unsigned(desc.Format),DofNativeSequence::formats[i]);return reject(9);}
+  if(desc.Width!=d.layout.sizes[i][0]||desc.Height!=d.layout.sizes[i][1]){
+   note(5,static_cast<unsigned>(desc.Width)|(desc.Height<<16),d.layout.sizes[i][0]|(d.layout.sizes[i][1]<<16));return reject(9);}
+  if(desc.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||desc.MipLevels!=1||
      desc.DepthOrArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality||planes!=1||
      (desc.Flags&D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)||
      (i>=2&&!(desc.Flags&D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS))||!compute_texture_stable(t))return reject(9);

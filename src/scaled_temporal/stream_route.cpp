@@ -635,6 +635,8 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   return p.keys[a]!=p.keys[b]?p.keys[a]<p.keys[b]:a<b;});
  if(!discover_dependencies(p)){plan_qualification=12;
   const auto stage=dependency_stage;
+  if(!dependency_failures++){const auto &d=dependency_description;
+   dependency_first_failure={dependency_rejection,stage,dependency_texture_check,d[0],d[1],d[2],d[4],d[5]};}
   return overlay_failure(OutputCommands::input_bindings,stage<4+p.overlay_count?p.keys[stage]:0,
                          stage<4+p.overlay_count?p.draws[stage].draw.packet:0);
  }
@@ -1287,7 +1289,9 @@ void write(std::ostream &o){
  if(overlay_extended_draws){o<<'[';for(unsigned i=0;i<overlay_extended_layout.size();++i){if(i)o<<',';o<<overlay_extended_layout[i];}o<<']';}else o<<"null";o<<"}";
  o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
  o<<",\"dependency_route\":{\"schema\":2,\"copy_draws\":"<<dependency_draws[0]<<",\"radial_draws\":"<<dependency_draws[1]<<",\"dof_draws\":"<<dependency_draws[2]<<",\"rejection\":"<<dependency_rejection<<",\"last_description\":[";
- for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}o<<"]}";
+ for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}
+ o<<"],\"texture_check\":"<<dependency_texture_check<<",\"failures\":"<<dependency_failures<<",\"first_failure\":[";
+ for(unsigned i=0;i<dependency_first_failure.size();++i){if(i)o<<',';o<<dependency_first_failure[i];}o<<"]}";
  o<<",\"dependency_binding_checks\":";dependency_binding_trace.write(o);
  o<<",\"dependency_refresh\":";dependency_refresh.write(o);
  o<<",\"dependencies\":";dependencies.write(o);

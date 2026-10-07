@@ -25,6 +25,24 @@ constexpr DofLayout dof_layout(unsigned width,unsigned height){
  l.groups={{{up(tw,16),height,1},{tw,up(height,320),1},{up(tw,8),up(th,8),1},{up(hw,16),up(hh,16),1},{up(hw,16),up(hh,16),1},{up(hw,16),up(hh,16),1}}};
  return l;
 }
+// The game may back a DOF texture with the TYPELESS member of the format's
+// family (seen at 1920x1080: the CoC texture is R16G16B16A16_TYPELESS where
+// 1440p had R16G16B16A16_FLOAT). The route only uses the game's own typed
+// views, so either resource format is accepted. Returns 0 when the format has
+// no typeless family (R11G11B10_FLOAT).
+constexpr unsigned dof_typeless(unsigned typed){
+ switch(typed){
+  case 2:return 1;   // R32G32B32A32_FLOAT
+  case 10:return 9;  // R16G16B16A16_FLOAT
+  case 16:return 15; // R32G32_FLOAT
+  case 34:return 33; // R16G16_FLOAT
+  case 41:case 42:return 39; // R32_FLOAT, R32_UINT
+  case 54:case 56:return 53; // R16_FLOAT, R16_UNORM
+  case 61:return 60; // R8_UNORM
+  default:return 0;
+ }
+}
+constexpr bool dof_format_matches(unsigned actual,unsigned typed){return actual==typed||(dof_typeless(typed)&&actual==dof_typeless(typed));}
 // The game computes the reciprocals on the CPU; allow one unit in the last place.
 inline bool dof_near(float a,float b){std::int32_t x{},y{};std::memcpy(&x,&a,4);std::memcpy(&y,&b,4);return x==y||x==y+1||x+1==y;}
 

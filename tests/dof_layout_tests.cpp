@@ -19,6 +19,9 @@ int main(){
  static_assert(sf::dof_layout(1600,900).sizes[5]==std::array<unsigned,2>{800,450}&&sf::dof_layout(1600,900).groups[3]==std::array<unsigned,3>{50,29,1});
  // A partial tile rounds up.
  static_assert(sf::dof_layout(1024,768).sizes[3]==std::array<unsigned,2>{52,39});
+ // TYPELESS family members are accepted (1080p CoC: R16G16B16A16_TYPELESS).
+ static_assert(sf::dof_format_matches(10,10)&&sf::dof_format_matches(9,10)&&sf::dof_format_matches(39,41)&&sf::dof_format_matches(39,42)&&sf::dof_format_matches(60,61));
+ static_assert(!sf::dof_format_matches(9,26)&&!sf::dof_format_matches(11,10)&&!sf::dof_format_matches(40,41)&&sf::dof_format_matches(26,26)&&!sf::dof_format_matches(0,26));
  const float third=1.F/3;std::int32_t bits{};std::memcpy(&bits,&third,4);
  float next{},far{};const std::int32_t n=bits+1,f=bits+2;std::memcpy(&next,&n,4);std::memcpy(&far,&f,4);
  check(sf::dof_near(third,third)&&sf::dof_near(third,next)&&sf::dof_near(next,third)&&!sf::dof_near(third,far),"one-ULP reciprocal tolerance");

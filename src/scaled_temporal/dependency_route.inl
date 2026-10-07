@@ -4,6 +4,13 @@ std::array<std::uint64_t,3> dependency_draws{};
 unsigned dependency_rejection{};
 unsigned dependency_stage{UINT_MAX};
 std::array<unsigned,6> dependency_description{};
+// Which dependency_texture check failed last (1 system methods, 2 device,
+// 3 description, 4 scene format/size, 5 DOF format, 6 sample support,
+// 7 auxiliary format, 8 owner changed), and the first discovery failure of the
+// run: {rejection, stage, texture check, role, engine format, DXGI format,
+// width, height}.
+unsigned dependency_texture_check{};
+std::uint64_t dependency_failures{};std::array<unsigned,8> dependency_first_failure{};
 DependencyBindingTrace dependency_binding_trace;
 bool dependency_binding_contract(const Record &r,const HazeBindings &b){
  if(r.dependency==3){
@@ -52,57 +59,64 @@ bool dependency_bindings_stable(const Plan &p,unsigned stage){
 }
 bool dependency_texture(const tb::Owner &o,unsigned role,ComPtr<ID3D12Resource> &out){
  // role 0 scene, 1 copied scene, 2 independent occlusion, 3 independent mask.
- std::uintptr_t method{};for(unsigned slot:{0U,2U,7U,10U})if(!pb::system_method(o.resource,slot,method))return false;
+ const auto fail=[](unsigned check){dependency_texture_check=check;return false;};dependency_texture_check=0;dependency_description={};
+ std::uintptr_t method{};for(unsigned slot:{0U,2U,7U,10U})if(!pb::system_method(o.resource,slot,method))return fail(1);
  // Native draw entry owns the current binding. Acquire our reference before
  // inspecting it, then require the owner and binding snapshot to stay stable.
  ComPtr<ID3D12Resource> held=reinterpret_cast<ID3D12Resource *>(o.resource);auto *r=held.Get();ComPtr<ID3D12Device> device;
- if(FAILED(r->GetDevice(IID_PPV_ARGS(&device)))||reinterpret_cast<std::uintptr_t>(device.Get())!=cfg.device)return false;
+ if(FAILED(r->GetDevice(IID_PPV_ARGS(&device)))||reinterpret_cast<std::uintptr_t>(device.Get())!=cfg.device)return fail(2);
  const auto d=r->GetDesc();dependency_description={role,o.format,unsigned(d.Format),unsigned(d.Dimension),static_cast<unsigned>(d.Width),d.Height};
  if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=o.width||d.Height!=o.height||
     !d.Width||d.Width>16384||!d.Height||d.Height>16384||d.DepthOrArraySize!=1||!d.MipLevels||d.MipLevels>16||
-    d.SampleDesc.Count!=1||d.SampleDesc.Quality||(d.Flags&D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))return false;
+    d.SampleDesc.Count!=1||d.SampleDesc.Quality||(d.Flags&D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))return fail(3);
  if(role<2){
   if(o.format!=(role?6U:34U)||d.Format!=(role?DXGI_FORMAT_R10G10B10A2_UNORM:DXGI_FORMAT_R11G11B10_FLOAT)||
-     d.Width!=width||d.Height!=height||d.MipLevels!=1||!(d.Flags&D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))return false;
+     d.Width!=width||d.Height!=height||d.MipLevels!=1||!(d.Flags&D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))return fail(4);
  }else if(role>=4){
   // DOF auxiliaries retain native formats, extents, SRVs and coordinates.
-  // Admit only actual normalized/float color storage; no integer, depth or
-  // typeless interpretation is inferred from the engine's UINT_MAX field.
+  // Admit only actual normalized/float color storage; no integer or depth
+  // interpretation is inferred from the engine's UINT_MAX field. A TYPELESS
+  // resource is admitted only as the family of the engine format's typed
+  // member (dof_typeless); the game's own typed view is what samples it.
   const unsigned slot=role-4;constexpr unsigned engine[]{2,34,34,34,21};
-  if(slot>=5||slot==2||o.format!=engine[slot]||d.MipLevels!=1)return false;
-  switch(d.Format){
+  if(slot>=5||slot==2||o.format!=engine[slot]||d.MipLevels!=1)return fail(5);
+  constexpr DXGI_FORMAT engine_typed[]{DXGI_FORMAT_R16G16B16A16_FLOAT,DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_UNKNOWN,
+                                       DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R8_UNORM};
+  auto typed=d.Format;
+  if(dof_typeless(engine_typed[slot])&&unsigned(d.Format)==dof_typeless(engine_typed[slot]))typed=engine_typed[slot];
+  switch(typed){
    case DXGI_FORMAT_R32G32B32A32_FLOAT:case DXGI_FORMAT_R16G16B16A16_FLOAT:
    case DXGI_FORMAT_R32G32_FLOAT:case DXGI_FORMAT_R16G16_FLOAT:
    case DXGI_FORMAT_R11G11B10_FLOAT:case DXGI_FORMAT_R32_FLOAT:case DXGI_FORMAT_R16_FLOAT:
    case DXGI_FORMAT_R8_UNORM:case DXGI_FORMAT_R16_UNORM:break;
-   default:return false;
+   default:return fail(5);
   }
-  D3D12_FEATURE_DATA_FORMAT_SUPPORT support{d.Format};
+  D3D12_FEATURE_DATA_FORMAT_SUPPORT support{typed};
   if(FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,&support,sizeof(support)))||
-     !(support.Support1&D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE))return false;
+     !(support.Support1&D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE))return fail(6);
  }else{
   // Sampled auxiliary textures keep their native dimensions and coordinates.
   // Only normalized/float-compatible formats are admitted; never integer SRVs.
-  if(role==2){if(o.format!=7||(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB))return false;}
+  if(role==2){if(o.format!=7||(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB))return fail(7);}
   else {
    // The native radial helper binds its format-7 default when no custom mask
    // exists. This is the same normalized texture accepted for occlusion;
    // retain its actual SRV, dimensions and coordinates, including t1/t2 aliasing.
-   if(o.format==7){if(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)return false;}
-   else if(o.format!=23)return false;
+   if(o.format==7){if(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)return fail(7);}
+   else if(o.format!=23)return fail(7);
    switch(d.Format){
     case DXGI_FORMAT_R8_UNORM:case DXGI_FORMAT_R8G8_UNORM:case DXGI_FORMAT_R8G8B8A8_UNORM:case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
     case DXGI_FORMAT_BC1_UNORM:case DXGI_FORMAT_BC1_UNORM_SRGB:case DXGI_FORMAT_BC2_UNORM:case DXGI_FORMAT_BC2_UNORM_SRGB:
     case DXGI_FORMAT_BC3_UNORM:case DXGI_FORMAT_BC3_UNORM_SRGB:case DXGI_FORMAT_BC4_UNORM:case DXGI_FORMAT_BC5_UNORM:
     case DXGI_FORMAT_BC7_UNORM:case DXGI_FORMAT_BC7_UNORM_SRGB:break;
-    default:return false;
+    default:return fail(7);
    }
   }
   D3D12_FEATURE_DATA_FORMAT_SUPPORT support{d.Format};
   if(FAILED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT,&support,sizeof(support)))||
-     !(support.Support1&D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE))return false;
+     !(support.Support1&D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE))return fail(7);
  }
- tb::Owner again;if(!tb::read_owner(reader,o.object,again)||again!=o)return false;out=std::move(held);return true;
+ tb::Owner again;if(!tb::read_owner(reader,o.object,again)||again!=o)return fail(8);out=std::move(held);return true;
 }
 bool add_dependency_resource(Plan &p,const tb::Owner &o,unsigned role,unsigned &index){
  ComPtr<ID3D12Resource> held;if(!dependency_texture(o,role,held))return false;
