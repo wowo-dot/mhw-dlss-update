@@ -7,7 +7,11 @@
   status  --run <folder>   latest FG session counters
   lifecycle --run <folder>  host swap-chain lifecycle calls (resize, full-screen,
                            ResizeTarget, creation) and presentation state (v0.10+)
-  summary --run <folder>   write summary.json from the run's logs
+  summary --run <folder>   write summary.json (summary-<pid>.json when the folder
+                           holds several launches) from the run's logs
+
+--pid selects a launch when MHW was restarted inside one run folder (resolution
+and screen-mode changes apply only on restart); the default is the newest.
 
 Controls use the existing generation-checked marker files and process-identity
 queries; nothing writes process memory.
@@ -22,11 +26,18 @@ from reflex_frames import check, control, HOST_SHA
 VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0')
 
 
-def log_path(run):
-    # Side files (<log>.boot.jsonl, <log>.crash.jsonl) share the prefix.
-    logs = sorted(p for p in Path(run).glob('reflex-frames-*.jsonl') if p.suffixes == ['.jsonl'])
-    check(len(logs) == 1, 'exactly one process log in the run folder')
-    return logs[0]
+def log_path(run, pid=None):
+    # Side files (<log>.boot.jsonl, <log>.crash.jsonl) share the prefix. MHW
+    # applies resolution and screen-mode changes only on restart, so one run
+    # folder can hold several launches: take the given pid, else the newest
+    # (reflex-frames-<pid>-<creation FILETIME>.jsonl).
+    logs = [p for p in Path(run).glob('reflex-frames-*.jsonl') if p.suffixes == ['.jsonl']]
+    check(logs, 'a process log in the run folder')
+    parts = lambda p: tuple(int(x) for x in p.stem.split('-')[2:4])
+    if pid is not None:
+        logs = [p for p in logs if parts(p)[0] == pid]
+        check(len(logs) == 1, 'exactly one process log for the pid')
+    return max(logs, key=lambda p: parts(p)[1])
 
 
 def rows_of(path, limit=64 * 1024 * 1024):
@@ -113,8 +124,9 @@ def main():
     p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'lifecycle', 'summary'))
     p.add_argument('--run', type=Path, required=True)
     p.add_argument('--x', type=int, help='total frame multiplier for the multiplier action')
+    p.add_argument('--pid', type=int, help='launch to use when the run folder holds several (default: newest)')
     a = p.parse_args()
-    path = log_path(a.run)
+    path = log_path(a.run, a.pid)
     rows, raw = rows_of(path)
     identity(rows)
     if a.action in ('arm', 'stop'):
@@ -127,7 +139,8 @@ def main():
         result = lifecycle(rows)
     else:
         result = summary(rows, raw)
-        with (a.run / 'summary.json').open('x', encoding='utf-8') as f:
+        name = 'summary.json' if len(list(a.run.glob('reflex-frames-*[0-9].jsonl'))) == 1 else f"summary-{rows[0]['pid']}.json"
+        with (a.run / name).open('x', encoding='utf-8') as f:
             json.dump(result, f, indent=2)
     print(json.dumps(result, indent=1))
 

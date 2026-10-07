@@ -24,6 +24,18 @@ class FgGameTests(unittest.TestCase):
                 (Path(d) / name).write_text('')
             self.assertEqual(log_path(d).name, 'reflex-frames-1-2.jsonl')
 
+    def test_log_path_takes_newest_launch_or_pid(self):
+        # MHW restarts to apply resolution and screen-mode changes.
+        with tempfile.TemporaryDirectory() as d:
+            for name in ('reflex-frames-900-30.jsonl', 'reflex-frames-17-20.jsonl', 'reflex-frames-5-40.jsonl'):
+                (Path(d) / name).write_text('')
+            self.assertEqual(log_path(d).name, 'reflex-frames-5-40.jsonl')
+            self.assertEqual(log_path(d, 900).name, 'reflex-frames-900-30.jsonl')
+            with self.assertRaises(ValueError):
+                log_path(d, 4)
+        with tempfile.TemporaryDirectory() as d, self.assertRaises(ValueError):
+            log_path(d)
+
     def test_multiplier_requests_are_sequenced_and_generation_checked(self):
         with tempfile.TemporaryDirectory() as d:
             log = Path(d) / 'reflex-frames-1-2.jsonl'
