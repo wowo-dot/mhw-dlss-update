@@ -81,6 +81,17 @@ int main(){
     put(config.p+0x2cd0,1920U);check(!rr::snapshot(captured),"reject alternate width mismatch");put(config.p+0x2cd0,2560U);
     put(config.p+0x2cd4,1080U);check(!rr::snapshot(captured),"reject alternate height mismatch");put(config.p+0x2cd4,1440U);
     put(config.p+0x2cda,static_cast<unsigned char>(2));check(!rr::snapshot(captured),"reject unknown override flag");put(config.p+0x2cda,static_cast<unsigned char>(1));
+    {   // 21:9 pillarboxed in a 5120x1440 window: a view holding the truncated
+        // ratio 1706/3413 is admitted (game-22); anything lower is not.
+        const auto saved=rr::target;rr::target=pillar;rr::discovered.window_width=5120;rr::discovered.window_height=1440;
+        put(renderer.p+0x198,3413U);put(config.p+0x2cd0,5120U);
+        put(view.p+0x6b0,1706.F/3413.F);check(rr::snapshot(captured)&&captured.basis_width==5120,"truncated view ratio admitted");
+        put(view.p+0x6b0,1705.F/3413.F);check(!rr::snapshot(captured)&&captured.check==17,"view scale below the truncated ratio refused");
+        rr::target=p;check(!rr::snapshot(captured)&&captured.check==15,"pillarbox snapshot needs its own plan");
+        put(view.p+0x6b0,1.F);put(renderer.p+0x198,2560U);put(config.p+0x2cd0,2560U);rr::target=saved;
+        rr::discovered.window_width=rr::discovered.window_height=0;
+        check(rr::snapshot(captured),"16:9 snapshot restored");
+    }
     using Call=std::uint64_t(*)(std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t);
     check(reinterpret_cast<Call>(mhw_resolution_entry)(renderer.p,2,3,4)==answer,"production ASM forwards unmatched caller");
     check(rr::visits==0&&!rr::ownership.owned,"unqualified caller does not acquire scale");

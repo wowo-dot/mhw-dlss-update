@@ -8,6 +8,7 @@
 #include <atomic>
 #include <array>
 #include <iomanip>
+#include <algorithm>
 #include <ostream>
 #include <string>
 
@@ -51,6 +52,11 @@ Snapshot baseline{},reduced{},last{},restoration{};
 // The startup admission snapshot, and the first and last unqualified
 // in-session snapshots (an aspect-ratio change applies live, game-15).
 Snapshot startup{},first_unqualified{},last_unqualified{};
+// Views whose own scale is the truncated render/display ratio (1706/3413 for a
+// pillarboxed odd scene) rather than the requested 0.5. A new title-screen view
+// reported it (game-22). Admitted, but input_stamp still requires the
+// requested scale, so those frames skip reconstruction.
+std::uint64_t truncated_views{};Snapshot first_truncated{};
 struct ViewportSample {std::uint64_t tick{};std::uintptr_t caller{};std::array<float,6> values{};};
 ViewportSample first_reduced_viewport{},last_reduced_viewport{};
 void fail(unsigned reason) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,reason);requested=false;}
@@ -92,7 +98,10 @@ bool snapshot(Snapshot &s) noexcept {
     for(float value:{s.desired,s.applied,s.previous,s.content_desired,s.content,s.combined,s.view_scale,s.view_content,s.view_combined})if(!std::isfinite(value))return stop(14);
     if(s.width!=target.display.width||s.height!=target.display.height)return stop(15);
     if(s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F)return stop(16);
-    if(s.desired<.5F||s.desired>1.F||s.applied<.5F||s.applied>1.F||s.view_scale<.5F||s.view_scale>1.F)return stop(17);
+    // A view may hold the truncated ratio of the planned render extent, just
+    // under 0.5 for an odd scene; 2:1 scenes keep the 0.5 floor exactly.
+    const float view_floor=std::min(.5F,static_cast<float>(target.render.width)/static_cast<float>(target.display.width));
+    if(s.desired<.5F||s.desired>1.F||s.applied<.5F||s.applied>1.F||s.view_scale<view_floor||s.view_scale>1.F)return stop(17);
     if(s.view_flags&0x840000)return stop(18);
     std::uintptr_t container{},texture{};unsigned packed{};
     s.depth_metadata=pb::read(view+0x628,container)&&container&&container<=UINTPTR_MAX-0xa8&&
@@ -127,6 +136,7 @@ void update(pb::Frame *f) {
     {
     Lock lock;
     ++visits;last=s;
+    if(s.view_scale<.5F){if(!truncated_views++)first_truncated=s;}
     if(s.applied==target.quantized&&s.view_scale==target.quantized&&s.combined==target.quantized&&s.view_combined==target.quantized){
         ++scaled_observed;reduced=s;
     }
@@ -239,7 +249,7 @@ void write(std::ostream &out) {
     Lock lock;out<<std::boolalpha<<std::setprecision(9)<<"{\"event\":\"resolution\",\"schema\":1,\"policy\":\"native-active-scale-v1\",\"requested\":"<<requested.load()
        <<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<hooks_disabled.load()<<",\"restored\":"<<restored.load()
        <<",\"owned_request\":"<<ownership.owned<<",\"visits\":"<<visits<<",\"unqualified\":"<<unqualified<<",\"overrides\":"<<overrides
-       <<",\"pre_restores\":"<<pre_restores<<",\"foreign_requests\":"<<foreign_requests<<",\"scaled_observed\":"<<scaled_observed<<",\"restored_observed\":"<<restored_observed
+       <<",\"pre_restores\":"<<pre_restores<<",\"foreign_requests\":"<<foreign_requests<<",\"scaled_observed\":"<<scaled_observed<<",\"restored_observed\":"<<restored_observed<<",\"truncated_views\":"<<truncated_views
        <<",\"display\":["<<target.display.width<<','<<target.display.height<<"],\"render\":["<<target.render.width<<','<<target.render.height<<"],\"requested_scale\":"<<target.requested<<",\"quantized_scale\":"<<target.quantized
        <<",\"swapchain_format\":"<<discovered.format<<",\"adapter_luid\":["<<discovered.luid_high<<','<<discovered.luid_low<<"],\"render_thread\":"<<render_thread
        <<",\"shared_viewport\":"<<shared_viewport<<",\"owned_hooks\":"<<(shared_viewport?1:2)
@@ -247,6 +257,7 @@ void write(std::ostream &out) {
        <<",\"baseline\":";write_snapshot(out,baseline);out<<",\"reduced\":";write_snapshot(out,reduced);out<<",\"last\":";write_snapshot(out,last);out<<",\"restoration\":";write_snapshot(out,restoration);
     out<<",\"startup\":";write_snapshot(out,startup);out<<",\"first_unqualified\":";write_snapshot(out,first_unqualified);
     out<<",\"last_unqualified\":";write_snapshot(out,last_unqualified);
+    out<<",\"first_truncated\":";write_snapshot(out,first_truncated);
     out<<",\"first_reduced_viewport\":";write_viewport(out,first_reduced_viewport);out<<",\"last_reduced_viewport\":";write_viewport(out,last_reduced_viewport);
     out<<",\"gpu_resource_descriptions_verified\":false,\"viewport_scene_attribution_verified\":false,\"dlss_evaluations\":0,\"injected_gpu_commands\":0,\"settings_writes\":0}\n"<<std::flush;
 }
