@@ -196,3 +196,40 @@ The user saw DLSS and FG on through the DOF cutscene.
 - **`fg_stopped` with reason `reflex_frames`** (`reflex_faults` 1) came at
   game exit, after the last present (7,808). Reflex hit one error during
   shutdown; this does not happen during play.
+
+### Borderless and 21:9 (game-15 to game-17)
+
+- **Borderless (game-15)**
+  - Same window chain as windowed: 2560x1440, `windowed` true (the borderless
+    window), the same `create_for_hwnd` and same-size `ResizeBuffers`.
+  - DLSS (1280x720) and FG work, and **DOF at 1440p in the FG build works**:
+    289 complete sequences, zero rejections.
+- **The aspect-ratio option applies live.** The user switched to 21:9 during
+  the game-15 session:
+  - MHW called `ResizeBuffers` at the same size with FG On. The guard turned
+    FG Off first (`lifecycle_offs` 1).
+  - The next render-scale snapshots no longer qualified (`unqualified` 2), so
+    `render_resolution` latched fault 4.
+  - The temporal runtime turned unhealthy and FG stopped
+    (`temporal_unhealthy`). The game continued natively; no hang or crash.
+- **21:9 at startup (game-16, game-17, v0.10.4 diagnostics)**
+  - The window chain stays 2560x1440, but the renderer draws the scene at
+    **2560x1080** (64:27), letterboxed.
+  - Startup snapshot: display 2560x1080, `native_width_override` 1, scale
+    basis 2560x1440, all scales 1, sizing 0, no wrapper.
+  - Admission refuses with check 13 (basis differs from display). DLSS and
+    FG stay off and the game stays native.
+
+**What supporting 21:9 (and pillarboxing on 32:9) needs**
+
+- **A scene extent separate from the swap-chain extent.** Discovery,
+  `render_resolution`, the stream route and the DLSS output would use the
+  renderer's scene size: 2560x1080, rendered at 1280x540.
+- **The final composition must place the scene at its offset in the back
+  buffer** (here 180 rows of letterbox).
+- **FG tags with sub-rectangle extents.** DLSS-G takes an extent per tag:
+  the back buffer and HUD-less at the scene rectangle; depth and motion
+  vectors at the render size.
+- **The live aspect change** is a real in-session size change. That needs
+  Phase 2's controlled stop and restart at the new scene size, which is no
+  longer moot for this one setting.
