@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from fg_game import lifecycle, log_path, request_multiplier, status
+from fg_game import lifecycle, log_path, request_multiplier, status, streamline_log
 
 
 def rows(version='0.8.0', armed=True, stopped=False):
@@ -17,6 +17,21 @@ def rows(version='0.8.0', armed=True, stopped=False):
 
 
 class FgGameTests(unittest.TestCase):
+    def test_streamline_log_counts_errors_by_message(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(streamline_log(d))
+            (Path(d) / 'sdk-logs').mkdir()
+            line = ('[02-08-48][streamline][error][tid:19312][{}s:067ms:667us]dlfgPresent.cpp:630[operator ()] HUD-less buffer '
+                    'extent does not match color buffer size ({}) vs (5120x1440) HUD-less buffer will be ignored')
+            lines = [line.format(464, '2560x1440'), line.format(465, '3413x1440'),
+                     '[02-08-48][streamline][warn][tid:1][1s:0ms:0us]flipMetering.cpp:173[setFlipConfig] FC feedback: 1',
+                     '[02-08-48][streamline][info][tid:1][1s:0ms:0us]plugin loaded']
+            (Path(d) / 'sdk-logs' / 'sl.log').write_text('\n'.join(lines), encoding='utf-8')
+            log = streamline_log(d)
+            self.assertEqual((log['errors'], log['warnings']), (2, 1))
+            self.assertEqual(log['top_errors'][0][1], 2)
+            self.assertIn('HUD-less buffer extent does not match color buffer size (WxH)', log['top_errors'][0][0])
+
     def test_log_path_ignores_side_logs(self):
         with tempfile.TemporaryDirectory() as d:
             for name in ('reflex-frames-1-2.jsonl', 'reflex-frames-1-2.jsonl.boot.jsonl',

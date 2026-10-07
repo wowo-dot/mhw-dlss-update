@@ -4,7 +4,9 @@
   multiplier --run <folder> --x N   live frame multiplier (2 = ordinary FG .. 8,
                            limited by the GPU's reported capability; v0.8+)
   stop    --run <folder>   FG Off; Streamline, DLSS and Reflex stay live
-  status  --run <folder>   latest FG session counters
+  status  --run <folder>   latest FG session counters, plus Streamline's own
+                           errors and warnings from sdk-logs/sl.log (an input
+                           the SDK ignores is only reported there)
   lifecycle --run <folder>  host swap-chain lifecycle calls (resize, full-screen,
                            ResizeTarget, creation) and presentation state (v0.10+)
   summary --run <folder>   write summary.json (summary-<pid>.json when the folder
@@ -17,8 +19,10 @@ Controls use the existing generation-checked marker files and process-identity
 queries; nothing writes process memory.
 """
 import argparse
+import collections
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
@@ -69,6 +73,22 @@ def status(rows):
             'present_delta', 'camera_failures')
     return dict(event=(s or {}).get('event'), reason=(s or {}).get('reason'), **{k: session.get(k) for k in keys},
                 ring=session.get('ring'), sdk_state=session.get('state'))
+
+
+def streamline_log(run, limit=8):
+    """Count sl.log errors and warnings by message, with sizes and timings
+    normalised. Streamline reports an ignored input (for example a HUD-less
+    extent that does not match the back buffer) only here, every frame."""
+    path = Path(run) / 'sdk-logs' / 'sl.log'
+    if not path.exists():
+        return None
+    counts = {'error': collections.Counter(), 'warn': collections.Counter()}
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        m = re.search(r'\]\[(error|warn)\]\[tid:\d+\]\[[^\]]*\](.*)$', line)
+        if m:
+            counts[m.group(1)][re.sub(r'\d+x\d+', 'WxH', m.group(2).strip())] += 1
+    return {'errors': sum(counts['error'].values()), 'warnings': sum(counts['warn'].values()),
+            'top_errors': counts['error'].most_common(limit), 'top_warnings': counts['warn'].most_common(limit)}
 
 
 LIFECYCLE_EVENTS = ('swap_lifecycle', 'swap_lifecycle_dropped', 'presentation_state')
@@ -135,10 +155,12 @@ def main():
         result = request_multiplier(rows, path, a.x or 0)
     elif a.action == 'status':
         result = status(rows)
+        result['sl_log'] = streamline_log(a.run)
     elif a.action == 'lifecycle':
         result = lifecycle(rows)
     else:
         result = summary(rows, raw)
+        result['sl_log'] = streamline_log(a.run)
         name = 'summary.json' if len(list(a.run.glob('reflex-frames-*[0-9].jsonl'))) == 1 else f"summary-{rows[0]['pid']}.json"
         with (a.run / name).open('x', encoding='utf-8') as f:
             json.dump(result, f, indent=2)
