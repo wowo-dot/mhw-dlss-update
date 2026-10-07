@@ -1001,6 +1001,9 @@ void publish(const tb::Snapshot &s,const tb::Packet &packet) noexcept{
  // on the game's render worker when a retired ring slot is reused.
  std::destroy_at(&p);std::construct_at(&p);p.stamp=s;p.temporal=packet;p.published=true;++published;
 }
+bool copy_region(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *d,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *s,const D3D12_BOX *box) noexcept{
+ if(!originals[2])return false;reinterpret_cast<CopyFn>(originals[2])(list,d,x,y,z,s,box);return true;
+}
 bool ready(ID3D12GraphicsCommandList *list,std::uint64_t gen,const tb::Snapshot &s,std::uintptr_t recording) noexcept{
  Lock lock;auto &p=plans[s.frame%plans.size()];
  const auto note=[&](ReadinessTrace::Reason reason,unsigned stage=12){

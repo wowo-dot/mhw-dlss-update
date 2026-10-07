@@ -20,6 +20,11 @@ void observe_final_scene(FinalSceneObserver) noexcept;
 // game's render extent inside it (render_resolution::plan).
 bool prepare(const temporal_bindings::Config &,unsigned width,unsigned height,unsigned render_width,unsigned render_height,std::string &);
 void begin() noexcept;
+// The original CopyTextureRegion, bypassing this module's copy observer. For
+// owner-recorded copies between private and native textures; false before the
+// hook exists.
+bool copy_region(ID3D12GraphicsCommandList *,const D3D12_TEXTURE_COPY_LOCATION *destination,UINT x,UINT y,UINT z,
+                 const D3D12_TEXTURE_COPY_LOCATION *source,const D3D12_BOX *) noexcept;
 void publish(const temporal_bindings::Snapshot &,const temporal_bindings::Packet &) noexcept;
 // Called after the admitted native postqueue returns successfully, before its
 // owning camera frame ends. Individual filter returns do not complete the queue.

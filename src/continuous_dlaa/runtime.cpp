@@ -177,6 +177,26 @@ void transition(ID3D12GraphicsCommandList *list,ID3D12Resource *r,D3D12_RESOURCE
 void copy_input(ID3D12GraphicsCommandList *list,ID3D12Resource *source,unsigned role,D3D12_RESOURCE_STATES state){
     transition(list,source,state,D3D12_RESOURCE_STATE_COPY_SOURCE);reinterpret_cast<CopyFn>(originals[10])(list,raw[role].Get(),source);transition(list,source,D3D12_RESOURCE_STATE_COPY_SOURCE,state);
 }
+#ifdef MHW_CONTINUOUS_SCALED
+// An odd scene's effects sample up to scene x scale (1706.5 of 3413 columns),
+// half a column past the 1706 the game renders. That column keeps what the
+// full-size frames before the reduced scale drew there, and the game's effects
+// spread it along the right edge (title-screen colours, game-22/game-24).
+// After copying a native input, replicate its last rendered column (and row,
+// for a fractional height) into the one just outside, from the private copy.
+bool edge_column{},edge_row{};std::uint64_t edge_fills{};
+void fill_edge(ID3D12GraphicsCommandList *list,ID3D12Resource *native,unsigned role,D3D12_RESOURCE_STATES state){
+    if(!edge_column&&!edge_row)return;
+    auto *copy=raw[role].Get();const unsigned rw=render_width(),rh=render_height();
+    transition(list,copy,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_COPY_SOURCE);transition(list,native,state,D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_TEXTURE_COPY_LOCATION d{},s{};d.pResource=native;s.pResource=copy;d.Type=s.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    bool copied=true;
+    if(edge_column){const D3D12_BOX b{rw-1,0,0,rw,rh,1};copied=sr::copy_region(list,&d,rw,0,0,&s,&b)&&copied;}
+    if(edge_row){const D3D12_BOX b{0,rh-1,0,rw,rh,1};copied=sr::copy_region(list,&d,0,rh,0,&s,&b)&&copied;}
+    transition(list,native,D3D12_RESOURCE_STATE_COPY_DEST,state);transition(list,copy,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+    if(copied)++edge_fills;
+}
+#endif
 bool state_of(std::uintptr_t resource,D3D12_RESOURCE_STATES expected){bool known=false;unsigned state{};
     for(unsigned i=0;i<barrier_count;++i){const auto &b=barriers[i];
         if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING&&(!b.Aliasing.pResourceBefore||!b.Aliasing.pResourceAfter||reinterpret_cast<std::uintptr_t>(b.Aliasing.pResourceBefore)==resource||reinterpret_cast<std::uintptr_t>(b.Aliasing.pResourceAfter)==resource))return false;
@@ -544,6 +564,7 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
             }
             if(!sr::ready(list,l->generation,s,current_recording)){fail(46);return locked_skip(11);}
             copy_input(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             last_skip=why;++skips;++dispatch_reasons[why];reconstruction.suspend();prepared_resolve={state,{},false,true};return true;
         }
 #else
@@ -617,6 +638,10 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
     prepared_resolve={state,decision,true,prepared_output};
     copy_input(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     copy_input(list,reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource),2,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+#ifdef MHW_CONTINUOUS_SCALED
+    fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource),2,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+#endif
     return true;
 }
 ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
@@ -894,7 +919,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         #ifdef MHW_CONTINUOUS_SCALED
         {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,.5F);
-         if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};}
+         if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};
+         edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
+         edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);}
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},dlss_sdk::ReconstructionMode::performance};
         pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
@@ -1070,6 +1097,7 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     out<<",\"depth_schedule\":";depth_schedule_trace.write(out);
     out<<",\"consumer_depth\":";depth_consumer_admission.write(out);
     out<<",\"spatial_recordings\":"<<spatial_recordings<<",\"route_only_signals\":"<<route_only_signals;
+    out<<",\"edge_fill\":{\"column\":"<<edge_column<<",\"row\":"<<edge_row<<",\"fills\":"<<edge_fills<<'}';
     out<<",\"scaled_route\":";sr::write(out);
     out<<",\"render_width\":"<<render_width()<<",\"render_height\":"<<render_height();
     std::ostringstream scale;render_resolution::write(scale);auto json=scale.str();while(!json.empty()&&(json.back()=='\n'||json.back()=='\r'))json.pop_back();out<<",\"resolution\":"<<json;
