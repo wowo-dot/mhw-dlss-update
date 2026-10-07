@@ -1,6 +1,7 @@
 #include "frame_generation/camera_constants.hpp"
 #include "frame_generation/input_ring.hpp"
 #include "frame_generation/screen_transform.hpp"
+#include "frame_generation/scene_rect.hpp"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -196,6 +197,16 @@ void screen_tests() {
     }
     require(sc::channel(0.5f, std::nanf("")) == sc::channel(0.5f, 1.0f), "fallback");
 }
+// Back-buffer subrect in Streamline's {top, left, width, height} order.
+void subrect_tests() {
+    namespace g = fg::game;
+    constexpr g::SceneRect pillar16{1280, 0, 2560, 1440}, pillar21{853, 0, 3413, 1440}, letter21{0, 180, 2560, 1080};
+    static_assert(g::extent_fields(pillar16) == std::array<unsigned, 4>{0, 1280, 2560, 1440});
+    static_assert(g::extent_fields(letter21) == std::array<unsigned, 4>{180, 0, 2560, 1080});
+    require(g::inside(pillar16, 5120, 1440) && g::inside(pillar21, 5120, 1440) && g::inside(letter21, 2560, 1440), "scene rectangles inside");
+    require(!g::inside({1281, 0, 3840, 1440}, 5120, 1440) && !g::inside({0, 1280, 2560, 1440}, 5120, 1440) && !g::inside({0, 0, 0, 1440}, 5120, 1440),
+            "rectangles outside or empty");
+}
 }  // namespace
 
 int main() {
@@ -203,6 +214,7 @@ int main() {
         camera_tests();
         ring_tests();
         screen_tests();
+        subrect_tests();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "failed: %s\n", e.what());
         return 1;

@@ -8,6 +8,7 @@
 #include "../reflex/streamline.hpp"
 #include <wrl/client.h>
 #include <algorithm>
+#include <cstddef>
 #include <atomic>
 #include <memory>
 #include <stdexcept>
@@ -498,8 +499,12 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         sl::Resource depth{sl::ResourceType::eTex2d, image.depth.Get(), static_cast<std::uint32_t>(tag_state)};
         sl::Resource motion{sl::ResourceType::eTex2d, image.motion.Get(), static_cast<std::uint32_t>(tag_state)};
         sl::Extent render{0, 0, frame.render_width, frame.render_height};
-        // The back buffer's scene rectangle; the HUD-less image is that size.
-        sl::Extent output{s.scene.x, s.scene.y, s.scene.width, s.scene.height}, hudless_extent{0, 0, s.scene.width, s.scene.height};
+        // The back buffer's scene rectangle ({top, left, width, height}); the
+        // HUD-less image is that size, so its extent matches the subrect.
+        static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 && offsetof(sl::Extent, width) == 8 &&
+                      offsetof(sl::Extent, height) == 12, "sl::Extent field order");
+        const auto fields = extent_fields(s.scene);
+        sl::Extent output{fields[0], fields[1], fields[2], fields[3]}, hudless_extent{0, 0, s.scene.width, s.scene.height};
         // A slot without HUD-less clears that tag explicitly (null resource).
         const bool with_hudless = s.slot_hudless[slot] && image.hudless;
         sl::Resource hudless{sl::ResourceType::eTex2d, with_hudless ? image.hudless.Get() : nullptr,

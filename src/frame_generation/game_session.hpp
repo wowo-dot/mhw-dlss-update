@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <iosfwd>
+#include "scene_rect.hpp"
 
 namespace sl { struct FrameToken; }
 namespace mhw::reflex { class Streamline; }
@@ -27,12 +28,8 @@ struct SlotCamera {
     bool reset{};                               // DLSS history decision
 };
 
-// Worker, once, after the SDK is attached with the FG plugin loaded. The
-// scene rectangle is where the game's scene sits in the back buffer: the whole
-// output, or a letterbox/pillarbox with MHW's aspect-ratio option.
-struct SceneRect {
-    unsigned x{}, y{}, width{}, height{};
-};
+// Worker, once, after the SDK is attached with the FG plugin loaded, with the
+// scene rectangle in the back buffer (scene_rect.hpp).
 void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_height, SceneRect scene) noexcept;
 // Worker. Armed requests FG On while valid inputs arrive; disarmed turns it Off
 // at the next Present (Streamline itself stays alive until process exit).
