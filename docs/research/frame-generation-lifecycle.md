@@ -290,3 +290,65 @@ rectangle inside it.
   - 4K, which needs DSR.
   - The live aspect change. It still fails closed; recovery needs a
     controlled stop and restart at the new scene size.
+
+### 21:9 in a 5120x1440 window: an odd scene (game-20 to game-26)
+
+MHW's aspect option offers only 16:9 and 21:9, so a 5120x1440 window always
+pillarboxes. At 21:9 the scene is **3413x1440** (1440 x 64/27, truncated),
+placed at x = 853.
+
+**How the game sizes it.** The native setter (RVA `0x229bd70`, read from the
+decrypted image) quantizes the scale against the config basis, i.e. the
+window width, whenever the aspect override flag is set:
+`q = (trunc(5120 x 0.5) & ~15) / 5120 = 0.5`. The scene then renders at
+**1706x720**, because 3413 x 0.5 = 1706.5 is truncated. No whole-pixel render
+size has 3413:1440 proportions, so every exact-2:1 rule had to give way to
+"one scale, truncated per axis".
+
+| Build | Run | Result |
+| --- | --- | --- |
+| v0.11.1 | game-20 | Refused: DLSS geometry required exact 2:1 (`inline extent/device`). |
+| v0.11.2 | game-21 | The render plan takes the window basis. DLSS geometry, the effect route and the DOF check accept the truncated half. NGX recommends 1707x720 (it rounds); a one-pixel tolerance accepts the game's 1706. Then refused: the spatial fallback still required an exact proportion. |
+| v0.11.3 | game-22 | DLSS and FG ran (3,020 DLSS frames, no extent mismatches). FG stopped at the title screen: the new title view held the scale 1706/3413, and the snapshot range check required at least 0.5. |
+| v0.11.4 | game-23 | That scale is admitted, but the title view kept it on every frame. The per-frame stamp still required 0.5, so DLSS skipped and FG had nothing to generate. The view still drew the planned 1706x720 viewport. |
+| v0.11.5 | game-24 | The truncated ratio counts as the planned scale. 10,580 DLSS frames with 1 skip; FG stayed on through the title and save screens. |
+| v0.11.6 | game-25, game-26 | Edge-column fill (below). game-26: DOF at 3413 wide, 841 sequences completed and none refused; the guessed truncated DOF half (1706) was right. FG 2x presented 1,124 frames as 2, with HUD-less tagged on all of them. |
+
+User checks: "pretty good" (game-22), and DOF cutscenes "looked fine"
+(game-25, game-26).
+
+**Known artifact: a right-edge tint after arming mid-session.**
+- **What it looks like:** a smooth tint over about the last 40 px of the
+  scene's right edge, present at every height. Its colour is whatever was on
+  screen when DLSS armed: blue from one main-menu background (game-22),
+  orange and teal from others (game-24, game-25). It was invisible when armed
+  in the hub (game-23), because the leftover pixels matched the scene.
+- **Not FG:** it stayed with FG off and DLSS on (game-25).
+- **It clears after a title-screen visit,** where the game recreates its
+  render targets, and it did not return in the hub.
+- **Cause (inferred):** the game's effects sample to 1706.5 of 3413 columns,
+  half a column past what it renders. The texels outside keep the last
+  full-size frame drawn before the reduced scale. v0.11.6 copies the last
+  rendered colour and motion column into that column each frame; the tint
+  stayed. So the leftover pixels sit in another texture, most likely the
+  glow/bloom chain, whose smaller levels each keep their own edge and spread
+  it over tens of pixels.
+- **Next:** the configuration-based alpha arms at startup, before the menu
+  renders, so those textures never hold menu colours. Re-check this there
+  before chasing individual textures. The fill stays as a defensive measure
+  for direct colour and motion reads.
+
+Tooling note: `fg_game.py stop` also ends the periodic status and inputs
+logging; DLSS keeps running unlogged. Don't stop FG before a check whose
+counters matter, such as DOF.
+
+**Start at any resolution: status**
+- 16:9 at 1080p and 1440p: done.
+- Windowed, borderless and exclusive fullscreen at startup: done.
+- 21:9 letterboxed in a 16:9 window: DLSS and FG done.
+- 21:9 pillarboxed in the 5120x1440 window (odd 3413 width): DLSS, DOF and
+  FG done; the arming-time edge tint is open.
+- **Open:**
+  - 16:9 pillarboxed in the 5120x1440 window (2560x1440 at x = 1280).
+  - 4K, which needs DSR.
+  - The live aspect change. It still fails closed.
