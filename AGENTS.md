@@ -22,7 +22,9 @@ These paths are machine-local configuration. Do not encode them into distributab
 - If a runtime test requires deploying a DLL, preserve any existing file at the exact destination and document how to remove the test files.
 - Do not run experimental hooks in public multiplayer. Prefer offline mode for runtime research.
 - Do not disable integrity checks, anti-cheat, licensing, or platform protections.
-- Do not commit or redistribute Capcom binaries, game assets, NVIDIA runtime binaries, private SDK contents, crash dumps containing user data, or proprietary IDA databases.
+- Do not commit or redistribute Capcom binaries, game assets, private SDK contents, crash dumps containing user data, or proprietary IDA databases.
+- Never commit NVIDIA binaries to git. Release packages may include the unmodified NVIDIA runtime DLLs (DLSS, Streamline, Reflex, DLSS Frame Generation) the build was tested with, under the NVIDIA RTX SDKs license and the Streamline/Reflex licenses: ship NVIDIA's license files and an attribution notice ("uses NVIDIA DLSS, Streamline and Reflex") with them, keep them outside the project's open-source license, never imply NVIDIA endorsement or use NVIDIA logos, and notify NVIDIA before any commercial release.
+- Do not reverse engineer, decompile or disassemble NVIDIA binaries; analyse the game, not NVIDIA's DLLs.
 
 ## Reverse-Engineering Workflow
 
