@@ -1,5 +1,19 @@
 # Deferred beta investigations
 
+## Partly blocked hunter silhouette drawn at render size
+
+Reported by the user on 2026-10-08 in the training grounds (game-33, v0.12.2,
+DLSS Performance, 2560x1440 at 16:9). With the hunter partly behind a tree,
+a second see-through silhouette of the hunter appears at half size and half
+position: hunter at about (1000, 850) in the user's screenshot, ghost at about
+(500, 400), i.e. drawn with the 1280x720 render viewport into the 2560x1440
+output after the upscale. The occlusion silhouette corrected in v1.25.44 is
+placed correctly; this partly-blocked variant is presumably another late
+indexed draw (a different shader set or technique) that the correction does
+not admit (`known_silhouette_shader`), so it keeps its native render-size
+geometry. Not investigated yet; the user asked to finish the performance work
+first.
+
 ## Severe slowdown in the first silhouette correction run
 
 Deferred at the user's request on 2026-10-02. In v1.25.44 the user confirmed that
