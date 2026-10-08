@@ -170,15 +170,36 @@ Settings the DLSS mod will register:
 
 ## 6. Compatibility
 
-- **MUST** keep a Stracker shim: a `loader.dll` exporting the four symbols the
-  19 installed plugins use (LOG ctor/dtor, MinLogLevel, GameVersion) and an
-  `Initialize` that does nothing on a second call. The shim:
-  - loads `nativePC\plugins\*.dll` at the same moment as Stracker, in
-    alphabetical order;
-  - honours loader-config.json keys;
-  - is built with MSVC release STL.
+- **MUST** make Stracker's Loader unnecessary (user's decision, 2026-10-08:
+  fewer loaders and proxy DLLs in the game folder). With CMFM installed,
+  existing Stracker plugins work unchanged and neither `dinput8.dll` nor
+  Stracker's `loader.dll` is needed.
+  - CMFM ships a shim named `loader.dll` in its own folder. It exports the four
+    symbols the 19 installed plugins use (LOG ctor/dtor, MinLogLevel,
+    GameVersion) and an `Initialize` that does nothing on a second call.
+  - CMFM loads the shim by full path before any plugin. A plugin's `loader.dll`
+    import then binds to it: Windows uses an already-loaded module of the same
+    name instead of searching (documented DLL search order). No file goes in
+    the game root.
+  - The shim:
+    - loads `nativePC\plugins\*.dll` in alphabetical order;
+    - honours loader-config.json keys and writes loader.log;
+    - reports the identical GameVersion string;
+    - is built with MSVC release STL.
+  - Timing defaults to Stracker's moment: when the game first loads DINPUT8.
+    Detect it with a DLL-load notification and defer the loads out of the
+    loader lock. Early loading stays an option: SPL already preloads
+    dinput8.dll before CRT init by default, so common plugins tolerate it.
+  - Leftover Stracker files must be detected and reported:
+    - both files present: Stracker loads its own loader.dll by relative path,
+      so two modules named loader.dll exist. This should be harmless: both
+      export the same symbols, and loading a plugin twice only adds a
+      reference. Test it anyway;
+    - dinput8.dll alone: Stracker shows a "loader.dll not found" error box.
 
-  Stracker's code is MIT; fork it with credit.
+    CMFM should tell the user to remove both.
+  - Stracker's code is MIT; fork it with credit. Test against the 19 installed
+    plugins, LuaEngine first.
 - **MUST** coexist with SPL: don't take or rewrite its winmm.dll, and don't
   rewrite loader-config.json.
 - **MUST** coexist with ReShade (dxgi.dll) and with overlays: Steam, Discord,
@@ -230,6 +251,7 @@ Settings the DLSS mod will register:
    MHW's UI?
 3. **Settings storage:** per-plugin files (preferred above), or a central CMFM
    store with import and export?
-4. **Stracker shim:** in CMFM v1, or a later step?
+4. **Stracker replacement:** decided that CMFM replaces it. Open: in CMFM v1
+   (recommended: it is small and makes CMFM useful on day one), or later?
 5. **Repository and location of CMFM**, and its licence. This file lives here
    until CMFM has a home.
