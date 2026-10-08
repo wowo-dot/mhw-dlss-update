@@ -53,6 +53,28 @@ SharpPluginLoader (SPL) 0.0.8:
   - draws on the back buffer in Present, via ExecuteCommandLists on the game
     queue.
 
+## Confirmed in game (2026-10-08)
+
+Load order is from the live PEB module list, read with
+PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ.
+
+- game-50 (MO2 force-load): Stracker's dinput8.dll loaded at 116, after
+  sl.interposer (91) and the NGX/DLSS-G runtime (96–109). Its plugins load
+  after frame generation is already set up, so that path is too late for us.
+- game-51 (v0.13.8 as winmm.dll in an MO2 mod): the proxy was mapped at 43,
+  System32 WINMM at 31 and d3d12.dll at 45. It then failed closed before
+  logging: under usvfs, GetModuleFileNameW gives the virtual game path but
+  weakly_canonical() gives the real mod folder. Fixed in v0.13.9 (lexical
+  comparison, startup-error.jsonl).
+- game-52 (v0.13.9, same layout): d3d12 was not yet loaded when the worker
+  started (api_module kind 0, was_loaded false). Startup:
+  - NGX accepted the shared provider by path and hash under the VFS;
+  - the alpha armed 6.2 s after launch.
+  Run totals:
+  - 15,285 DLSS evaluations, 3 skips, 0 route faults;
+  - 15,284 HUD-less frames tagged, 0 no_restore;
+  - 0 exceptions, 0 Streamline errors.
+
 ## Implications (hypotheses until tested)
 
 - SPL and the alpha both install winmm.dll in the game folder. One overwrites
