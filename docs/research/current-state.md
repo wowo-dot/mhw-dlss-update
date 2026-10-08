@@ -38,14 +38,30 @@ Working so far (`frame-generation-lifecycle.md`):
 - **FG input staging** now survives the game recording a frame's final draw
   before that frame's DLSS (v0.12.6).
 
-The current build is v0.12.6 (git tag `v0.12.6`).
+**Config alpha (v0.13.0 to v0.13.4, `alpha-v013-result.md`).**
+- **`mhw_dlss.ini`** next to the DLL; the session arms itself about 5 s after
+  launch; lean paths on; a one-minute summary log.
+- **Fixed in the alpha series:**
+  - a crash on a Velkhana attack (readiness trace read an unbuilt plan);
+  - FG drops on FOV animation, such as the windrake ride (projection resets);
+  - DLSS skips in the Fatalis fight smoke: `uDepthColorFilter` now runs at
+    full output through a hash-gated shader adapter, bit-exact against the
+    native shader in a GPU fixture.
+
+The current build is the alpha v0.13.4 (git tag `v0.13.4`); research builds
+are at v0.12.8.
 
 Both 21:9 layouts were re-checked with v0.11.7 (game-29, game-30): HUD-less was
 accepted on every frame, with zero Streamline errors and a stable HUD.
 
-**Next:** the configuration-based alpha (config file, arming at startup, lean
-paths on, diagnostics compiled out, DLSS-G plugin only with FG enabled), then
-4K.
+**Next:**
+1. **Shader census:** dump every post-filter shader and sort them by how they
+   address the screen.
+2. **Generated adapters:** hash-gated, one fixture per family.
+3. **Flexible effect chain:** approved filters at any chain position.
+4. **Suspects:** colour-correct LUT, blink, image plane, circular DOF, the
+   second TAA, and the Safi and Alatreon radial blurs.
+5. **Then:** 4K, and the silhouette drawn at render size.
 
 ## Latest result
 

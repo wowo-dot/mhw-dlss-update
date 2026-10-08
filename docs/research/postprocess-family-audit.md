@@ -23,7 +23,7 @@ shader branches, and effects outside this queue remain outside that claim.
 
 | Native type | Vtable RVA | Execute RVA |
 | --- | --- | --- |
-| `uDepthColorFilter` | `0x3423850` | `0x1c27a40` |
+| `uDepthColorFilter` (full output since v0.13.4, `alpha-v013-result.md`) | `0x3423850` | `0x1c27a40` |
 | `uTemporalAAFilter2` | `0x351bda8` | `0x2392150` |
 | `uFXAAFilter` | `0x351c1a8` | `0x23939d0` |
 | `uNewDOFFilter` | `0x3526650` | `0x24233b0` |
