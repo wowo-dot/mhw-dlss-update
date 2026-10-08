@@ -38,10 +38,10 @@ IndexedScope indexed_before(const pb::Frame &f) noexcept {
  try{Lock lock;if(fault.load()||abandoned)return scope;
   unsigned slot=UINT_MAX,position{};
   for(unsigned i=0;i<plans.size();++i){const auto &p=plans[i];if(!p.built)continue;
-   for(unsigned j=0;j<p.late_count;++j)if(!(p.late_executed&(1U<<j))&&p.late_packets[j]==f.gpr[3]){
+   for(unsigned j=0;j<p.late_count;++j)if(!(p.late_executed&(1ULL<<j))&&p.late_packets[j]==f.gpr[3]){
     if(slot!=UINT_MAX){fail(14);return scope;}slot=i;position=j;}}
   if(slot==UINT_MAX)return scope;
-  auto &p=plans[slot];const auto &r=p.late[position];p.late_executed|=1U<<position;
+  auto &p=plans[slot];const auto &r=p.late[position];p.late_executed|=1ULL<<position;
   if(!p.prepared)return scope;
   scope.slot=slot;scope.position=position;scope.calls=0;scope.replaced=false;
   scope.draw.packet=f.gpr[3];scope.draw.executor=f.gpr[1];scope.draw.context=f.gpr[2];scope.draw.graphics=r.bindings[2];

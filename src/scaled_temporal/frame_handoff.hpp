@@ -10,7 +10,8 @@ namespace mhw::scaled_temporal {
 // All operations are serialized by the caller. No waiting or allocation.
 class FrameHandoff {
 public:
-    static constexpr unsigned capacity=64;
+    // TAA, copy, up to 12 effects, 6 DOF passes and 64 late indexed draws.
+    static constexpr unsigned capacity=96;
     struct Recording {
         std::uintptr_t list{};
         std::uint64_t generation{};

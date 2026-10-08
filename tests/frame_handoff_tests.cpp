@@ -61,7 +61,8 @@ int main(){
     std::array<std::uintptr_t,H::capacity> late{};for(unsigned i=0;i<late.size();++i)late[i]=1000+i;
     H expanded;check(expanded.prepare({7,8,9,10},late)==R::ok);
     std::array<H::Recording,4> workers{{{101,3},{102,3},{103,3},{104,3}}};
-    for(unsigned worker:{3U,1U,2U,0U})for(unsigned i=16*worker;i<16*(worker+1);++i)check(expanded.record(i,late[i],workers[worker])==R::ok);
+    static_assert(H::capacity%4==0);constexpr unsigned per=H::capacity/4;
+    for(unsigned worker:{3U,1U,2U,0U})for(unsigned i=per*worker;i<per*(worker+1);++i)check(expanded.record(i,late[i],workers[worker])==R::ok);
     check(expanded.choose(H::Choice::reconstructed)==R::ok);unsigned end{};
     auto reversed=workers;std::reverse(reversed.begin(),reversed.end());
     check(expanded.validate_submission(1,reversed,5,end)==R::submission_order&&expanded.submitted_count()==0);

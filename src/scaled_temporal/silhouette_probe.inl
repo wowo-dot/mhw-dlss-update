@@ -35,29 +35,37 @@ std::array<std::uint64_t,14> indexed_description(std::uintptr_t candidate) noexc
  }__except(EXCEPTION_EXECUTE_HANDLER){result[1]=0;}
  if(device)device->Release();if(held)held->Release();return result;
 }
+// Why a built plan's late indexed packets were not frozen (the frame then stays
+// native): 0 queue read, 1 packet read, 2 over capacity, 3 duplicate packet,
+// 4 packet fields, 5 queue changed while scanning. And the most late indexed
+// packets seen in one frame, including frames over capacity.
+std::array<std::uint64_t,6> indexed_candidate_reasons{};
+unsigned indexed_candidates_max{};
 bool silhouette_candidates(Plan &p) {
  struct Packet {unsigned key,padding;std::uintptr_t object;};
  unsigned count{};std::uintptr_t array{};std::array<Packet,128> block{};
- const auto reject=[&]{p.late_count=0;++indexed_candidates_rejected;return false;};
- if(!field(p.stamp.context,0x2b80,count)||count>65535||!field(p.stamp.context,0x2b78,array)||!array||array>UINTPTR_MAX-16ULL*count)return reject();
- std::array<Packet,32> selected{};unsigned size{};
+ const auto reject=[&](unsigned why){p.late_count=0;++indexed_candidates_rejected;++indexed_candidate_reasons[why];return false;};
+ if(!field(p.stamp.context,0x2b80,count)||count>65535||!field(p.stamp.context,0x2b78,array)||!array||array>UINTPTR_MAX-16ULL*count)return reject(0);
+ std::array<Packet,Plan::late_capacity> selected{};unsigned size{},seen{};
  for(unsigned base=0;base<count;base+=128){const auto n=(std::min)(128U,count-base);
-  if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Packet)))return reject();
+  if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Packet)))return reject(0);
   for(unsigned j=0;j<n;++j){const auto &q=block[j];if(q.key<=0x7ffffff1||q.key>=0x80000000)continue;unsigned op{};
-   if(!field(q.object,0,op))return reject();if((op&31)!=1)continue;
-   if(size==selected.size())return reject();selected[size++]=q;
+   if(!field(q.object,0,op))return reject(1);if((op&31)!=1)continue;
+   if(seen++<selected.size())selected[size++]=q;
   }
  }
+ indexed_candidates_max=(std::max)(indexed_candidates_max,seen);
+ if(seen>selected.size())return reject(2);
  // The native merge sort is stable for equal keys. Preserve insertion order.
  std::stable_sort(selected.begin(),selected.begin()+size,[](const auto &a,const auto &b){return a.key<b.key;});
  for(unsigned i=0;i<size;++i){const auto &q=selected[i];auto &r=p.late[i];
-  for(unsigned j=0;j<i;++j)if(selected[j].object==q.object)return reject();
-  if(!field(q.object,0x10,r.bindings)||!field(q.object,0x40,r.arguments))return reject();
+  for(unsigned j=0;j<i;++j)if(selected[j].object==q.object)return reject(3);
+  if(!field(q.object,0x10,r.bindings)||!field(q.object,0x40,r.arguments))return reject(4);
   p.late_packets[i]=q.object;p.late_keys[i]=q.key;r.recipe=silhouette_cpu(q.object);
   if(r.recipe&&!pb::snapshot_native_pipeline(cfg.image,q.object,r.native))r.recipe.reset();
  }
  unsigned again{};std::uintptr_t pointer{};
- if(!field(p.stamp.context,0x2b80,again)||again!=count||!field(p.stamp.context,0x2b78,pointer)||pointer!=array||!same_stamp(p.stamp))return reject();
+ if(!field(p.stamp.context,0x2b80,again)||again!=count||!field(p.stamp.context,0x2b78,pointer)||pointer!=array||!same_stamp(p.stamp))return reject(5);
  p.late_count=size;return true;
 }
 IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
@@ -65,7 +73,7 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
  try{Lock lock;if(!accepting.load()||fault.load()||abandoned||indexed_sample_count==indexed_samples.size()||indexed_visits>=4096)return scope;
   unsigned plan=UINT_MAX,position{};
   for(unsigned i=0;i<plans.size();++i){const auto &p=plans[i];if(!p.built)continue;
-   for(unsigned j=0;j<p.late_count;++j)if(!(p.late_executed&(1U<<j))&&p.late_packets[j]==f.gpr[3]){if(plan!=UINT_MAX){++indexed_errors;return scope;}plan=i;position=j;}}
+   for(unsigned j=0;j<p.late_count;++j)if(!(p.late_executed&(1ULL<<j))&&p.late_packets[j]==f.gpr[3]){if(plan!=UINT_MAX){++indexed_errors;return scope;}plan=i;position=j;}}
   if(plan==UINT_MAX)return scope;++indexed_visits;auto &p=plans[plan];
   auto &s=indexed_samples[indexed_sample_count];std::destroy_at(&s);std::construct_at(&s);
   std::uintptr_t handle{},set{},entry{},descriptor{},data{};unsigned size{};

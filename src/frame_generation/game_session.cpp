@@ -10,6 +10,7 @@
 #include "../perf/toggles.hpp"
 #include <wrl/client.h>
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <atomic>
 #include <memory>
@@ -671,6 +672,15 @@ static void finish_pending(Session &s, bool presented) {
     s.pending = none;
 }
 
+// A raw GPU attempt can read NaN (game-45: the last attempt was -nan); JSON has
+// no non-finite numbers, so those are written as null.
+struct Number {
+    float value;
+    friend std::ostream &operator<<(std::ostream &o, Number n) {
+        return std::isfinite(n.value) ? o << n.value : o << "null";
+    }
+};
+
 void write(std::ostream &o) {
     auto &s = session;
     std::lock_guard lock(s.mutex);
@@ -682,9 +692,9 @@ void write(std::ostream &o) {
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
-      << ",\"gamma_ex\":" << s.last_probe.gamma_ex << ",\"gamma\":" << s.last_probe.gamma << ",\"gpu_attempts\":"
+      << ",\"gamma_ex\":" << Number{s.last_probe.gamma_ex} << ",\"gamma\":" << Number{s.last_probe.gamma} << ",\"gpu_attempts\":"
       << s.last_probe.attempts << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":["
-      << s.last_probe.last_gamma << ',' << s.last_probe.last_gamma_ex << "],\"screen_region\":[" << s.last_probe.region[0] << ','
+      << Number{s.last_probe.last_gamma} << ',' << Number{s.last_probe.last_gamma_ex} << "],\"screen_region\":[" << s.last_probe.region[0] << ','
       << s.last_probe.region[1] << ',' << s.last_probe.region[2] << ',' << s.last_probe.region[3] << "],\"candidates\":[";
     for (unsigned i = 0; i < s.candidate_count; ++i) {
         o << (i ? ",[" : "[");

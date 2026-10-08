@@ -125,10 +125,12 @@ struct Plan {
  std::array<Recording,8> recordings{};
  bool prepared{},resolved{},copied{},completed{};unsigned recorded_draws{};
  // Late indexed packets are frozen before recording workers start, sorted
- // in native key/insertion order and included in GPU ownership.
- std::array<std::uintptr_t,32> late_packets{};
- std::array<unsigned,32> late_keys{};std::array<LatePacket,32> late{};
- unsigned late_count{},late_executed{},late_recorded{};
+ // in native key/insertion order and included in GPU ownership. About 17 per
+ // frame in combat; Alatreon's arrival exceeded the former 32 (game-45).
+ static constexpr unsigned late_capacity=64;
+ std::array<std::uintptr_t,late_capacity> late_packets{};
+ std::array<unsigned,late_capacity> late_keys{};std::array<LatePacket,late_capacity> late{};
+ unsigned late_count{},late_recorded{};std::uint64_t late_executed{};
 };
 unsigned effect_count(const Plan &p){return (p.has_haze?4U:3U)+p.overlay_count;}
 bool shared_overlay_key(const Plan &p){
@@ -163,7 +165,7 @@ std::array<Plan,32> plans;
 // listed packet, or a barrier on a listed resource; any other call cannot
 // match a plan and is skipped without it. A stale entry only costs a locked
 // check. The slot being rewritten holds a plan whose packets have not run yet.
-constexpr unsigned watch_packets=64;
+constexpr unsigned watch_packets=96;
 struct Watch {
  std::array<std::atomic<std::uintptr_t>,watch_packets> packets{};std::array<std::atomic<std::uintptr_t>,resource_capacity> resources{};
  std::atomic<unsigned> packet_count{},resource_count{};std::atomic<bool> all{};
@@ -739,8 +741,9 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   return p.keys[a]!=p.keys[b]?p.keys[a]<p.keys[b]:a<b;});
  if(!discover_dependencies(p)){plan_qualification=12;
   const auto stage=dependency_stage;
-  if(!dependency_failures++){const auto &d=dependency_description;
-   dependency_first_failure={dependency_rejection,stage,dependency_texture_check,d[0],d[1],d[2],d[4],d[5]};}
+  {const auto &d=dependency_description;
+   dependency_latest_failure={dependency_rejection,stage,dependency_texture_check,d[0],d[1],d[2],d[4],d[5]};
+   if(!dependency_failures++)dependency_first_failure=dependency_latest_failure;}
   return overlay_failure(OutputCommands::input_bindings,stage<4+p.overlay_count?p.keys[stage]:0,
                          stage<4+p.overlay_count?p.draws[stage].draw.packet:0);
  }
@@ -1418,7 +1421,14 @@ void write_summary(std::ostream &o){
  o<<",\"unknown_shaders\":"<<unknown_count<<",\"unknown_shader\":";
  if(unknown_count)o<<"{\"key\":"<<unknown_key<<",\"ps_sha256\":\""<<unknown_shader<<"\"}";else o<<"null";
  o<<",\"inserted_capture\":{\"attempts\":"<<inserted_dependencies.attempts()<<",\"samples\":"<<inserted_dependencies.size()<<",\"saved\":"<<inserted_saved<<",\"errors\":";
- a(inserted_dependencies.errors());o<<"},\"latest_rejection\":";
+ a(inserted_dependencies.errors());o<<'}';
+ // Late indexed draws (hunter silhouette pieces): a rejected scan leaves the frame native.
+ o<<",\"late_draws\":{\"planned\":"<<silhouette_planned<<",\"rejected\":"<<indexed_candidates_rejected<<",\"reasons\":";
+ a(indexed_candidate_reasons);o<<",\"max\":"<<indexed_candidates_max<<",\"capacity\":"<<Plan::late_capacity<<'}';
+ // Dependency discovery failures: {rejection, stage, texture check, role, engine
+ // format, DXGI format, width, height} of the first and the latest.
+ o<<",\"dependency_failures\":"<<dependency_failures<<",\"dependency_failure\":{\"first\":";a(dependency_first_failure);
+ o<<",\"latest\":";a(dependency_latest_failure);o<<"},\"latest_rejection\":";
  if(diagnostics.rejected_graphs()!=summarized_rejections)diagnostics.write_latest_rejection(o);else o<<"null";
  summarized_rejections=diagnostics.rejected_graphs();o<<'}';
 }

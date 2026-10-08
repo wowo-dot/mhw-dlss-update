@@ -8,11 +8,11 @@ unsigned dependency_stage{UINT_MAX};
 std::array<unsigned,6> dependency_description{};
 // Which dependency_texture check failed last (1 system methods, 2 device,
 // 3 description, 4 scene format/size, 5 DOF format, 6 sample support,
-// 7 auxiliary format, 8 owner changed, 9 depth format), and the first discovery failure of the
-// run: {rejection, stage, texture check, role, engine format, DXGI format,
-// width, height}.
+// 7 auxiliary format, 8 owner changed, 9 depth format), and the first and latest discovery
+// failures of the run: {rejection, stage, texture check, role, engine format,
+// DXGI format, width, height}.
 unsigned dependency_texture_check{};
-std::uint64_t dependency_failures{};std::array<unsigned,8> dependency_first_failure{};
+std::uint64_t dependency_failures{};std::array<unsigned,8> dependency_first_failure{},dependency_latest_failure{};
 DependencyBindingTrace dependency_binding_trace;
 bool dependency_binding_contract(const Record &r,const HazeBindings &b){
  if(r.dependency==4){
@@ -118,7 +118,12 @@ bool dependency_texture(const tb::Owner &o,unsigned role,ComPtr<ID3D12Resource> 
  }else{
   // Sampled auxiliary textures keep their native dimensions and coordinates.
   // Only normalized/float-compatible formats are admitted; never integer SRVs.
-  if(role==2){if(o.format!=7||(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB))return fail(7);}
+  if(role==2){
+   // Single radial frames in the Alatreon fight bind a 1x1 R32 float (engine
+   // format 16) occlusion instead (game-45, 20 frames). One texel reads the
+   // same at any coordinate, so it is admitted at exactly that size only.
+   const bool texel=o.format==16&&d.Format==DXGI_FORMAT_R32_FLOAT&&d.Width==1&&d.Height==1&&d.MipLevels==1;
+   if(!texel&&(o.format!=7||(d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM&&d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)))return fail(7);}
   else {
    // The native radial helper binds its format-7 default when no custom mask
    // exists. This is the same normalized texture accepted for occlusion;

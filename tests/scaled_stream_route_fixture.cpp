@@ -17,6 +17,8 @@ namespace obs=mhw::temporal_present::observer;
 template<class T,std::size_t N>void put(std::array<std::byte,N> &a,unsigned offset,T value){std::memcpy(a.data()+offset,&value,sizeof(value));}
 void WINAPI copy_forward(ID3D12GraphicsCommandList *l,const D3D12_TEXTURE_COPY_LOCATION *d,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *s,const D3D12_BOX *box){l->CopyTextureRegion(d,x,y,z,s,box);}
 #include "scaled_indexed_fixture.hpp"
+#include "scaled_late_candidates_fixture.hpp"
+#include "scaled_radial_occlusion_fixture.hpp"
 #ifdef MHW_STREAM_RUNTIME_FIXTURE
 #include "scaled_return_fixture.hpp"
 #endif
@@ -37,6 +39,8 @@ int wmain(int argc,wchar_t **argv){try{
     route::cfg.device=reinterpret_cast<std::uintptr_t>(f.device.Get());route::originals[2]=reinterpret_cast<void *>(copy_forward);
     route::width=128;route::height=64;route::render_w=64;route::render_h=32;route::begin();
     if(mode=="indexed-ownership"){check_indexed_ownership(f);require(obs::finish(),"indexed observer cleanup");return 0;}
+    if(mode=="late-candidates"){check_late_candidates(f);require(obs::finish(),"late observer cleanup");return 0;}
+    if(mode=="radial-occlusion"){check_radial_occlusion(f);require(obs::finish(),"occlusion observer cleanup");return 0;}
 #include "compute_depth_pixels_fixture.inl"
     if(mode=="compute_descriptions"){
         for(const auto format:{DXGI_FORMAT_R32_TYPELESS,DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R32_UINT,DXGI_FORMAT_R8_UNORM}){
