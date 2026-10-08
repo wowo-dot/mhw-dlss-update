@@ -4,6 +4,8 @@
 #include "../src/bridge_probe/readable_region.hpp"
 #include "../src/bridge_probe/renderer_snapshot.hpp"
 #include <windows.h>
+#include <array>
+#include <atomic>
 #include <cstdio>
 #include <span>
 
@@ -82,11 +84,51 @@ void region_tests() {
     check(bp::readable_end(base + 8) == 0, "uncached check");
     VirtualFree(block, 0, MEM_RELEASE);
 }
+// Sixteen one-page regions (alternating protection) inside one 64 KB block
+// share one cache slot with sixteen different answers. Eight threads read
+// them concurrently; a torn seqlock read would return a wrong region end.
+void shared_cache_tests() {
+    namespace bp = mhw::bridge_probe;
+    mhw::perf::toggles.store(mhw::perf::cached_reads);
+    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(block != nullptr, "block");
+    if (!block) return;
+    for (unsigned i = 1; i < 16; i += 2) {
+        DWORD old{};
+        VirtualProtect(block + i * 4096, 4096, PAGE_READONLY, &old);
+    }
+    const auto base = reinterpret_cast<std::uintptr_t>(block);
+    std::atomic<unsigned> wrong{}, done{};
+    std::array<HANDLE, 8> threads{};
+    struct Job { std::uintptr_t base; std::atomic<unsigned>* wrong; std::atomic<unsigned>* done; unsigned seed; };
+    std::array<Job, 8> jobs{};
+    for (unsigned t = 0; t < threads.size(); ++t) {
+        jobs[t] = {base, &wrong, &done, t * 7919U + 1U};
+        threads[t] = CreateThread(nullptr, 0, [](void* p) -> DWORD {
+            auto& j = *static_cast<Job*>(p);
+            unsigned x = j.seed;
+            for (unsigned n = 0; n < 200000; ++n) {
+                x = x * 1103515245U + 12345U;
+                const unsigned page = (x >> 16) & 15U, offset = (x >> 4) & 4095U;
+                if (bp::readable_end(j.base + page * 4096 + offset) != j.base + (page + 1) * 4096) ++*j.wrong;
+            }
+            ++*j.done;
+            return 0;
+        }, &jobs[t], 0, nullptr);
+    }
+    WaitForMultipleObjects(static_cast<DWORD>(threads.size()), threads.data(), TRUE, 60000);
+    for (auto h : threads) CloseHandle(h);
+    check(done.load() == threads.size(), "all reader threads finished");
+    check(wrong.load() == 0, "no torn or misattributed cache entries");
+    VirtualFree(block, 0, MEM_RELEASE);
+    mhw::perf::toggles.store(0);
+}
 }  // namespace
 
 int main() {
     frame_stats_tests();
     region_tests();
+    shared_cache_tests();
     if (failures) return 1;
     std::printf("perf tests passed\n");
     return 0;
