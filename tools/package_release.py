@@ -3,12 +3,15 @@
   python -B tools/package_release.py --dll <built mhw_dlss_alpha.dll> --version X.Y.Z
       --streamline-sdk <Streamline SDK root> --dlss-sdk <DLSS SDK root> --out <folder>
 
-Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip:
+Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as
+the game folder receives it:
 
-  mhw_dlss.dll, mhw_dlss.ini        the mod and its default configuration
-  sl.*.dll, nvngx_dlss*.dll         NVIDIA runtime, unmodified, verified by SHA-256
-  licenses/                         NVIDIA's license files for those DLLs
-  README.txt, THIRD-PARTY-NOTICES.txt, manifest.json
+  winmm.dll                         the mod (MHW maps winmm.dll at startup; every
+                                    winmm function passes through to Windows)
+  mhw_dlss/mhw_dlss.ini             default configuration
+  mhw_dlss/sl.*.dll, nvngx_dlss*    NVIDIA runtime, unmodified, verified by SHA-256
+  mhw_dlss/licenses/                NVIDIA's license files for those DLLs
+  mhw_dlss/README.txt, THIRD-PARTY-NOTICES.txt, manifest.json
 
 NVIDIA files are copied only when they match the pinned hashes of the tested
 runtime (fg_runtime.py), and only into release packages: never into git
@@ -38,7 +41,7 @@ COVERAGE = [
     ('nvngx_dlss.dll', 'NVIDIA DLSS Super Resolution', 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
 ]
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.
-# Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this file.
+# Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)
 reflex = on                ; on (off is not available yet)
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
@@ -55,14 +58,22 @@ Requirements
 - An NVIDIA GeForce RTX GPU. Frame Generation needs an RTX 40 or 50 series
   GPU; 3x and above need an RTX 50 series GPU. On other hardware the mod
   turns itself off and the game runs normally.
+- The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
+  plugin setups already have.
 
-Configuration: mhw_dlss.ini (comments in the file). DLSS currently runs at
-Performance quality (half resolution); other modes come with later builds.
+Install: copy winmm.dll and the mhw_dlss folder into the game folder (next to
+MonsterHunterWorld.exe), or install the archive as a mod in Mod Organizer 2.
+It works with or without Stracker's Loader. It cannot share the game folder
+with another mod's winmm.dll.
 
-Logs: the logs folder next to mhw_dlss.dll, one file per launch. Please
-include it when reporting a problem.
+Configuration: mhw_dlss/mhw_dlss.ini (comments in the file). DLSS currently
+runs at Performance quality (half resolution); other modes come with later
+builds.
 
-Uninstall: remove every file of this package.
+Logs: mhw_dlss/logs, one file per launch. Please include it when reporting a
+problem.
+
+Uninstall: delete winmm.dll and the mhw_dlss folder.
 
 Credits and licenses
 This mod uses NVIDIA DLSS, NVIDIA DLSS Frame Generation, NVIDIA Streamline
@@ -116,25 +127,26 @@ def main():
     for src, _ in licenses:
         require(src.is_file(), f'license file {src} is missing')
 
-    (folder / 'licenses').mkdir(parents=True)
-    shutil.copyfile(a.dll, folder / 'mhw_dlss.dll')
-    (folder / 'mhw_dlss.ini').write_text(INI, encoding='utf-8', newline='\r\n')
+    data = folder / 'mhw_dlss'
+    (data / 'licenses').mkdir(parents=True)
+    shutil.copyfile(a.dll, folder / 'winmm.dll')
+    (data / 'mhw_dlss.ini').write_text(INI, encoding='utf-8', newline='\r\n')
     for root, pins in sources:
         for file in pins:
-            shutil.copyfile(root / file, folder / file)
+            shutil.copyfile(root / file, data / file)
     for src, dst in licenses:
-        shutil.copyfile(src, folder / 'licenses' / dst)
-    (folder / 'README.txt').write_text(README.format(version=a.version), encoding='utf-8', newline='\r\n')
+        shutil.copyfile(src, data / 'licenses' / dst)
+    (data / 'README.txt').write_text(README.format(version=a.version), encoding='utf-8', newline='\r\n')
     notices = ['Third-party components (unmodified NVIDIA binaries)', '']
     for files, product, license_file in COVERAGE:
         notices += [f'{product}: {files}', f'  License: licenses/{license_file}', '']
     notices += ['NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation.',
                 'This mod is not affiliated with, sponsored or endorsed by NVIDIA.']
-    (folder / 'THIRD-PARTY-NOTICES.txt').write_text('\n'.join(notices) + '\n', encoding='utf-8', newline='\r\n')
+    (data / 'THIRD-PARTY-NOTICES.txt').write_text('\n'.join(notices) + '\n', encoding='utf-8', newline='\r\n')
     files = sorted(f for f in folder.rglob('*') if f.is_file())
     manifest = dict(schema=1, version=a.version, commit=commit, dirty=dirty,
                     files=[dict(path=f.relative_to(folder).as_posix(), size=f.stat().st_size, sha256=sha(f)) for f in files])
-    (folder / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n', encoding='utf-8')
+    (data / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n', encoding='utf-8')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
         for f in sorted(x for x in folder.rglob('*') if x.is_file()):
             z.write(f, f'{name}/{f.relative_to(folder).as_posix()}')

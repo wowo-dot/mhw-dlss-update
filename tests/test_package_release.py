@@ -47,20 +47,26 @@ class PackageRelease(unittest.TestCase):
     def test_package_layout_manifest_and_zip(self):
         self.run_tool()
         folder = self.out / 'mhw-dlss-9.8.7'
-        for name in ['mhw_dlss.dll', 'mhw_dlss.ini', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
+        data = folder / 'mhw_dlss'
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['mhw_dlss', 'winmm.dll'])
+        self.assertEqual(pr.sha(folder / 'winmm.dll'), pr.sha(self.dll))
+        for name in ['mhw_dlss.ini', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
                      *pr.STREAMLINE, *pr.NGX, *(f'licenses/{dst}' for _, dst in pr.LICENSES['streamline'] + pr.LICENSES['dlss'])]:
-            self.assertTrue((folder / name).is_file(), name)
+            self.assertTrue((data / name).is_file(), name)
         for name, digest in {**pr.STREAMLINE, **pr.NGX}.items():
-            self.assertEqual(pr.sha(folder / name), digest)
-        manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(pr.sha(data / name), digest)
+        manifest = json.loads((data / 'manifest.json').read_text(encoding='utf-8'))
         self.assertEqual(manifest['version'], '9.8.7')
         for entry in manifest['files']:
             self.assertEqual(pr.sha(folder / entry['path']), entry['sha256'])
-        ini = (folder / 'mhw_dlss.ini').read_text(encoding='utf-8')
+        ini = (data / 'mhw_dlss.ini').read_text(encoding='utf-8')
         self.assertIn('runtime_dir = .', ini); self.assertIn('log_dir = logs', ini)
-        self.assertIn('not affiliated with, sponsored or endorsed by NVIDIA', (folder / 'README.txt').read_text(encoding='utf-8'))
+        readme = (data / 'README.txt').read_text(encoding='utf-8')
+        self.assertIn('not affiliated with, sponsored or endorsed by NVIDIA', readme)
+        self.assertIn('delete winmm.dll and the mhw_dlss folder', readme)
         with zipfile.ZipFile(self.out / 'mhw-dlss-9.8.7.zip') as z:
-            self.assertEqual(sorted(z.namelist()), sorted(f'mhw-dlss-9.8.7/{p}' for p in [e['path'] for e in manifest['files']] + ['manifest.json']))
+            self.assertEqual(sorted(z.namelist()),
+                             sorted(f'mhw-dlss-9.8.7/{p}' for p in [e['path'] for e in manifest['files']] + ['mhw_dlss/manifest.json']))
 
     def test_refuses_changed_nvidia_file(self):
         write(self.sl / 'bin' / 'x64' / 'sl.common.dll', b'tampered')

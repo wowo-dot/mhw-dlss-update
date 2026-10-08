@@ -577,6 +577,12 @@ DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
         reinterpret_cast<LPCWSTR>(&worker), &pin)) return 1;
+    {   // One active copy per process: a second one (e.g. force-loaded and also
+        // present as winmm.dll) stays inert. The handle lives as long as the process.
+        const auto name = L"Local\\mhw_dlss.instance." + std::to_wstring(GetCurrentProcessId());
+        const HANDLE instance = CreateMutexW(nullptr, FALSE, name.c_str());
+        if (!instance || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+    }
     try {
         wchar_t dll_name[32768]{}, host_name[32768]{};
         const auto dll_length = GetModuleFileNameW(module, dll_name, static_cast<DWORD>(std::size(dll_name)));
@@ -586,9 +592,13 @@ DWORD WINAPI worker(void*) noexcept {
         const std::filesystem::path dll(dll_name);
 #ifdef MHW_ALPHA
         {
-            std::ifstream in(dll.parent_path() / L"mhw_dlss.ini", std::ios::binary);
+            // Shipped layout: winmm.dll in the game folder, its configuration,
+            // NVIDIA runtime and logs in the mhw_dlss folder next to it.
+            auto base = dll.parent_path(); std::error_code missing;
+            if (std::filesystem::is_regular_file(base / L"mhw_dlss" / L"mhw_dlss.ini", missing)) base /= L"mhw_dlss";
+            std::ifstream in(base / L"mhw_dlss.ini", std::ios::binary);
             const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            alpha_config = mhw::alpha::parse_config(text, dll.parent_path());
+            alpha_config = mhw::alpha::parse_config(text, base);
             output = alpha_config.log_dir; std::filesystem::create_directories(output);
             runtime = alpha_config.runtime_dir;
             fg_plugin = alpha_config.frame_generation; fg_multiplier = alpha_config.multiplier;
@@ -648,9 +658,9 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.7\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.8\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.12\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.13\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
             << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
