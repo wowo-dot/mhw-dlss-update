@@ -43,6 +43,19 @@ int main(int argc,char **argv){
         default:throw std::runtime_error("reason fixture");}
         const auto d=history_decision(a,test);require(d.valid&&d.reasons==(1U<<i));
     }
+    // FOV and clip-plane animation keeps history (game-38: a reset on every
+    // windrake frame stopped FG); a jump over 10% or a structural change cuts.
+    {auto p=a;const std::array<float,16> lens{1.35F,0,0,0,0,2.4F,0,0,0,0,1e-5F,-1,0,0,16,0};
+        for(unsigned i=0;i<16;++i)p.projection[i]=std::bit_cast<unsigned>(lens[i]);
+        const auto with=[&](unsigned i,float v){auto s=advance(p);s.projection[i]=std::bit_cast<unsigned>(v);return history_decision(p,s);};
+        require(!history_decision(p,advance(p)).reset);
+        for(const float scale:{1.0001F,1.005F,.95F,1.09F,.91F}){const auto d=with(5,2.4F*scale);require(d.valid&&!d.reset&&d.projection_mask==32);}
+        require(!with(14,15.9F).reset&&!with(10,1.05e-5F).reset);
+        for(const float v:{2.4F*1.12F,2.4F*.88F,-2.4F,0.F,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
+            require(with(5,v).reasons==reason_bit(ResetReason::projection));
+        require(with(8,.01F).reasons==reason_bit(ResetReason::projection));  // an off-centre term appears
+        HistoryTelemetry kept;kept.record(p,advance(p),with(0,1.36F));require(kept.retained==1&&kept.projection_changes_retained==1&&!kept.resets);
+    }
     auto test=b;test.view_matrix=pose({20,0,0});test.microseconds=a.microseconds+250000;require(!history_decision(a,test).reset);
     test.view_matrix=pose({20.00001,0,0});require(history_decision(a,test).reset);
     test=b;test.view_matrix=pose({15,15,0});require(history_decision(a,test).reasons==reason_bit(ResetReason::camera_displacement));

@@ -648,10 +648,11 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.0\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.1\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.6\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
-#endif << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.7\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+#endif
+            << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -916,6 +917,9 @@ DWORD WINAPI worker(void*) noexcept {
                         mhw::reflex::temporal::sample();
 #ifdef MHW_FG_GAME
                         log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
+#ifdef MHW_ALPHA
+                        log << "{\"event\":\"dlss_summary\",\"runtime\":";mhw::reflex::temporal::summary(log);log << "}\n" << std::flush;
+#endif
                         log_fg_buffers(log, "status");
                         log_frames(log, "armed");log_latency(log);mhw::perf::sampler::write(log);
 #endif

@@ -1073,6 +1073,12 @@ void save_compute_depth(const std::filesystem::path &prefix) noexcept {
     (void)prefix;
 #endif
 }
+void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
+    out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
+       <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
+    for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
+    out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<'}';
+}
 void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)disabled=disabled&&!e;
     const auto completed=fence?fence->GetCompletedValue():0;
     // A failed/duplicate native submission is still forwarded. Its old fence

@@ -5,6 +5,7 @@
 #include "dependency_binding_trace.hpp"
 #include "stream_lifetime.hpp"
 #include "readiness_trace.hpp"
+#include "effect_order.hpp"
 #include "output_diagnostics.hpp"
 #include "output_dependencies.hpp"
 #include "prepared_queue.hpp"
@@ -127,7 +128,7 @@ bool shared_overlay_key(const Plan &p){
  for(unsigned i=0;i<p.overlay_count;++i)for(unsigned j=0;j<i;++j)if(p.keys[4+i]==p.keys[4+j])return true;
  return false;
 }
-unsigned effect_stage(const Plan &p,unsigned ordinal){if(p.ordered_count)return p.order[ordinal];constexpr unsigned haze_order[]{0,3,1,2};return p.has_haze?haze_order[ordinal]:ordinal;}
+unsigned effect_stage(const Plan &p,unsigned ordinal){return p.ordered_count?p.order[ordinal]:unordered_effect_stage(p.has_haze,ordinal);}
 unsigned effect_ordinal(const Plan &p,unsigned stage){for(unsigned i=0;i<effect_count(p);++i)if(effect_stage(p,i)==stage)return i;return UINT_MAX;}
 unsigned handoff_draw(const Plan &p,unsigned stage){
  const auto ordinal=effect_ordinal(p,stage);
@@ -1075,7 +1076,8 @@ bool ready(ID3D12GraphicsCommandList *list,std::uint64_t gen,const tb::Snapshot 
    v.active={active.slot,reinterpret_cast<std::uintptr_t>(active.list),active.generation,active.recording,
        active.resolved,active.copied,active.draws,active.list?plans[active.slot].stamp.frame:0,active.list?plans[active.slot].stamp.epoch:0};
    v.accepting=accepting.load();v.fault=fault.load();v.stamp_equal=p.stamp==s;v.stage=stage;
-   for(unsigned ordinal=0;ordinal<effect_count(p);++ordinal){const auto i=effect_stage(p,ordinal);if(!needs_pipeline(p,i))continue;const auto *cache=draw_pipeline(p,i);
+   // Only a built plan's draws are complete (a rejected build keeps partial ones).
+   if(p.built)for(unsigned ordinal=0;ordinal<effect_count(p);++ordinal){const auto i=effect_stage(p,ordinal);if(i>=p.draws.size()||!needs_pipeline(p,i))continue;const auto *cache=draw_pipeline(p,i);
        if(!cache||!cache->effect)v.pipeline_missing_mask|=1U<<i;
        if(!cache||p.draws[i].signature!=cache->signature)v.pipeline_signature_mask|=1U<<i;}
    return v;});return reason==ReadinessTrace::accepted;};

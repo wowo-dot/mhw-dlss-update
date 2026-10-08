@@ -47,6 +47,18 @@ inline bool camera_position(const std::array<float,16> &m,std::array<double,3> &
     }
     center=solved;return true;
 }
+// A projection change is a cut when an element appears, disappears, changes
+// sign or is not finite, or moves by more than 10% of its magnitude in one
+// frame. Smaller changes are FOV and clip-plane animation (zoom easing, the
+// windrake ride: a reset on every such frame stopped FG in game-38); motion
+// vectors include them, so DLSS and FG keep their history.
+inline bool projection_cut(const std::array<unsigned,16> &before,const std::array<unsigned,16> &after) noexcept {
+    for(unsigned i=0;i<16;++i){if(before[i]==after[i])continue;
+        const auto a=std::bit_cast<float>(before[i]),b=std::bit_cast<float>(after[i]);
+        if(!std::isfinite(a)||!std::isfinite(b)||(a==0)!=(b==0)||std::signbit(a)!=std::signbit(b))return true;
+        if(std::abs(b-a)>.1F*std::fmax(std::abs(a),std::abs(b)))return true;}
+    return false;
+}
 // Identity/continuity/projection/interval and nontranslation rotation checks
 // remain unchanged. Translation cuts use Euclidean camera displacement >20.
 // The opt-in comparison removes only a displacement-only reset. It is a
@@ -67,7 +79,7 @@ inline HistoryDecision history_decision(const HistoryStamp &previous,const Histo
     mark(next.depth!=previous.depth,ResetReason::depth);
     mark(next.viewport!=previous.viewport,ResetReason::viewport);
     for(unsigned i=0;i<16;++i)if(next.projection[i]!=previous.projection[i])projection_mask|=1U<<i;
-    mark(projection_mask!=0,ResetReason::projection);
+    mark(projection_cut(previous.projection,next.projection),ResetReason::projection);
     if(previous.frame&&next.frame<=previous.frame)return {};
     float ms=16.666667F;
     if(previous.microseconds){
@@ -104,6 +116,7 @@ struct HistoryTelemetry {
     HistoryExample latest;
     std::uint64_t translation_resets_avoided{};
     HistoryExample first_avoided,latest_avoided;
+    std::uint64_t projection_changes_retained{};  // projection changed below the cut threshold
     std::uint64_t displacement_only_resets_suppressed{};
     HistoryExample first_displacement_suppressed,latest_displacement_suppressed;
     void record(const HistoryStamp &before,const HistoryStamp &after,const HistoryDecision &d) noexcept {
@@ -113,6 +126,7 @@ struct HistoryTelemetry {
             if(!displacement_only_resets_suppressed)first_displacement_suppressed=latest_displacement_suppressed;
             ++displacement_only_resets_suppressed;}
         if(!d.reset){++retained;++retained_streak;if(retained_streak>longest_retained_streak)longest_retained_streak=retained_streak;
+            if(d.projection_mask)++projection_changes_retained;
             if(d.view_jump_mask&0x7000U){latest_avoided={before,after,d};if(!translation_resets_avoided)first_avoided=latest_avoided;++translation_resets_avoided;}return;}
         ++resets;retained_streak=0;latest={before,after,d};
         for(unsigned i=0;i<reset_reason_count;++i)if(d.reasons&(1U<<i)){
@@ -146,6 +160,7 @@ struct HistoryTelemetry {
         out<<",\"translation_resets_avoided\":"<<translation_resets_avoided<<",\"first_avoided\":";
         if(translation_resets_avoided)example(out,first_avoided);else out<<"null";
         out<<",\"latest_avoided\":";if(translation_resets_avoided)example(out,latest_avoided);else out<<"null";
+        out<<",\"projection_changes_retained\":"<<projection_changes_retained;
         if(comparison){
             out<<",\"diagnostic_only\":true,\"control_resets\":"<<resets+displacement_only_resets_suppressed
                <<",\"displacement_only_resets_suppressed\":"<<displacement_only_resets_suppressed<<",\"first_displacement_suppressed\":";

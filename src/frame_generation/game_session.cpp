@@ -105,6 +105,10 @@ struct Session {
     std::atomic<unsigned> requested_multiplier{2};
     unsigned applied_generated{};  // 0 while Off
     std::uint64_t generated_changes{}, generated_limited{};
+    // Tagged frames with reset: all, and those whose DLSS history was reset
+    // (the rest had no consecutive predecessor). DLSS-G presents no generated
+    // frame for a reset.
+    std::uint64_t reset_tags{}, history_reset_tags{};
     std::array<std::uint64_t, 8> presented_frames{};  // numFramesActuallyPresented per Present: 0..6, other
     std::array<std::uint64_t, static_cast<unsigned>(Off::count)> off{};
     std::array<std::uint64_t, 7> camera_failures{};
@@ -634,6 +638,8 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
         ++s.tagged;
+        if (frame.reset) ++s.reset_tags;
+        if (camera.reset) ++s.history_reset_tags;
         if (with_hudless) ++s.hudless_tagged;
         if (s.sample_count < s.samples.size() && (s.tagged <= 4 || (s.tagged & (s.tagged - 1)) == 0))
             s.samples[s.sample_count++] = {present_frame, entry.frame, c};
@@ -702,7 +708,8 @@ void write(std::ostream &o) {
       << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
       << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged
       << ",\"recorded\":" << s.recorded << ",\"record_failed\":" << s.record_failed << ",\"size_mismatch\":" << s.size_mismatch
-      << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes << ",\"null_tags\":" << s.null_tags
+      << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes << ",\"reset_tags\":" << s.reset_tags
+      << ",\"history_reset_tags\":" << s.history_reset_tags << ",\"null_tags\":" << s.null_tags
       << ",\"unpresented\":" << s.unpresented << ",\"lifecycle_calls\":" << s.lifecycle_calls << ",\"lifecycle_offs\":" << s.lifecycle_offs << ",\"exceptions\":" << s.exceptions << ",\"last_sdk_error\":" << static_cast<unsigned>(s.last_sdk_error) << ",\"off\":{";
     for (unsigned i = 0; i < s.off.size(); ++i) o << (i ? "," : "") << '"' << off_names[i] << "\":" << s.off[i];
     o << "},\"camera_failures\":[";

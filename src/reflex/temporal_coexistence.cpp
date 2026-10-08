@@ -96,6 +96,7 @@ void sample(){
     if(samples<=12||(samples&(samples-1))==0)cd::write(events);
     require(bool(events),"temporal-heartbeat-log");
 }
+void summary(std::ostream& out){if(installed)cd::write_summary(out);else out<<"null";}
 void fault_snapshot() noexcept {
     try{
         if(!installed||!events.is_open())return;
