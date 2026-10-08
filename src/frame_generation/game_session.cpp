@@ -81,7 +81,7 @@ struct Session {
     bool staging_failed{};
     // final frame - newest staged frame at a mismatch: -2, -1, +1, +2, other.
     std::array<std::uint64_t, 5> mismatch_delta{};
-    std::uint64_t keyed_hits{}, staging_copies{};
+    std::uint64_t keyed_hits{}, staging_copies{}, keyed_early{}, keyed_confirms{};
     std::unique_ptr<HudlessPass> hudless;
     bool hudless_failed{};
     std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
@@ -293,6 +293,9 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
             ++s.record_failed;
             return;
         }
+        // A final draw recorded before this stage holds an unconfirmed slot for
+        // the frame (its copy runs after this one on the GPU): confirm it.
+        // Otherwise queue the frame for its final draw.
         auto &copy = s.staging[s.queue.push(frame, epoch, camera)];
         std::array<D3D12_RESOURCE_BARRIER, 4> b{transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
                                                transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
@@ -305,6 +308,11 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
         list->ResourceBarrier(4, b.data());
         ++s.staging_copies;
         ++s.staged_count;
+        if (const auto slot = s.ring.confirm(frame, epoch); slot != none) {
+            s.cameras[slot] = camera;
+            s.queue.erase(frame, epoch);
+            ++s.keyed_confirms;
+        }
     } catch (...) {
         ++session.record_failed;
     }
@@ -319,21 +327,28 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
         if (!s.sdk || s.create_failed) return;
         const bool keyed = perf::on(perf::keyed_staging);
         Staged staged;
+        bool confirmed = true;
         if (keyed) {
             const auto newest = s.queue.newest();
             const auto taken = s.queue.take(frame, epoch);
-            if (!taken) {
-                if (!newest)
-                    ++s.final_unstaged;
-                else {
-                    ++s.final_mismatch;
-                    note_mismatch(s, *newest, frame);
-                }
+            if (!s.staging[0].depth) {  // no frame staged yet
+                ++s.final_unstaged;
                 return;
             }
-            const auto &copy = s.staging[taken->copy];
-            staged = {true, frame, epoch, copy.depth, copy.motion, taken->entry.payload};
-            ++s.keyed_hits;
+            // GPU order: this frame's DLSS list writes its staging copy before
+            // this final draw (which samples the DLSS output) reads it.
+            const auto &copy = s.staging[frame % staging_count];
+            if (taken) {
+                staged = {true, frame, epoch, copy.depth, copy.motion, taken->entry.payload};
+                ++s.keyed_hits;
+            } else {
+                // Recorded before the frame's DLSS stage (heavy scenes): the slot
+                // waits for stage() to confirm it and supply the camera.
+                staged = {true, frame, epoch, copy.depth, copy.motion, {}};
+                confirmed = false;
+                ++s.keyed_early;
+                if (newest) note_mismatch(s, *newest, frame);
+            }
         } else {
             if (!s.staged.valid) {
                 ++s.final_unstaged;
@@ -369,7 +384,7 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             return;
         }
         const auto completed = s.fence ? s.fence->GetCompletedValue() : 0;
-        const auto slot = s.ring.acquire(frame, epoch, completed);
+        const auto slot = s.ring.acquire(frame, epoch, completed, confirmed);
         if (slot == none) return;
         // The slot's previous pass is complete (fence-gated): collect its probe.
         if (s.slot_hudless[slot] && s.hudless) {
@@ -420,7 +435,7 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                 restore->apply();
             }
         }
-        s.cameras[slot] = staged.camera;
+        if (confirmed) s.cameras[slot] = staged.camera;
         if (s.ring.recorded(slot, reinterpret_cast<std::uintptr_t>(list), generation))
             ++s.recorded;
         else {
@@ -677,7 +692,8 @@ void write(std::ostream &o) {
       << ",\"final_mismatch\":" << s.final_mismatch << ",\"mismatch_delta\":[" << s.mismatch_delta[0] << ','
       << s.mismatch_delta[1] << ',' << s.mismatch_delta[2] << ',' << s.mismatch_delta[3] << ',' << s.mismatch_delta[4]
       << "],\"keyed\":{\"on\":" << perf::on(perf::keyed_staging) << ",\"hits\":" << s.keyed_hits
-      << ",\"copies\":" << s.staging_copies << ",\"failed\":" << s.staging_failed << '}' 
+      << ",\"copies\":" << s.staging_copies << ",\"early\":" << s.keyed_early << ",\"confirms\":" << s.keyed_confirms
+      << ",\"failed\":" << s.staging_failed << '}' 
       << ",\"presented_frames\":[";
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"
@@ -695,7 +711,7 @@ void write(std::ostream &o) {
       << s.present_delta[3] << "],\"ring\":{\"acquired\":" << r.acquired << ",\"starved\":" << r.starved << ",\"duplicates\":"
       << r.duplicates << ",\"abandoned\":" << r.abandoned << ",\"submitted\":" << r.submitted << ",\"discarded\":" << r.discarded
       << ",\"taken\":" << r.taken << ",\"stale\":" << r.stale << ",\"no_ready\":" << r.no_ready << ",\"consumed\":" << r.consumed
-      << ",\"reclaimed\":" << r.reclaimed << "},\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
+      << ",\"reclaimed\":" << r.reclaimed << ",\"unconfirmed\":" << r.unconfirmed << "},\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
       << static_cast<unsigned>(s.state.status) << ",\"min_width_or_height\":" << s.state.minWidthOrHeight
       << ",\"frames_presented\":" << s.state.numFramesActuallyPresented << ",\"max_generated\":" << s.state.numFramesToGenerateMax
       << ",\"vram\":" << s.state.estimatedVRAMUsageInBytes << ",\"fence_value\":"

@@ -3,6 +3,8 @@
 #include <cstdint>
 
 // Bounded ownership ring for FG input copies. The caller serializes every call.
+// A slot acquired unconfirmed (the final draw was recorded before its frame's
+// DLSS inputs were staged, v0.12.5) can be used only after confirm().
 //
 // recording -> recorded (on the game command list) -> ready (list generation
 // submitted) -> tagged (owner thread, before PresentStart) -> consuming (SDK
@@ -19,10 +21,11 @@ public:
     struct Slot {
         State state{State::free};
         std::uint64_t frame{}, epoch{}, list{}, generation{}, batch{}, token{}, fence{};
+        bool confirmed{true};
     };
     struct Counters {
         std::uint64_t acquired{}, starved{}, duplicates{}, abandoned{}, submitted{}, discarded{}, taken{},
-            stale{}, no_ready{}, consumed{}, reclaimed{};
+            stale{}, no_ready{}, consumed{}, reclaimed{}, unconfirmed{};
     };
 
 private:
@@ -31,7 +34,7 @@ private:
 
 public:
     // Render side, before recording copies for a producer frame.
-    unsigned acquire(std::uint64_t frame, std::uint64_t epoch, std::uint64_t completed_fence) noexcept {
+    unsigned acquire(std::uint64_t frame, std::uint64_t epoch, std::uint64_t completed_fence, bool confirmed = true) noexcept {
         reclaim(completed_fence);
         for (const auto &s : slots_)
             if (s.state != State::free && s.state != State::consuming && s.frame == frame && s.epoch == epoch) {
@@ -41,6 +44,7 @@ public:
         for (unsigned i = 0; i < N; ++i)
             if (slots_[i].state == State::free) {
                 slots_[i] = {State::recording, frame, epoch};
+                slots_[i].confirmed = confirmed;
                 ++counters_.acquired;
                 return i;
             }
@@ -60,6 +64,19 @@ public:
             slots_[slot] = {};
             ++counters_.abandoned;
         }
+    }
+    // The frame's inputs were staged after its slot was recorded: the slot may
+    // now be presented. Returns the slot, or none.
+    unsigned confirm(std::uint64_t frame, std::uint64_t epoch) noexcept {
+        for (unsigned i = 0; i < N; ++i) {
+            auto &s = slots_[i];
+            if (!s.confirmed && s.frame == frame && s.epoch == epoch &&
+                (s.state == State::recording || s.state == State::recorded || s.state == State::ready)) {
+                s.confirmed = true;
+                return i;
+            }
+        }
+        return none;
     }
     // Successful native ExecuteCommandLists receipt for one list generation.
     void submitted(std::uint64_t list, std::uint64_t generation, std::uint64_t batch) noexcept {
@@ -85,14 +102,14 @@ public:
         unsigned chosen = none;
         for (unsigned i = 0; i < N; ++i) {
             const auto &s = slots_[i];
-            if (s.state == State::ready && s.frame < present_frame &&
+            if (s.state == State::ready && s.confirmed && s.frame < present_frame &&
                 (chosen == none || s.frame > slots_[chosen].frame))
                 chosen = i;
         }
         for (unsigned i = 0; i < N; ++i)
             if (i != chosen && slots_[i].state == State::ready && slots_[i].frame < present_frame) {
+                ++(slots_[i].confirmed ? counters_.stale : counters_.unconfirmed);
                 slots_[i] = {};
-                ++counters_.stale;
             }
         if (chosen == none) {
             ++counters_.no_ready;

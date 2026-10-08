@@ -59,6 +59,11 @@ public:
             if (e.valid && (!n || e.frame > *n)) n = e.frame;
         return n;
     }
+    // The frame's final draw came first and was confirmed instead: remove it.
+    void erase(std::uint64_t frame, std::uint64_t epoch) noexcept {
+        for (auto &e : entries_)
+            if (e.valid && e.frame == frame && e.epoch == epoch) e = {};
+    }
     void clear() noexcept { entries_ = {}; }
 
 private:

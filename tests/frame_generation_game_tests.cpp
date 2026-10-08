@@ -259,6 +259,26 @@ void staging_tests() {
         require(t && t->entry.payload == 80, "restaged frame wins");
     }
 }
+// v0.12.5: a slot acquired before its frame's inputs were staged is never
+// presented until confirm(); an unconfirmed slot that missed its Present is
+// released.
+void unconfirmed_ring_tests() {
+    fg::InputRing<3> ring;
+    const auto early = ring.acquire(20, 1, 0, false);
+    require(early != ring.none && ring.recorded(early, 100, 1), "early slot recorded");
+    ring.submitted(100, 1, 1);
+    require(ring.take(21, 7) == ring.none, "unconfirmed slot not presented");
+    require(ring.counters().unconfirmed == 1 && ring.slot(early).state == decltype(ring)::State::free, "released as unconfirmed");
+    const auto late = ring.acquire(22, 1, 0, false);
+    require(ring.recorded(late, 101, 1), "second early slot");
+    require(ring.confirm(22, 2) == ring.none, "confirm needs the epoch");
+    require(ring.confirm(22, 1) == late, "stage confirms it");
+    ring.submitted(101, 1, 2);
+    require(ring.take(23, 8) == late, "confirmed slot presented");
+    require(ring.confirm(22, 1) == ring.none, "a confirmed slot is not confirmed twice");
+    const auto normal = ring.acquire(24, 1, 0);
+    require(ring.slot(normal).confirmed, "acquire defaults to confirmed");
+}
 }  // namespace
 
 int main() {
@@ -268,6 +288,7 @@ int main() {
         screen_tests();
         subrect_tests();
         staging_tests();
+        unconfirmed_ring_tests();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "failed: %s\n", e.what());
         return 1;
