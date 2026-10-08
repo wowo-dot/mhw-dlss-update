@@ -4,6 +4,9 @@
 #include <iosfwd>
 namespace mhw::continuous_dlaa {
 bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
+// install()'s qualification of the game (renderer discovery, code gates and,
+// for the scaled build, the native sizing admission) without side effects.
+bool ready(std::uintptr_t,std::string &);
 void stop() noexcept;
 bool healthy() noexcept;
 // Scene and window sizes from discovery (equal unless the aspect-ratio option

@@ -276,6 +276,11 @@ if(BUILD_TESTING)
     target_compile_options(perf_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     set_target_properties(perf_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME perf_tests COMMAND perf_tests)
+    add_executable(alpha_config_tests tests/alpha_config_tests.cpp)
+    target_compile_features(alpha_config_tests PRIVATE cxx_std_20)
+    target_compile_options(alpha_config_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    set_target_properties(alpha_config_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME alpha_config_tests COMMAND alpha_config_tests)
     add_executable(sampler_tests tests/sampler_tests.cpp src/perf/sampler.cpp)
     target_compile_features(sampler_tests PRIVATE cxx_std_20)
     target_compile_definitions(sampler_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
@@ -790,6 +795,21 @@ if(TARGET mhw_dlss_sdk_live)
         # The map file names this DLL's functions in stack-sampler profiles (tools/profile_report.py).
         target_link_options(mhw_fg_game_probe PRIVATE /guard:cf /OPT:NOICF /MAP)
         set_target_properties(mhw_fg_game_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+        # Alpha (v0.13): the FG game build configured by mhw_dlss.ini, arming itself
+        # once the game is ready, every lean path on and light logging.
+        get_target_property(fg_game_sources mhw_fg_game_probe SOURCES)
+        add_library(mhw_dlss_alpha SHARED ${fg_game_sources})
+        target_compile_features(mhw_dlss_alpha PRIVATE cxx_std_20)
+        target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
+            "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
+        target_compile_definitions(mhw_dlss_alpha PRIVATE MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL
+            MHW_CONTINUOUS_SCALED MHW_FG_GAME MHW_ALPHA WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+        target_link_libraries(mhw_dlss_alpha PRIVATE minhook bcrypt d3d12 dxgi dxguid
+            mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
+        target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
+        target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
+        set_target_properties(mhw_dlss_alpha PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # Opt-in metadata variant; default observer targets retain their behavior.
         add_library(mhw_fg_temporal_state STATIC src/temporal_present/observer.cpp)

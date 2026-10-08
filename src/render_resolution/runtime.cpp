@@ -202,13 +202,7 @@ void dispatch(pb::Frame *f) {
 void observe_viewports(ID3D12GraphicsCommandList *list,unsigned count,const D3D12_VIEWPORT *views,std::uintptr_t caller) noexcept {
     ++pending;__try{viewport_observation(list,count,views,caller);}__finally{--pending;}
 }
-bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
-    if(image){reason="already prepared";return false;}
-    shared_viewport=shared;
-    if(!pb::discover(base,discovered,reason))return false;
-    // A pillarboxed scene quantizes its scale against the window (config basis).
-    target=plan({discovered.width,discovered.height},discovered.scene_override?discovered.window_width:discovered.width,scale);
-    if(!target.valid||scale==1.F){reason="reduced extent plan";return false;}
+bool sizing_code(std::uintptr_t base) noexcept {
     struct Gate{unsigned rva,bytes;const char *sha;};
     constexpr Gate gates[]{
         {0x229ed30,493,"ca4ed5a0d6d18b2cda0bf84a5a7e3a4b17544bd523272affaf155f6ad150e08c"},
@@ -217,7 +211,31 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
         {0x255d700,95,"e8cda592ae9fb49456a1c26b933d9eb3bfc33c1206830d4e5647c8beb5030d23"},
         {0x2391f30,535,"6d466f7eca374bcc389e46d54e687fe6bde382e1d175c1c0476a81bc505ce1be"},
         {0x23c3893,125,"c584d50b799cc517b72d99b2a475a9950d15d3a8244d778cb5cf45acd8930896"}};
-    for(const auto &gate:gates)if(!pb::verify_code(base,gate.rva,gate.bytes,gate.sha)){reason="native sizing code gate";return false;}
+    for(const auto &gate:gates)if(!pb::verify_code(base,gate.rva,gate.bytes,gate.sha))return false;
+    return true;
+}
+bool ready(std::uintptr_t base,float scale,std::string &reason) {
+    if(image){reason="already prepared";return false;}
+    pb::Runtime probe;if(!pb::discover(base,probe,reason))return false;
+    const auto planned=plan({probe.width,probe.height},probe.scene_override?probe.window_width:probe.width,scale);
+    if(!planned.valid||scale==1.F){reason="reduced extent plan";return false;}
+    if(!sizing_code(base)){reason="native sizing code gate";return false;}
+    std::uintptr_t root{};if(!pb::read(base+0x51c4480,root)||!root||root>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
+    // snapshot() reads this module state. No hook exists before install(), so
+    // nothing else reads it while it is set for the check.
+    image=base;renderer=root;discovered=probe;target=planned;Snapshot s{};const bool admitted=snapshot(s);
+    image=0;renderer=0;discovered={};target={};
+    if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
+    return true;
+}
+bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
+    if(image){reason="already prepared";return false;}
+    shared_viewport=shared;
+    if(!pb::discover(base,discovered,reason))return false;
+    // A pillarboxed scene quantizes its scale against the window (config basis).
+    target=plan({discovered.width,discovered.height},discovered.scene_override?discovered.window_width:discovered.width,scale);
+    if(!target.valid||scale==1.F){reason="reduced extent plan";return false;}
+    if(!sizing_code(base)){reason="native sizing code gate";return false;}
     if(!pb::read(base+0x51c4480,renderer)||!renderer||renderer>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     image=base;expected_return=base+0x22982e7;setter=reinterpret_cast<Setter>(base+0x229bd70);
     Snapshot s{};const bool admitted=snapshot(s);{Lock lock;startup=s;}

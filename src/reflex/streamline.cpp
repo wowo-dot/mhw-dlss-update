@@ -110,7 +110,7 @@ void Streamline::initialize(const std::filesystem::path& runtime, const std::fil
     const auto plugin = root.wstring(); const wchar_t* paths[]{plugin.c_str()};
     const sl::Feature features[]{sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_G};
     sl::Preferences pref{};
-    if (frame_generation_) pref.logLevel = sl::LogLevel::eVerbose;
+    if (frame_generation_ && sdk_verbose_log) pref.logLevel = sl::LogLevel::eVerbose;
     pref.pathsToPlugins = paths; pref.numPathsToPlugins = 1;
     pref.pathToLogsAndData = logs.c_str(); pref.showConsole = false;
     pref.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eDisableCLStateTracking |

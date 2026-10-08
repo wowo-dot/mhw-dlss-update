@@ -22,6 +22,13 @@
 #include "../perf/toggles.hpp"
 #include "../perf/sampler.hpp"
 #include <algorithm>
+#ifdef MHW_ALPHA
+#include "../alpha/config.hpp"
+#include <iterator>
+// Alpha build: mhw_dlss.ini replaces the research sidecars, the session arms
+// itself once the game is ready and runs until exit, with light logging.
+namespace { mhw::alpha::Config alpha_config; }
+#endif
 #include <cstdio>
 #include <memory>
 // "<dll>.fg-mode": "off" runs without DLSS-G (A/B diagnostic); "2x".."8x" sets
@@ -577,9 +584,22 @@ DWORD WINAPI worker(void*) noexcept {
         require(dll_length && dll_length < std::size(dll_name), "module-path");
         require(host_length && host_length < std::size(host_name), "host-path");
         const std::filesystem::path dll(dll_name);
+#ifdef MHW_ALPHA
+        {
+            std::ifstream in(dll.parent_path() / L"mhw_dlss.ini", std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            alpha_config = mhw::alpha::parse_config(text, dll.parent_path());
+            output = alpha_config.log_dir; std::filesystem::create_directories(output);
+            runtime = alpha_config.runtime_dir;
+            fg_plugin = alpha_config.frame_generation; fg_multiplier = alpha_config.multiplier;
+            mhw::perf::toggles.store(mhw::perf::all_toggles);
+            mhw::reflex::sdk_verbose_log = false;
+        }
+#else
         auto data = dll; data += L".output-dir"; output = path_setting(data);
         auto provider = dll; provider += L".runtime-dir"; runtime = path_setting(provider);
-#ifdef MHW_FG_GAME
+#endif
+#if defined(MHW_FG_GAME) && !defined(MHW_ALPHA)
         {   // Diagnostic A/B switch: "<dll>.fg-mode" containing "off" runs this
             // binary without the DLSS-G plugin (Reflex-only, synchronous routing).
             auto mode_file = dll; mode_file += L".fg-mode";
@@ -619,13 +639,19 @@ DWORD WINAPI worker(void*) noexcept {
         log.open(output/name, std::ios::binary | std::ios::app); require(bool(log), "log"); log << std::boolalpha;
 #ifdef MHW_FG_GAME
         const bool crash_log_installed = mhw::frame_generation::crash_log::install(output/(name+".crash.jsonl"), fg_buffers_json);
+#ifndef MHW_ALPHA
         if (const auto monitor = CreateThread(nullptr, 0, [](void* p) -> DWORD {
                 std::unique_ptr<std::filesystem::path> path(static_cast<std::filesystem::path*>(p)); boot_monitor(*path); return 0; },
                 new std::filesystem::path(output/(name+".boot.jsonl")), 0, nullptr)) CloseHandle(monitor);
 #endif
+#endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.6\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+#ifdef MHW_ALPHA
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.0\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+#else
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.6\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+#endif << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -647,6 +673,13 @@ DWORD WINAPI worker(void*) noexcept {
             << ",\"upscaling\":false"
 #endif
             << "}\n" << std::flush;
+#ifdef MHW_ALPHA
+        log << "{\"event\":\"alpha_config\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
+            << ",\"reflex\":" << alpha_config.reflex << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
+            << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
+        for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
+        log << "]}\n" << std::flush;
+#endif
         // Refuse a late load; public API hooks are installed before first use.
         std::uintptr_t backend{}; require(pb::read(image + 0x51c7050, backend), "backend-slot");
         if (backend) { std::uintptr_t device{}; require(pb::read(backend + 0x18, device) && !device, "main-device-already-created"); }
@@ -686,7 +719,11 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
         // Native API callbacks run on the game thread while this worker admits
         // the later NGX initializer. One early pool, one worker, two SDK owners.
+#ifdef MHW_ALPHA
+        mhw::reflex::temporal::prepare(module,output,image,runtime);
+#else
         mhw::reflex::temporal::prepare(module,output,image);
+#endif
         { std::lock_guard lock(sdk_mutex);
           mhw::reflex::temporal::receipt(log,"prepared",device_pin.Get()); }
 #endif
@@ -707,9 +744,38 @@ DWORD WINAPI worker(void*) noexcept {
             const auto wait_start=GetTickCount64();
 #ifdef MHW_FG_GAME
             log << "{\"event\":\"perf_toggles\",\"request\":0,\"mask\":" << mhw::perf::toggles.load() << ",\"previous\":0,\"accepted\":true}\n" << std::flush;
-            mhw::perf::host_frames.take();auto window_start=wait_start;
+            mhw::perf::host_frames.take();
+#ifndef MHW_ALPHA
+            auto window_start=wait_start;
             mhw::perf::sampler::start();
 #endif
+#endif
+#ifdef MHW_ALPHA
+            // Arm once the swap chain has been unchanged for 3 s (startup creates
+            // it and resizes it several times) and the game qualifies; until
+            // then the game renders natively. The first and the latest reason
+            // the game was not ready yet are logged when it arms.
+            bool arm_now=false;
+            {
+                auto stats=presentation->snapshot();auto stable_since=GetTickCount64();unsigned attempts{};
+                std::string not_ready,first_reason;
+                while(stats.routing && !stats.faults) {
+                    Sleep(250);
+                    const auto now_stats=presentation->snapshot();
+                    if(now_stats.swapchains!=stats.swapchains||now_stats.resizes!=stats.resizes)stable_since=GetTickCount64();
+                    stats=now_stats;
+                    log_lifecycle(log);
+                    if(GetTickCount64()-stable_since<3000)continue;
+                    not_ready.clear();
+                    if(mhw::reflex::temporal::ready(not_ready)){arm_now=true;break;}
+                    if(!attempts++)first_reason=not_ready;
+                }
+                log << "{\"event\":\"alpha_arm\",\"ready\":" << arm_now << ",\"attempts\":" << attempts << ",\"waited_ms\":"
+                    << GetTickCount64()-wait_start << ",\"first_reason\":" << quoted(first_reason) << ",\"last_reason\":" << quoted(not_ready)
+                    << ",\"routing\":" << stats.routing << ",\"faults\":" << stats.faults << "}\n" << std::flush;
+            }
+            if(arm_now) {
+#else
             while(!std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file) && GetTickCount64()-wait_start<600000) {
                 const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;
 #ifdef MHW_FG_GAME
@@ -720,6 +786,7 @@ DWORD WINAPI worker(void*) noexcept {
                 Sleep(100);
             }
             if(std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file)) {
+#endif
 #ifdef MHW_REFLEX_OWNERSHIP_PROBE
                 presentation->ownership_running();
 #endif
@@ -777,10 +844,18 @@ DWORD WINAPI worker(void*) noexcept {
                 unsigned scene_requested{};
 #endif
 #ifdef MHW_FG_GAME
+#ifndef MHW_ALPHA
                 unsigned multiplier_requests{};
+#endif
                 stop_reason="duration";
 #endif
+#ifdef MHW_ALPHA
+                constexpr std::uint64_t heartbeat_ms=60000;
+                for(;;) {
+#else
+                constexpr std::uint64_t heartbeat_ms=5000;
                 while(!std::filesystem::exists(stop_file) && GetTickCount64()-started<capture_seconds*1000ULL) {
+#endif
                     const auto frames=live_frames->snapshot();const auto stats=presentation->snapshot();
 #ifdef MHW_FG_GAME
                     log_lifecycle(log);
@@ -812,6 +887,7 @@ DWORD WINAPI worker(void*) noexcept {
                     }
 #endif
 #ifdef MHW_FG_GAME
+#ifndef MHW_ALPHA
                     poll_perf(log,output,name,creation,perf_requests);
                     {   // Sequenced, generation-checked multiplier requests: "<creation> <total>".
                         const auto marker=output/(name+".mfg-"+std::to_string(multiplier_requests+1));
@@ -825,6 +901,7 @@ DWORD WINAPI worker(void*) noexcept {
                         }
                     }
 #endif
+#endif
 #ifdef MHW_REFLEX_TEMPORAL
                     if(!mhw::reflex::temporal::healthy()){
 #ifdef MHW_FG_GAME
@@ -834,7 +911,7 @@ DWORD WINAPI worker(void*) noexcept {
                     }
 #endif
                     const auto now=GetTickCount64();
-                    if(now-last>=5000) {
+                    if(now-last>=heartbeat_ms) {
 #ifdef MHW_REFLEX_TEMPORAL
                         mhw::reflex::temporal::sample();
 #ifdef MHW_FG_GAME

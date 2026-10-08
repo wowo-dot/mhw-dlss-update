@@ -7,6 +7,9 @@
 #include <filesystem>
 
 namespace mhw::reflex {
+// Research builds log Streamline verbosely with the DLSS-G plugin; the alpha
+// sets this to false before initialize() (default level: errors, warnings, info).
+inline bool sdk_verbose_log = true;
 enum class StreamlineFeatures { reflex_only, reflex_and_frame_generation };
 // The caller serializes initialization, options, state reads and shutdown.
 // Shutdown must precede destruction of the borrowed DX12 device/swap chain.

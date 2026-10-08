@@ -38,7 +38,7 @@ std::wstring wide(const std::string& value){
 }
 }
 const char* version() noexcept{return temporal_version;}
-void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t base){
+void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t base,const std::filesystem::path& ngx_runtime){
     require(!events.is_open(),"duplicate-temporal-startup");directory=output;image=base;
     wchar_t path[32768]{};const auto length=GetModuleFileNameW(module,path,static_cast<DWORD>(std::size(path)));
     require(length&&length<std::size(path),"temporal-module-path");
@@ -51,11 +51,14 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     events<<std::boolalpha<<"{\"event\":\"start\",\"schema\":1,\"version\":\""<<temporal_version<<"\",\"pid\":"<<pid<<",\"creation\":"<<creation<<",\"base\":"<<base
        <<",\"host_sha256\":"<<quote(pb::host_sha)<<",\"host_version\":\"0.0.0.0\",\"dll_sha256\":"<<quote(pb::file_sha256(path))
        <<",\"experiment\":"<<quote(experiment)<<",\"graphics_api\":\"D3D12\",\"frame_limit\":null,\"replacement_scope\":\"qualified-native-resolve\",\"exclusive_mode\":false,\"retention\":\"reset-and-fence-v1\",\"request_retirement\":\"validated-native-return-v1\",\"activation\":\"native-postqueue-preparation-v2\",\"reconstruction\":\"suspend-or-latch-unfiltered-v1\",\"state_trace\":\"consumer-local-state-v1\",\"native_state_trace\":\"scheduled-state-evidence-v1\",\"state_admission\":\"native-current-use-v1\",\"copy_telemetry\":\"single-fence-observation-v1\",\"depth_eligibility\":\"depth-eligibility-observation-v1\",\"depth_destination\":\"depth-destination-identity-v1\"}\n"<<std::flush;
-    const auto config=directory/L"sdk-runtime-dir.txt";
-    require(std::filesystem::file_size(config)<=4096,"bounded-NGX-configuration");
-    std::ifstream input(config,std::ios::binary);std::string folder;std::getline(input,folder);
-    if(!folder.empty()&&folder.back()=='\r')folder.pop_back();
-    runtime=std::filesystem::path(wide(folder));
+    if(!ngx_runtime.empty())runtime=ngx_runtime;
+    else{
+        const auto config=directory/L"sdk-runtime-dir.txt";
+        require(std::filesystem::file_size(config)<=4096,"bounded-NGX-configuration");
+        std::ifstream input(config,std::ios::binary);std::string folder;std::getline(input,folder);
+        if(!folder.empty()&&folder.back()=='\r')folder.pop_back();
+        runtime=std::filesystem::path(wide(folder));
+    }
     require(runtime.is_absolute()&&std::filesystem::is_directory(runtime),"NGX-runtime-directory");
     // The Reflex worker reserved the shared MinHook pool before enabling any
     // API hook. All temporal native targets fit in that pool's reach interval.
@@ -68,6 +71,10 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     require(mhw::ngx_startup::run(module,temporal_version,true),"coexistence-NGX-startup");
 #endif
     events<<"{\"event\":\"ready\",\"hooks_installed\":false}\n"<<std::flush;prepared=true;
+}
+bool ready(std::string& reason){
+    if(!prepared||attempted){reason="temporal-arm-state";return false;}
+    return cd::ready(image,reason);
 }
 void arm(ID3D12Device* device){
     require(prepared&&!attempted&&device,"temporal-arm-state");

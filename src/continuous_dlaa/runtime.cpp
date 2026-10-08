@@ -896,10 +896,8 @@ bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_
     if(!pass)return false;
     scene_width=runtime.width;scene_height=runtime.height;window_width=runtime.window_width;window_height=runtime.window_height;return true;
 }
-bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &reason){
-    try {
-        if(pass){reason="continuous-already-prepared";return false;}
-        if(!pb::discover(image,runtime,reason)||
+bool qualified(std::uintptr_t image,pb::Runtime &found,std::string &reason){
+        if(!pb::discover(image,found,reason)||
             !pb::verify_code(image,0x2392150,4221,"d2c6c0f6a5ed39c998bcf62afed19132e6dd0d7cfbb19e18b80c15531af2bf91")||
             !pb::verify_code(image,tb::dispatch_rva,321,"d073b70ae437d281596861720893c3b3cc9f82155fa0c83f2c3ae6918fd2f3a2")||
             !pb::verify_code(image,0x259cc20,1283,"6921c7cbfc7b277f4b076a68de8165bd54b3f6571ca574fdb16d5c35cbe154da")||
@@ -912,6 +910,22 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             !pb::verify_code(image,0x229cee0,7756,"11f7cc4d48598967f439659c87142839c4ad3fb900cfafb7fab3631655691af3")||
             !pb::verify_code(image,0x24e7a10,2620,"7ea61c6f4bbb21c5d8a25d5801a92476b825595c96937ac57d1e44870caea6fb")){
             if(reason.empty())reason="continuous-code-gate";return false;}
+        return true;
+}
+bool ready(std::uintptr_t image,std::string &reason){
+    try{
+        if(pass){reason="continuous-already-prepared";return false;}
+        pb::Runtime found;if(!qualified(image,found,reason))return false;
+#ifdef MHW_CONTINUOUS_SCALED
+        if(!render_resolution::ready(image,.5F,reason))return false;
+#endif
+        return true;
+    }catch(const std::exception &e){reason=e.what();return false;}
+}
+bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &reason){
+    try {
+        if(pass){reason="continuous-already-prepared";return false;}
+        if(!qualified(image,runtime,reason))return false;
         cfg={image,0,runtime.backend,runtime.device};if(!pb::read(image+0x51c4480,cfg.renderer)||!cfg.renderer)throw std::runtime_error("continuous renderer");
         auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
         constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R32_FLOAT,DXGI_FORMAT_R32_UINT};
