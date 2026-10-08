@@ -34,7 +34,7 @@ from reflex_frames import check, control, HOST_SHA
 # src/perf/toggles.hpp, in bit order.
 PERF_TOGGLES = ('cached_reads', 'cached_methods', 'list_locks', 'packet_filter', 'quiet_status', 'no_viewport_trace',
                 'no_output_sentinel')
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0')
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0', '0.12.1')
 
 
 def log_path(run, pid=None):
@@ -61,7 +61,8 @@ def rows_of(path, limit=64 * 1024 * 1024):
 def identity(rows):
     h = rows[0]
     check(h.get('event') == 'start' and h.get('version') in VERSIONS and h.get('experiment') == 'frame-generation-game' and
-          h.get('fg_plugin_loaded') is True and h.get('host_sha256') == HOST_SHA, 'FG game build identity')
+          (h.get('fg_plugin_loaded') is True or (h.get('fg_plugin_loaded') is False and VERSIONS.index(h['version']) >= VERSIONS.index('0.12.1'))) and
+          h.get('host_sha256') == HOST_SHA, 'FG game build identity')
     return h
 
 

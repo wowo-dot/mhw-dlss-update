@@ -624,7 +624,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.1\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -747,7 +747,10 @@ DWORD WINAPI worker(void*) noexcept {
                 // screen write's iRegion and viewport in the FG status).
                 unsigned scene_width{}, scene_height{}, window_width{}, window_height{};
                 const bool scene_known = mhw::reflex::temporal::scene_extent(scene_width, scene_height, window_width, window_height);
-                if (const auto chain = presentation->snapshot(); !scene_known || !scene_width || !scene_height ||
+                if (!fg_plugin) {
+                    // "<dll>.fg-mode" off: DLSS and Reflex only; the DLSS-G plugin is not loaded.
+                    log << "{\"event\":\"fg_unsupported\",\"reason\":\"plugin_off\"}\n" << std::flush;
+                } else if (const auto chain = presentation->snapshot(); !scene_known || !scene_width || !scene_height ||
                     scene_width > chain.width || scene_height > chain.height || window_width != chain.width || window_height != chain.height) {
                     log << "{\"event\":\"fg_unsupported\",\"reason\":\"scene_rect\",\"scene_known\":" << scene_known
                         << ",\"scene\":[" << scene_width << ',' << scene_height << "],\"window\":[" << window_width << ',' << window_height
