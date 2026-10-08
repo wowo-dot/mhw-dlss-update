@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from fg_game import lifecycle, log_path, request_multiplier, status, streamline_log
+from fg_game import PERF_TOGGLES, frames, lifecycle, log_path, perf_mask, request_multiplier, status, streamline_log
 
 
 def rows(version='0.8.0', armed=True, stopped=False):
@@ -17,6 +17,29 @@ def rows(version='0.8.0', armed=True, stopped=False):
 
 
 class FgGameTests(unittest.TestCase):
+    def test_perf_mask_names(self):
+        self.assertEqual(perf_mask('all'), 127)
+        self.assertEqual(perf_mask('none'), 0)
+        self.assertEqual(perf_mask('cached_reads, packet_filter'), 1 | 8)
+        self.assertEqual(len(PERF_TOGGLES), 7)
+        with self.assertRaises(Exception):
+            perf_mask('cached_reads,unknown')
+        with self.assertRaises(Exception):
+            perf_mask('')
+
+    def test_frames_pairs_latency_with_its_window(self):
+        rows = [{'event': 'frame_stats', 'phase': 'unarmed', 'perf': 0, 'frames': 300, 'fps': 60.04, 'p50_us': 16750,
+                 'p99_us': 20000, 'max_us': 31000, 'over_50ms': 0},
+                {'event': 'perf_toggles', 'mask': 127, 'previous': 0, 'accepted': True},
+                {'event': 'frame_stats', 'phase': 'armed', 'perf': 127, 'frames': 450, 'fps': 90.0, 'p50_us': 11000,
+                 'p99_us': 14000, 'max_us': 16000, 'over_50ms': 0},
+                {'event': 'latency', 'available': True, 'interval': [11000, 14000], 'gpu_active': [6000, 7000]}]
+        out = frames(rows)
+        self.assertEqual([o.get('phase') for o in out], ['unarmed', None, 'armed'])
+        self.assertEqual(out[1]['perf_switch'], 127)
+        self.assertEqual(out[2]['driver_ms']['gpu_active'], [6.0, 7.0])
+        self.assertNotIn('driver_ms', out[0])
+
     def test_streamline_log_counts_errors_by_message(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(streamline_log(d))

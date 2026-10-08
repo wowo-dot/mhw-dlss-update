@@ -6,6 +6,7 @@
 #include "dof_depth_oracle.hpp"
 #include <bcrypt.h>
 #include <sstream>
+#include "../tests/perf_env.hpp"
 #ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
 #include "../tests/dof_native_route_fixture.hpp"
 #endif
@@ -280,6 +281,7 @@ void reduction_oracle(const Result &r,unsigned scenario){
 #include "dof_live_depth_cases.inl"
 }
 int wmain(int argc,wchar_t **argv){try{
+ apply_perf_env();
  require(argc>=4&&argc<=9,"usage: warp|hardware private-shader-directory NEW-output-directory [captured-CB-pack [native-formats [captured-depth.r32f [sync-reduction|native-reduction [no-gpu-validation]]]]]");require(std::wstring_view(argv[1])==L"warp"||std::wstring_view(argv[1])==L"hardware","adapter option");
  const std::filesystem::path out=argv[3];require(!std::filesystem::exists(out),"preserve output");std::filesystem::create_directories(out);
  if(argc>=5){const bool native=argc>=6;if(native)require(std::wstring_view(argv[5])==L"native-formats","format option");Captured capture(argv[4]);

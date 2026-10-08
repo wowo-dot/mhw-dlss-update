@@ -16,6 +16,7 @@ void check_indexed_ownership(fx::Fixture &f){
  auto pin=buffer(f.device.Get(),256,D3D12_HEAP_TYPE_UPLOAD);for(auto &resource:p.resources)resource=pin;
  for(unsigned i=0;i<2;++i){p.late_packets[i]=reinterpret_cast<std::uintptr_t>(packets[i].data());p.late_keys[i]=0x7ffffff4+i;
   p.late[i].arguments={6,3,static_cast<unsigned>(-4)};put(packets[i],0x40,p.late[i].arguments);}
+ route::watch(1,p);
  // Resolve, copy, motion, grade, two silhouettes, final screen.
  const std::array<std::uintptr_t,7> nodes{11,12,13,14,p.late_packets[0],p.late_packets[1],15};
  require(route::handoff_indexed(p,0)==4&&route::handoff_indexed(p,1)==5&&route::handoff_draw(p,2)==6,"late indexed order before final");

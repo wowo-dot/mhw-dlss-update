@@ -22,10 +22,12 @@
 #endif
 #include "../projection_binding/memory.hpp"
 #include "../temporal_present/observer.hpp"
+#include "../perf/toggles.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -147,6 +149,53 @@ unsigned render_w{},render_h{};
 std::array<unsigned,4> vertex_miss{},final_miss{},copy_miss{};std::array<int,5> rect_miss{};
 bool vertex_missed{},rect_missed{},final_missed{},copy_missed{};
 std::array<Plan,32> plans;
+// perf::packet_filter (v0.12): the packets and resources each ring slot's plan
+// can match, written under the route lock when the plan is built and cleared
+// when the slot is published again. A hook takes the route lock only for a
+// listed packet, or a barrier on a listed resource; any other call cannot
+// match a plan and is skipped without it. A stale entry only costs a locked
+// check. The slot being rewritten holds a plan whose packets have not run yet.
+constexpr unsigned watch_packets=64;
+struct Watch {
+ std::array<std::atomic<std::uintptr_t>,watch_packets> packets{};std::array<std::atomic<std::uintptr_t>,resource_capacity> resources{};
+ std::atomic<unsigned> packet_count{},resource_count{};std::atomic<bool> all{};
+};
+std::array<Watch,32> watches;
+std::atomic<std::uint32_t> watch_mask{};
+static_assert(watches.size()==plans.size()&&plans.size()<=32,"one watch bit per plan slot");
+bool filtering() noexcept {return perf::on(perf::packet_filter);}
+void unwatch(unsigned slot) noexcept {
+ watch_mask.fetch_and(~(1U<<slot),std::memory_order_acq_rel);auto &w=watches[slot];
+ w.packet_count.store(0,std::memory_order_release);w.resource_count.store(0,std::memory_order_release);w.all.store(false,std::memory_order_release);
+}
+template<class Fn> bool watched(Fn &&listed) noexcept {
+ for(auto mask=watch_mask.load(std::memory_order_acquire);mask;mask&=mask-1){
+  const auto &w=watches[static_cast<unsigned>(std::countr_zero(mask))];if(w.all.load(std::memory_order_acquire)||listed(w))return true;}
+ return false;
+}
+bool watched_packet(std::uintptr_t packet) noexcept {
+ return watched([&](const Watch &w){const auto n=w.packet_count.load(std::memory_order_acquire);
+  for(unsigned i=0;i<n;++i)if(w.packets[i].load(std::memory_order_relaxed)==packet)return true;return false;});
+}
+bool watched_resource(std::uintptr_t resource) noexcept {
+ return watched([&](const Watch &w){const auto n=w.resource_count.load(std::memory_order_acquire);
+  for(unsigned i=0;i<n;++i)if(w.resources[i].load(std::memory_order_relaxed)==resource)return true;return false;});
+}
+// Under the route lock: when a plan is built, and again when a dependency
+// refresh pins another resource for it. Rewritten entries keep their values.
+void watch(unsigned slot,const Plan &p) noexcept {
+ auto &w=watches[slot];unsigned n{},r{};bool overflow=false;
+ const auto add=[&](std::uintptr_t packet){if(!packet)return;if(n==watch_packets){overflow=true;return;}w.packets[n++].store(packet,std::memory_order_relaxed);};
+ for(const auto &d:p.draws)add(d.draw.packet);
+ for(unsigned i=0;i<p.late_count&&i<p.late_packets.size();++i)add(p.late_packets[i]);
+ if(p.dof)for(const auto &d:p.dof->passes)add(d.packet);
+ add(p.copy);add(p.temporal.object);
+ for(unsigned i=0;i<resource_count(p)&&i<p.resources.size();++i)
+  if(auto *x=p.resources[i].Get())w.resources[r++].store(reinterpret_cast<std::uintptr_t>(x),std::memory_order_relaxed);
+ w.all.store(overflow,std::memory_order_release);
+ w.packet_count.store(n,std::memory_order_release);w.resource_count.store(r,std::memory_order_release);
+ watch_mask.fetch_or(1U<<slot,std::memory_order_release);
+}
 // tBaseMap is a mutable shader binding. Capture it while the final quad is
 // enqueued, before later filter preparation replaces that context slot.
 struct FinalQuad {
@@ -816,7 +865,7 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
 #include "silhouette_route.inl"
 
 bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *destination,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *source,const D3D12_BOX *box,std::uintptr_t caller){
- if(injecting)return false;
+ if(injecting||(filtering()&&copy_slot==UINT_MAX))return false;
  Lock lock;if(copy_slot==UINT_MAX||fault.load())return false;
  auto &p=plans[copy_slot];if(!p.prepared)return false;
  D3D12_TEXTURE_COPY_LOCATION d{},s{};D3D12_BOX b{};
@@ -867,7 +916,8 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
     p.stamp.layer!=taa||!same_stamp(p.stamp)||p.motion_thread!=GetCurrentThreadId())return;
  p.queue_finished=true;
  try{
-  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;if(silhouette_candidates(p))(void)prepare_frame(p);}
+  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;if(silhouette_candidates(p))(void)prepare_frame(p);
+   watch(static_cast<unsigned>(frame%plans.size()),p);}
   else{++unqualified;p.resources={};}
  }catch(const std::exception &e){failure=e.what();fail(1);}
 }
@@ -875,7 +925,8 @@ bool haze_before_safe(const pb::Frame &f) noexcept{try{return haze_before(f);}ca
 void haze_after_safe(bool entered,bool returned) noexcept{try{haze_after(entered,returned);}catch(...){Lock lock;haze_reject(11);}}
 void final_dispatch(pb::Frame *f){++pending;const auto slot=final_before(*f);const bool capture=haze_before_safe(*f);bool returned=false;
  __try{mhw_binding_forward(originals[3],f);returned=true;}__finally{final_after(slot,returned);haze_after_safe(capture,returned);--pending;}}
-void draw_dispatch(pb::Frame *f){++pending;unsigned stage=UINT_MAX;const auto slot=draw_before(*f,stage);bool returned=false;
+void draw_dispatch(pb::Frame *f){++pending;unsigned stage=UINT_MAX;
+ const auto slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:draw_before(*f,stage);bool returned=false;
 #ifdef MHW_FG_SCENE_PROBE
  const auto previous_scene=scene_scope;scene_scope=scene_enter(*f);
 #endif
@@ -886,7 +937,7 @@ void draw_dispatch(pb::Frame *f){++pending;unsigned stage=UINT_MAX;const auto sl
 #endif
   api_slot=old_slot;api_stage=old_stage;--pending;}}
 void indexed_dispatch(pb::Frame *f){
- ++pending;const auto previous=indexed_scope;indexed_scope=indexed_before(*f);bool returned=false;
+ ++pending;const auto previous=indexed_scope;indexed_scope=filtering()&&!watched_packet(f->gpr[3])?IndexedScope{}:indexed_before(*f);bool returned=false;
 #ifdef MHW_FG_SCENE_PROBE
  const auto previous_scene=scene_scope;scene_scope=scene_enter(*f);
 #endif
@@ -925,7 +976,7 @@ unsigned copy_before(const pb::Frame &f){
 void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;if(!returned||copy_calls!=1||!plans[copy_slot].copied)fail(5);}}
 void copy_dispatch(pb::Frame *f){
  ++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;
- copy_slot=copy_before(*f);bool returned=false;
+ copy_slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:copy_before(*f);bool returned=false;
  __try{mhw_binding_forward(originals[4],f);returned=true;}
  __finally{
   copy_after(returned);
@@ -997,6 +1048,7 @@ void begin() noexcept{accepting=true;}
 void publish(const tb::Snapshot &s,const tb::Packet &packet) noexcept{
  Lock lock;if(!accepting.load())return;auto &p=plans[s.frame%plans.size()];
  if(p.prepared){fail(7);return;}
+ unwatch(static_cast<unsigned>(s.frame%plans.size()));
  // Expanded overlay recipes must not create a half-megabyte stack temporary
  // on the game's render worker when a retired ring slot is reused.
  std::destroy_at(&p);std::construct_at(&p);p.stamp=s;p.temporal=packet;p.published=true;++published;
@@ -1043,7 +1095,7 @@ bool ready(ID3D12GraphicsCommandList *list,std::uint64_t gen,const tb::Snapshot 
  return true;
 }
 bool full_contract(const tb::Snapshot &s) noexcept{Lock lock;const auto &p=plans[s.frame%plans.size()];return p.prepared&&p.stamp==s;}
-bool owns_packet(std::uintptr_t packet) noexcept{Lock lock;if(fault.load()||abandoned)return false;for(const auto &p:plans)if(p.prepared&&p.temporal.object==packet&&!p.resolved)return true;return false;}
+bool owns_packet(std::uintptr_t packet) noexcept{if(filtering()&&!watched_packet(packet))return false;Lock lock;if(fault.load()||abandoned)return false;for(const auto &p:plans)if(p.prepared&&p.temporal.object==packet&&!p.resolved)return true;return false;}
 void resolved(bool ok,bool reconstructed) noexcept{
  Lock lock;if(!active.list||!ok){fail(9);return;}auto &p=plans[active.slot];
  if(!choose(p,reconstructed?FrameHandoff::Choice::reconstructed:FrameHandoff::Choice::spatial)){fail(9);return;}
@@ -1072,6 +1124,8 @@ void observe_submission(std::uint64_t queue,std::uint64_t tick,std::span<const s
 #endif
 }
 unsigned compute_before(std::uintptr_t executor,std::uintptr_t backend_context,std::uintptr_t packet) noexcept{
+ // Only the DOF passes and the bounded GPU samples act here.
+ if(filtering()&&!compute_gpu_pending.load()&&!watched_packet(packet))return UINT_MAX;
  Lock lock;if(!accepting.load()&&!dof_active())return UINT_MAX;
  dof_before(executor,backend_context,packet);
  const unsigned dof_token=dof_scope.slot!=UINT_MAX?12:UINT_MAX;
@@ -1144,7 +1198,17 @@ void compute_after(unsigned token,bool returned) noexcept{
  compute_gpu_scope=UINT_MAX;
 }
 void barriers(ID3D12GraphicsCommandList *list,unsigned n,const D3D12_RESOURCE_BARRIER *data) noexcept{
- if(injecting)return;Lock lock;if(fault.load())return;
+ if(injecting)return;
+#ifndef MHW_FG_SCENE_PROBE
+ // Only aliasing barriers and transitions of listed plan resources reach the
+ // journal; an unreadable or oversized batch takes the locked path and fails there.
+ if(filtering()&&!compute_gpu_pending.load()&&n<=4096){bool listed=false;
+  for(unsigned j=0;j<n&&!listed;++j){D3D12_RESOURCE_BARRIER b{};
+   listed=!pb::copy_memory(reinterpret_cast<std::uintptr_t>(data+j),&b,sizeof(b))||b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING||
+    (b.Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&watched_resource(reinterpret_cast<std::uintptr_t>(b.Transition.pResource)));}
+  if(!listed)return;}
+#endif
+ Lock lock;if(fault.load())return;
  const auto slot=copy_slot!=UINT_MAX?copy_slot:api_slot!=UINT_MAX?api_slot:resolve_slot;
  temporal_present::Bindings bindings;if(!obs::inspect(list,bindings)||!bindings.known||!bindings.valid)return;
  if(n>4096){fail(10);return;}

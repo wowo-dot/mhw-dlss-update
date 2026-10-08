@@ -1,6 +1,7 @@
 #include "runtime.hpp"
 #include "control.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../perf/toggles.hpp"
 #include <windows.h>
 #include <d3d12.h>
 #include <MinHook.h>
@@ -165,7 +166,7 @@ void update(pb::Frame *f) {
     {Lock lock;++overrides;}
 }
 void viewport_observation(ID3D12GraphicsCommandList *list,UINT count,const D3D12_VIEWPORT *views,std::uintptr_t caller) {
-    if(!requested.load()||count!=1||!views)return;
+    if(perf::on(perf::no_viewport_trace)||!requested.load()||count!=1||!views)return;
     std::uintptr_t method{};
     if(!pb::system_method(reinterpret_cast<std::uintptr_t>(list),21,method)||method!=targets[1])return;
     ViewportSample sample{GetTickCount64(),caller,{}};

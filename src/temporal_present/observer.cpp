@@ -1,4 +1,5 @@
 #include "observer.hpp"
+#include "../perf/toggles.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -10,7 +11,9 @@ namespace mhw::temporal_present::observer {
 namespace {
 constexpr unsigned raster_hooks=hook_count+5,predicate_hooks=raster_hooks+1,max_hooks=predicate_hooks+1;
 constexpr std::array<unsigned,max_hooks> methods{11,25,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,20,21,22,44,46,55,43};
-struct Entry {ID3D12GraphicsCommandList *list{};Bindings state;RasterBindings raster;Predicate predicate;};
+// Entries are appended under the process-wide lock and never reassigned, so
+// lists[i] identifies entries[i] for the life of the process.
+struct Entry {SRWLOCK lock=SRWLOCK_INIT;Bindings state;RasterBindings raster;Predicate predicate;};
 #ifdef MHW_FG_SCENE_PROBE
 struct OutputObservation {
     bool seen{},rtv_argument{},rtv_read{},depth_argument{},depth_read{};
@@ -21,11 +24,12 @@ std::array<OutputObservation,list_limit> output_observations;
 #endif
 struct Sample {bool captured{};std::uint64_t frame{};std::uintptr_t list{},expected_root{},expected_pipeline{};Bindings state;};
 std::array<Entry,list_limit> entries;
+std::array<std::atomic<ID3D12GraphicsCommandList *>,list_limit> lists{};
 std::array<Sample,sample_limit> samples;
 std::array<std::uintptr_t,max_hooks> targets;
 std::array<void *,max_hooks> originals;
 std::array<bool,max_hooks> created,enabled;
-unsigned entry_count{},installed_hooks=hook_count;
+std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
 std::atomic<unsigned> pending{},fault{};
 std::atomic<bool> accepting{};
 bool installed{},drained{};
@@ -40,7 +44,31 @@ bool enter() noexcept {
     if(!accepting.load(std::memory_order_acquire)){pending.fetch_sub(1,std::memory_order_release);return false;}
     return true;
 }
-Entry *find(ID3D12GraphicsCommandList *p) noexcept {for(unsigned i=0;i<entry_count;++i)if(entries[i].list==p)return &entries[i];return nullptr;}
+// A recording thread uses one list for many calls; entries never change list.
+thread_local ID3D12GraphicsCommandList *last_list{};
+thread_local unsigned last_entry=UINT_MAX;
+Entry *find(ID3D12GraphicsCommandList *p) noexcept {
+    if(p&&p==last_list&&last_entry<list_limit)return &entries[last_entry];
+    const auto n=entry_count.load(std::memory_order_acquire);
+    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==p){last_list=p;last_entry=i;return &entries[i];}
+    return nullptr;
+}
+// Entry state is guarded by the entry's own lock. Without perf::list_locks the
+// process-wide lock is taken first, as before. Both paths always take the
+// entry lock, so they exclude each other while the switch changes. Order:
+// process-wide, then entry; never the reverse.
+class Locked {
+public:
+    explicit Locked(ID3D12GraphicsCommandList *list) noexcept:global_(!perf::on(perf::list_locks)){
+        if(global_)AcquireSRWLockExclusive(&mutex);
+        if((entry_=find(list))!=nullptr)AcquireSRWLockExclusive(&entry_->lock);
+    }
+    ~Locked(){if(entry_)ReleaseSRWLockExclusive(&entry_->lock);if(global_)ReleaseSRWLockExclusive(&mutex);}
+    Locked(const Locked &)=delete;Locked &operator=(const Locked &)=delete;
+    Entry *get() const noexcept {return entry_;}
+private:
+    bool global_;Entry *entry_{};
+};
 bool copy(const void *source,void *dest,std::size_t bytes) noexcept {
     if(!source&&bytes)return false;
     __try{if(bytes)std::memcpy(dest,source,bytes);return true;}__except(EXCEPTION_EXECUTE_HANDLER){return false;}
@@ -49,7 +77,7 @@ bool copy(const void *source,void *dest,std::size_t bytes) noexcept {
 void after(unsigned which,ID3D12GraphicsCommandList *list,bool admitted,bool returned,
            std::uintptr_t a=0,std::uintptr_t b=0,std::uintptr_t c=0,[[maybe_unused]] std::uintptr_t d=0) noexcept {
     if(!admitted)return;
-    {Lock lock;if(auto *entry=find(list)){
+    {Locked lock(list);if(auto *entry=lock.get()){
         auto &s=entry->state;
         if(!returned){s.invalidate();entry->raster={};entry->predicate={};}
         else if(which==0){s.reset(s.generation,a);entry->raster={};entry->raster.generation=s.generation;entry->predicate={0,0,D3D12_PREDICATION_OP_EQUAL_ZERO,true};} // ClearState preserves Reset generation.
@@ -193,34 +221,45 @@ bool install(ID3D12Device *device,Resolver resolve,std::string &reason,bool rast
 }
 void begin() noexcept {accepting.store(true,std::memory_order_release);}
 void reset(ID3D12GraphicsCommandList *list,std::uint64_t generation,ID3D12PipelineState *pipeline) noexcept {
-    if(!accepting.load(std::memory_order_acquire))return;Lock lock;
-    auto *e=find(list);if(!e){if(entry_count==list_limit){fail(1);return;}e=&entries[entry_count++];e->list=list;}
-    e->state.reset(generation,reinterpret_cast<std::uintptr_t>(pipeline));e->raster={};e->raster.generation=generation;e->predicate={0,0,D3D12_PREDICATION_OP_EQUAL_ZERO,true};
+    if(!accepting.load(std::memory_order_acquire))return;
+    const auto apply=[&](Entry *e){
+        e->state.reset(generation,reinterpret_cast<std::uintptr_t>(pipeline));e->raster={};e->raster.generation=generation;e->predicate={0,0,D3D12_PREDICATION_OP_EQUAL_ZERO,true};
 #ifdef MHW_FG_SCENE_PROBE
-    output_observations[static_cast<std::size_t>(e-entries.data())]={};
+        output_observations[static_cast<std::size_t>(e-entries.data())]={};
 #endif
+    };
+    {Locked lock(list);if(auto *e=lock.get()){apply(e);return;}}
+    // First Reset of this list: append under the process-wide lock.
+    Lock lock;auto *e=find(list);
+    if(!e){const auto n=entry_count.load(std::memory_order_relaxed);if(n==list_limit){fail(1);return;}
+        e=&entries[n];lists[n].store(list,std::memory_order_relaxed);entry_count.store(n+1,std::memory_order_release);}
+    AcquireSRWLockExclusive(&e->lock);apply(e);ReleaseSRWLockExclusive(&e->lock);
 }
 bool capture(unsigned i,std::uint64_t frame,ID3D12GraphicsCommandList *list,std::uintptr_t root,std::uintptr_t pipeline) noexcept {
     Lock lock;if(i>=sample_limit||samples[i].captured||!healthy()||!accepting.load())return false;
-    const auto *e=find(list);if(!e||!e->state.ready()||e->state.compute.signature!=root||e->state.pipeline!=pipeline||!frame){fail(2);return false;}
-    samples[i]={true,frame,reinterpret_cast<std::uintptr_t>(list),root,pipeline,e->state};return true;
+    auto *e=find(list);if(!e){fail(2);return false;}
+    AcquireSRWLockExclusive(&e->lock);
+    const bool ok=e->state.ready()&&e->state.compute.signature==root&&e->state.pipeline==pipeline&&frame;
+    if(ok)samples[i]={true,frame,reinterpret_cast<std::uintptr_t>(list),root,pipeline,e->state};
+    ReleaseSRWLockExclusive(&e->lock);
+    if(!ok)fail(2);return ok;
 }
 bool sample(unsigned i,Bindings &s) noexcept {Lock lock;if(i>=sample_limit||!samples[i].captured)return false;s=samples[i].state;return true;}
 bool matches_current(ID3D12GraphicsCommandList *list,const Bindings &state) noexcept {
-    Lock lock;const auto *e=find(list);return healthy()&&e&&e->state==state;
+    Locked lock(list);const auto *e=lock.get();return healthy()&&e&&e->state==state;
 }
 bool current(ID3D12GraphicsCommandList *list,Bindings &state) noexcept {
-    Lock lock;const auto *e=find(list);if(!healthy()||!e||!e->state.ready())return false;state=e->state;return true;
+    Locked lock(list);const auto *e=lock.get();if(!healthy()||!e||!e->state.ready())return false;state=e->state;return true;
 }
 bool inspect(ID3D12GraphicsCommandList *list,Bindings &state) noexcept {
-    Lock lock;const auto *e=find(list);if(!e)return false;state=e->state;return true;
+    Locked lock(list);const auto *e=lock.get();if(!e)return false;state=e->state;return true;
 }
 bool raster_current(ID3D12GraphicsCommandList *list,RasterBindings &state) noexcept {
-    Lock lock;const auto *e=find(list);if(installed_hooks<raster_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->raster.ready())return false;state=e->raster;return true;
+    Locked lock(list);const auto *e=lock.get();if(installed_hooks<raster_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->raster.ready())return false;state=e->raster;return true;
 }
 #ifdef MHW_FG_SCENE_PROBE
 bool raster_inspect(ID3D12GraphicsCommandList *list,std::array<std::uint64_t,19> &values) noexcept {
-    Lock lock;values={};const auto *e=find(list);if(!e)return false;
+    Locked lock(list);values={};const auto *e=lock.get();if(!e)return false;
     const auto &r=e->raster;const auto &o=output_observations[static_cast<std::size_t>(e-entries.data())];
     const unsigned mask=(r.vertex_known?1U:0U)|(r.viewport_known?2U:0U)|(r.scissor_known?4U:0U)|
         (r.topology_known?8U:0U)|(r.index_known?16U:0U)|(r.output_known?32U:0U);
@@ -230,7 +269,7 @@ bool raster_inspect(ID3D12GraphicsCommandList *list,std::array<std::uint64_t,19>
 }
 #endif
 bool predicate_current(ID3D12GraphicsCommandList *list,Predicate &state) noexcept {
-    Lock lock;const auto *e=find(list);if(installed_hooks<predicate_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->predicate.known)return false;state=e->predicate;return true;
+    Locked lock(list);const auto *e=lock.get();if(installed_hooks<predicate_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->predicate.known)return false;state=e->predicate;return true;
 }
 bool hooks_disabled() noexcept {Lock lock;for(const auto v:enabled)if(v)return false;return true;}
 void stop() noexcept {accepting.store(false,std::memory_order_release);}
@@ -246,7 +285,7 @@ bool finish() noexcept {
     return ok&&healthy()&&settled();
 }
 void write(std::ostream &o){Lock lock;bool disabled=true;for(const auto e:enabled)disabled=disabled&&!e;
-    o<<"{\"schema\":1,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<disabled<<",\"drained\":"<<drained<<",\"list_count\":"<<entry_count<<",\"hook_count\":"<<installed_hooks
+    o<<"{\"schema\":1,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<disabled<<",\"drained\":"<<drained<<",\"list_count\":"<<entry_count.load()<<",\"hook_count\":"<<installed_hooks
      <<",\"hook_control\":\"owned-targets-only\",\"viewport_listener\":"<<(viewport_listener!=nullptr)<<",\"viewport_notifications\":"<<viewport_notifications.load()<<",\"records\":[";bool comma=false;
     for(unsigned i=0;i<sample_limit;++i){const auto &v=samples[i];if(!v.captured)continue;if(comma)o<<',';comma=true;
         o<<"{\"receipt\":"<<i<<",\"frame\":"<<v.frame<<",\"command\":"<<v.list<<",\"generation\":"<<v.state.generation<<",\"ready\":"<<v.state.ready()<<",\"pipeline\":"<<v.state.pipeline

@@ -11,6 +11,7 @@ void fill_plan(Fixture &f,unsigned slot,std::span<const std::uintptr_t> packets)
  auto resource=buffer(f.device.Get(),256,D3D12_HEAP_TYPE_UPLOAD);
  for(auto &value:p.resources)value=resource;
  require(route::prepare_selector(p)&&p.handoff.prepare({slot,slot,2,3},packets)==sf::FrameHandoff::Result::ok,"return fixture plan");
+ route::watch(slot,p);
 }
 void run(Fixture &f,const std::string &mode){
  stream_plan_fixture::Arena code(4096);

@@ -1,4 +1,5 @@
 #include "presentation.hpp"
+#include "../perf/frame_stats.hpp"
 #include "owned_interface.hpp"
 #include "resize_contract.hpp"
 #include "presentation_route.hpp"
@@ -366,6 +367,12 @@ HRESULT STDMETHODCALLTYPE core_hook(IDXGIFactory2* self, IUnknown* queue, IUnkno
     return lifecycle_call(3, self, creation_args(desc, 1),
         [&] { return core_routed(self, queue, window, desc, restrict, out, caller); }, [&] { return created_chain(out); });
 }
+// Host frame interval for the overhead measurements (one QPC read per Present).
+void host_frame() noexcept {
+    LARGE_INTEGER now{}, frequency{};
+    QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
+    mhw::perf::host_frames.present(now.QuadPart, frequency.QuadPart);
+}
 template<class Routed, class Forward>
 auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& forward) {
     auto& s = *dispatch.load(); Call call(s);
@@ -390,6 +397,7 @@ auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& 
 HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT flags) {
     return route(self, {4,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
+        if (!(flags & DXGI_PRESENT_TEST)) host_frame();
 #ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
 #endif
@@ -456,6 +464,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
 HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
     return route(self,{9,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
+        if (!(flags & DXGI_PRESENT_TEST)) host_frame();
 #ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
 #endif

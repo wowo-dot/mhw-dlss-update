@@ -1,6 +1,7 @@
 #include "temporal_coexistence.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../ngx_startup/startup.hpp"
+#include "../perf/toggles.hpp"
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -80,7 +81,10 @@ bool healthy() noexcept{return installed&&!finished&&cd::healthy()&&bool(events)
 bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
     return installed&&cd::scene_extent(scene_width,scene_height,window_width,window_height);}
 void sample(){
-    require(healthy(),"temporal-runtime-fault");++samples;cd::save_compute_depth(directory/name);
+    require(healthy(),"temporal-runtime-fault");++samples;
+    // perf::quiet_status: the dumps hold the render locks while they format and write.
+    if(mhw::perf::on(mhw::perf::quiet_status))return;
+    cd::save_compute_depth(directory/name);
     {std::ofstream status(directory/(name+".status.json"),std::ios::binary|std::ios::trunc);cd::write(status);require(bool(status),"temporal-status");}
     if(samples<=12||(samples&(samples-1))==0)cd::write(events);
     require(bool(events),"temporal-heartbeat-log");

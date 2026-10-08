@@ -11,6 +11,10 @@
                            ResizeTarget, creation) and presentation state (v0.10+)
   summary --run <folder>   write summary.json (summary-<pid>.json when the folder
                            holds several launches) from the run's logs
+  perf    --run <folder> --set a,b   live overhead switches (v0.12+): names from
+                           PERF_TOGGLES, 'all' or 'none'; works before arming too
+  frames  --run <folder>   host frame-interval windows (every 5 s, labelled with the
+                           switch mask) and the driver's per-frame report while armed
 
 --pid selects a launch when MHW was restarted inside one run folder (resolution
 and screen-mode changes apply only on restart); the default is the newest.
@@ -27,7 +31,10 @@ from pathlib import Path
 
 from reflex_frames import check, control, HOST_SHA
 
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7')
+# src/perf/toggles.hpp, in bit order.
+PERF_TOGGLES = ('cached_reads', 'cached_methods', 'list_locks', 'packet_filter', 'quiet_status', 'no_viewport_trace',
+                'no_output_sentinel')
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0')
 
 
 def log_path(run, pid=None):
@@ -114,6 +121,47 @@ def request_multiplier(rows, path, total):
     return dict(action='multiplier', request=n, multiplier=total, request_sent=True, acknowledged=False)
 
 
+def perf_mask(names):
+    names = [n.strip() for n in names.split(',') if n.strip()]
+    if names == ['all']:
+        return (1 << len(PERF_TOGGLES)) - 1
+    if names == ['none']:
+        return 0
+    check(names and all(n in PERF_TOGGLES for n in names), 'perf switch names')
+    return sum(1 << PERF_TOGGLES.index(n) for n in names)
+
+
+def request_perf(rows, path, mask):
+    check(any(r.get('event') == 'perf_toggles' for r in rows), 'build supports perf switches')
+    check(not any(r.get('event') in ('failed', 'worker_failed', 'finished') for r in rows), 'session live')
+    n = 1
+    while Path(f'{path}.perf-{n}').exists():
+        n += 1
+    staged = Path(f'{path}.perf-{n}.tmp')
+    with staged.open('x', encoding='ascii') as f:
+        f.write(f"{rows[0]['creation']} {mask}\n")
+    staged.rename(f'{path}.perf-{n}')
+    return dict(action='perf', request=n, mask=mask, names=[n for i, n in enumerate(PERF_TOGGLES) if mask >> i & 1],
+                request_sent=True, acknowledged=False)
+
+
+def frames(rows):
+    """Frame windows in log order; each latency report follows its armed window."""
+    out = []
+    for r in rows:
+        if r.get('event') == 'frame_stats':
+            out.append(dict(phase=r['phase'], perf=r['perf'], frames=r['frames'], fps=round(r['fps'], 1),
+                            p50_ms=r['p50_us'] / 1000, p99_ms=r['p99_us'] / 1000, max_ms=r['max_us'] / 1000,
+                            over_50ms=r['over_50ms']))
+        elif r.get('event') == 'latency' and r.get('available') and out:
+            out[-1]['driver_ms'] = {k: [v / 1000 for v in r[k]] for k in
+                                    ('interval', 'simulation', 'submit', 'present', 'driver', 'queue', 'gpu', 'gpu_active', 'gpu_frame')
+                                    if k in r}
+        elif r.get('event') == 'perf_toggles':
+            out.append(dict(perf_switch=r['mask'], accepted=r['accepted']))
+    return out
+
+
 def summary(rows, raw):
     h = identity(rows)
     one = lambda e: latest(rows, e)
@@ -135,15 +183,16 @@ def summary(rows, raw):
         frames_presented_progression=[(s.get('state') or {}).get('frames_presented') for s in statuses],
         final=final, stopped=bool(stopped), off_after_stop=(stopped or {}).get('off'),
         stop_reason=(stopped or {}).get('reason'), lifecycle=lifecycle(rows),
-        retained=bool(one('fg_runtime_retained')),
+        retained=bool(one('fg_runtime_retained')), frames=frames(rows),
         visual_quality_verified=False, latency_measured=False, performance_measured=False)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'lifecycle', 'summary'))
+    p.add_argument('action', choices=('arm', 'multiplier', 'stop', 'status', 'lifecycle', 'summary', 'perf', 'frames'))
     p.add_argument('--run', type=Path, required=True)
     p.add_argument('--x', type=int, help='total frame multiplier for the multiplier action')
+    p.add_argument('--set', help="perf switches: comma-separated names, 'all' or 'none'")
     p.add_argument('--pid', type=int, help='launch to use when the run folder holds several (default: newest)')
     a = p.parse_args()
     path = log_path(a.run, a.pid)
@@ -158,6 +207,10 @@ def main():
         result['sl_log'] = streamline_log(a.run)
     elif a.action == 'lifecycle':
         result = lifecycle(rows)
+    elif a.action == 'perf':
+        result = request_perf(rows, path, perf_mask(a.set or ''))
+    elif a.action == 'frames':
+        result = frames(rows)
     else:
         result = summary(rows, raw)
         result['sl_log'] = streamline_log(a.run)

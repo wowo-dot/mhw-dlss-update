@@ -74,7 +74,7 @@ struct Route {
   require(d.qualify(r::width,r::height,owners[1],comp),"valid contract recovers");
   state=a.take(0x200);executor=a.take(16);backend_context=a.take(16);
   Arena::put(state+0x20,reinterpret_cast<std::uintptr_t>(list));Arena::put(executor+8,state);Arena::put(backend_context+8,r::cfg.backend);
-  p.built=true;
+  p.built=true;r::watch(0,p);
  }
  void warm(unsigned pass){auto &p=r::plans[0];auto &d=*p.dof;Arena::put(state+0x158,d.passes[pass].packet);
   const auto token=r::compute_before(executor,backend_context,d.passes[pass].packet);
@@ -87,7 +87,7 @@ struct Route {
   for(unsigned i=0;i<6;++i)packets[3+i]=p.dof->passes[i].packet;packets[9]=p.draws[4].draw.packet;
   require(p.handoff.prepare({32,1,p.stamp.context,p.stamp.view},packets)==sf::FrameHandoff::Result::ok,"six dispatch handoff plan");
   for(unsigned i=0;i<3;++i)require(p.handoff.record(i,packets[i],{reinterpret_cast<std::uintptr_t>(list),generation})==sf::FrameHandoff::Result::ok,"preceding native stages");
-  p.prepared=true;tail=packets;
+  p.prepared=true;tail=packets;r::watch(0,p);
  }
  std::array<std::uintptr_t,12> tail{};
  void dispatch(unsigned pass){auto &p=r::plans[0];Arena::put(state+0x158,p.dof->passes[pass].packet);

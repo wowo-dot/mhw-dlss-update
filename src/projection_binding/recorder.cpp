@@ -1,5 +1,6 @@
 #include "memory.hpp"
 #include "provenance.hpp"
+#include "../bridge_probe/readable_region.hpp"
 #include <windows.h>
 #include <MinHook.h>
 #include <hde64.h>
@@ -515,15 +516,9 @@ bool install() noexcept {
 bool copy_memory(std::uintptr_t at,void *out,unsigned bytes) noexcept {
   if(!at || !out || !bytes || bytes>max_shader || at>UINTPTR_MAX-bytes) return false;
   for(unsigned done=0;done<bytes;) {
-    MEMORY_BASIC_INFORMATION m{}; const auto p=at+done;
-    if(VirtualQuery(reinterpret_cast<void *>(p),&m,sizeof(m))!=sizeof(m) || m.State!=MEM_COMMIT ||
-       (m.Protect&(PAGE_GUARD|PAGE_NOACCESS))) return false;
-    const auto protect=m.Protect&255;
-    if(protect!=PAGE_READONLY && protect!=PAGE_READWRITE && protect!=PAGE_WRITECOPY && protect!=PAGE_EXECUTE_READ &&
-       protect!=PAGE_EXECUTE_READWRITE && protect!=PAGE_EXECUTE_WRITECOPY) return false;
-    const auto offset=p-reinterpret_cast<std::uintptr_t>(m.BaseAddress);
-    if(offset>=m.RegionSize) return false;
-    done+=static_cast<unsigned>((std::min)(static_cast<std::size_t>(bytes-done),m.RegionSize-offset));
+    const auto p=at+done,end=bridge_probe::readable_end(p);
+    if(!end) return false;
+    done+=static_cast<unsigned>((std::min)(static_cast<std::uintptr_t>(bytes-done),end-p));
   }
   __try {std::memcpy(out,reinterpret_cast<const void *>(at),bytes);return true;}
   __except(EXCEPTION_EXECUTE_HANDLER) {return false;}

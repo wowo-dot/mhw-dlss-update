@@ -4,12 +4,31 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include "../perf/toggles.hpp"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <string_view>
 namespace mhw::projection_binding {
 namespace {
 using Microsoft::WRL::ComPtr;
+// perf::cached_methods: positive answers by target address. [0] holds
+// d3d12.dll/D3D12Core.dll targets (valid for every caller), [1] dxgi.dll ones.
+// The device pins both modules, so a remembered target cannot change module.
+std::array<std::array<std::atomic<std::uintptr_t>,256>,2> system_targets{};
+unsigned target_hash(std::uintptr_t at) noexcept {return static_cast<unsigned>(((at>>4)*0x9E3779B97F4A7C15ULL)>>56);}
+bool remembered(std::uintptr_t at,bool dxgi) noexcept {
+  for(unsigned k=0;k<(dxgi?2U:1U);++k)for(unsigned i=0,h=target_hash(at);i<8;++i){
+    const auto v=system_targets[k][(h+i)&255].load(std::memory_order_acquire);if(v==at)return true;if(!v)break;}
+  return false;
+}
+void remember(std::uintptr_t at,bool dxgi_module) noexcept {
+  for(unsigned i=0,h=target_hash(at);i<8;++i){std::uintptr_t seen{};
+    if(system_targets[dxgi_module][(h+i)&255].compare_exchange_strong(seen,at,std::memory_order_acq_rel)||seen==at)return;}
+}
 bool system_target(std::uintptr_t at,bool dxgi=false) noexcept {
+  const bool cached=perf::on(perf::cached_methods);
+  if(cached&&at&&remembered(at,dxgi))return true;
   MEMORY_BASIC_INFORMATION m{};
   if(!at || VirtualQuery(reinterpret_cast<void *>(at),&m,sizeof(m))!=sizeof(m) ||
      m.Type!=MEM_IMAGE || m.State!=MEM_COMMIT || (m.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return false;
@@ -30,7 +49,10 @@ bool system_target(std::uintptr_t at,bool dxgi=false) noexcept {
   // its original allowlist; no game debug settings or gates are changed.
   if(!_wcsicmp(tail.data(),L"d3d12SDKLayers.dll"))return true;
 #endif
-  return !_wcsicmp(tail.data(),L"d3d12.dll") || !_wcsicmp(tail.data(),L"D3D12Core.dll") || (dxgi && !_wcsicmp(tail.data(),L"dxgi.dll"));
+  const bool d3d=!_wcsicmp(tail.data(),L"d3d12.dll") || !_wcsicmp(tail.data(),L"D3D12Core.dll");
+  const bool ok=d3d || (dxgi && !_wcsicmp(tail.data(),L"dxgi.dll"));
+  if(ok&&cached)remember(at,!d3d);
+  return ok;
 }
 bool method(std::uintptr_t object,unsigned slot,std::uintptr_t &target,bool dxgi=false) noexcept {
   std::uintptr_t table{};

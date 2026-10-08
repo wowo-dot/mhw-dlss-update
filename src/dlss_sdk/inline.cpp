@@ -1,6 +1,7 @@
 #include "inline.hpp"
 #include "../temporal_present/output.hpp"
 #include "../temporal_gpu_inputs/shader.hpp"
+#include "../perf/toggles.hpp"
 #include <nvsdk_ngx_helpers.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -168,9 +169,12 @@ bool InlineFrame::record_frame(ID3D12GraphicsCommandList *list,ID3D12Resource *n
             NVSDK_NGX_D3D12_DLSS_Eval_Params eval{};eval.Feature.pInColor=p.converted[0].Get();eval.Feature.pInOutput=p.output.Get();eval.pInDepth=p.converted[1].Get();eval.pInMotionVectors=p.converted[2].Get();
             eval.InReset=reset;eval.InMVScaleX=eval.InMVScaleY=1;eval.InPreExposure=eval.InExposureScale=1;eval.InRenderSubrectDimensions={p.width,p.height};eval.InFrameTimeDeltaInMsec=frame_ms;
             eval.InJitterOffsetX=history.jitter_x;eval.InJitterOffsetY=history.jitter_y;
-            const float sentinel[]{65504,65504,65504,65504};const auto stride=p.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-            list->ClearUnorderedAccessViewFloat({p.heap->GetGPUDescriptorHandleForHeapStart().ptr+UINT64(6)*stride},p.clear_heap->GetCPUDescriptorHandleForHeapStart(),p.output.Get(),sentinel,0,nullptr);
-            D3D12_RESOURCE_BARRIER order{};order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;order.UAV.pResource=p.output.Get();list->ResourceBarrier(1,&order);
+            // Diagnostic sentinel: shows unwritten output texels in captures.
+            if(!perf::on(perf::no_output_sentinel)){
+                const float sentinel[]{65504,65504,65504,65504};const auto stride=p.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                list->ClearUnorderedAccessViewFloat({p.heap->GetGPUDescriptorHandleForHeapStart().ptr+UINT64(6)*stride},p.clear_heap->GetCPUDescriptorHandleForHeapStart(),p.output.Get(),sentinel,0,nullptr);
+                D3D12_RESOURCE_BARRIER order{};order.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV;order.UAV.pResource=p.output.Get();list->ResourceBarrier(1,&order);
+            }
             p.evaluate_result=NGX_D3D12_EVALUATE_DLSS_EXT(list,p.feature,p.parameters,&eval);
             if(fault==RecordFault::evaluate_result)p.evaluate_result=static_cast<unsigned>(NVSDK_NGX_Result_Fail);
             require(p.evaluate_result==1,"inline EvaluateFeature");

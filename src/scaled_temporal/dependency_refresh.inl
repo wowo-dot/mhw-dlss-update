@@ -51,6 +51,7 @@ bool dependency_enter(Plan &p,unsigned stage){
  const auto old_count=resource_count(p);
  for(unsigned j=1;j<3;++j)if(held[j-1]&&indices[j]>=old_count)p.resources[indices[j]]=held[j-1];
  p.extra_resources+=next-old_count;
+ if(next!=old_count)watch(static_cast<unsigned>(p.stamp.frame%plans.size()),p);  // perf::packet_filter barriers
  for(unsigned i=old_count;i<next;++i)for(auto &track:p.recordings)if(track.list){
   const auto state=recording_states.get(reinterpret_cast<std::uintptr_t>(track.list),track.generation,reinterpret_cast<std::uintptr_t>(p.resources[i].Get()));
   track.known[i]=state.known;track.states[i]=state.value;if(state.known)++state_imports;

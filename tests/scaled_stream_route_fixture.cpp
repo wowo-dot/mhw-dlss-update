@@ -1,4 +1,5 @@
 #include "scaled_effect_fixture.hpp"
+#include "perf_env.hpp"
 #include "../src/scaled_temporal/radial_shader.hpp"
 #include "../src/scaled_temporal/stream_route.cpp"
 #ifdef MHW_STREAM_RUNTIME_FIXTURE
@@ -20,6 +21,7 @@ void WINAPI copy_forward(ID3D12GraphicsCommandList *l,const D3D12_TEXTURE_COPY_L
 #include "scaled_return_fixture.hpp"
 #endif
 int wmain(int argc,wchar_t **argv){try{
+    apply_perf_env();
     using namespace fx;require(argc==6||argc==7||argc==8,"usage: warp|hardware shader-prefix output-dir case luid-low [dependency-dir | haze-vs haze-ps]");
     const bool warp=std::wstring_view(argv[1])==L"warp";const std::string mode=std::filesystem::path(argv[4]).string();
     const std::filesystem::path out=argv[3];require(!std::filesystem::exists(out),"preserve output");std::filesystem::create_directories(out);
@@ -170,6 +172,7 @@ int wmain(int argc,wchar_t **argv){try{
         plan.draws[stage].draw.packet=10000+stage;prepared_packets[2+ordinal]=plan.draws[stage].draw.packet;}
     require(route::prepare_selector(plan)&&plan.handoff.prepare({frame,1,1,2},std::span(prepared_packets).first(2+route::effect_count(plan)))==sf::FrameHandoff::Result::ok,"fixture prepared frame");
     plan.prepared=plan.claimed=true;++route::claimed;++route::prepared_frames;if(plan.has_haze)++route::haze_claimed;
+    route::watch(static_cast<unsigned>(frame%32),plan);
     if(mixed){D3D12_SHADER_RESOURCE_VIEW_DESC grade_input{};grade_input.Format=DXGI_FORMAT_R11G11B10_FLOAT;
      grade_input.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;grade_input.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;grade_input.Texture2D.MipLevels=1;
      f.device->CreateShaderResourceView(outputs[plan.has_haze?3:0].Get(),&grade_input,srv[1]->GetCPUDescriptorHandleForHeapStart());}

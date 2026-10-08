@@ -18,6 +18,9 @@
 #include "../frame_generation/game_session.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "frame_generation_policy.hpp"
+#include "../perf/frame_stats.hpp"
+#include "../perf/toggles.hpp"
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 // "<dll>.fg-mode": "off" runs without DLSS-G (A/B diagnostic); "2x".."8x" sets
@@ -491,6 +494,76 @@ void log_lifecycle(std::ostream& out) {
     }
     out << std::flush;
 }
+// Overhead measurements (v0.12): host frame intervals for the last window,
+// labelled with the active perf switches. Armed runs add the driver's own
+// per-frame report (Reflex markers), which separates CPU and GPU time.
+void log_frames(std::ostream& out, const char* phase) {
+    const auto w = mhw::perf::host_frames.take();
+    out << "{\"event\":\"frame_stats\",\"phase\":\"" << phase << "\",\"perf\":" << mhw::perf::toggles.load() << ",\"frames\":" << w.frames
+        << ",\"total_us\":" << w.total_us << ",\"fps\":" << (w.total_us ? double(w.frames) * 1e6 / double(w.total_us) : 0.0)
+        << ",\"p50_us\":" << w.p50_us << ",\"p95_us\":" << w.p95_us << ",\"p99_us\":" << w.p99_us << ",\"max_us\":" << w.max_us
+        << ",\"over_50ms\":" << w.over_50ms << "}\n" << std::flush;
+}
+template<std::size_t N> std::uint64_t median_of(std::array<std::uint64_t, N>& values, unsigned count) {
+    if (!count) return 0;
+    std::nth_element(values.begin(), values.begin() + count / 2, values.begin() + count);
+    return values[count / 2];
+}
+template<std::size_t N> std::uint64_t max_of(const std::array<std::uint64_t, N>& values, unsigned count) {
+    return count ? *std::max_element(values.begin(), values.begin() + count) : 0;
+}
+void log_latency(std::ostream& out) {
+    auto state = std::make_unique<sl::ReflexState>();
+    sl::Result result{};
+    { std::lock_guard lock(sdk_mutex); result = sdk.state(*state); }
+    out << "{\"event\":\"latency\",\"result\":" << static_cast<unsigned>(result) << ",\"available\":" << state->latencyReportAvailable;
+    if (result == sl::Result::eOk && state->latencyReportAvailable) {
+        std::array<const sl::ReflexReport*, sl::kReflexFrameReportCount> frames{};
+        unsigned n{};
+        for (const auto& f : state->frameReport)
+            if (f.frameID && f.simEndTime >= f.simStartTime && f.renderSubmitEndTime >= f.renderSubmitStartTime && f.presentEndTime >= f.presentStartTime &&
+                f.driverEndTime >= f.driverStartTime && f.osRenderQueueEndTime >= f.osRenderQueueStartTime && f.gpuRenderEndTime >= f.gpuRenderStartTime)
+                frames[n++] = &f;
+        std::sort(frames.begin(), frames.begin() + n, [](auto a, auto b) { return a->frameID < b->frameID; });
+        // Microseconds as the driver reports them; interval = consecutive frames' present starts.
+        std::array<std::array<std::uint64_t, sl::kReflexFrameReportCount>, 9> v{};
+        std::array<unsigned, 9> c{};
+        for (unsigned i = 0; i < n; ++i) {
+            const auto& f = *frames[i];
+            if (i && f.frameID == frames[i - 1]->frameID + 1 && f.presentStartTime >= frames[i - 1]->presentStartTime)
+                v[0][c[0]++] = f.presentStartTime - frames[i - 1]->presentStartTime;
+            v[1][c[1]++] = f.simEndTime - f.simStartTime;
+            v[2][c[2]++] = f.renderSubmitEndTime - f.renderSubmitStartTime;
+            v[3][c[3]++] = f.presentEndTime - f.presentStartTime;
+            v[4][c[4]++] = f.driverEndTime - f.driverStartTime;
+            v[5][c[5]++] = f.osRenderQueueEndTime - f.osRenderQueueStartTime;
+            v[6][c[6]++] = f.gpuRenderEndTime - f.gpuRenderStartTime;
+            v[7][c[7]++] = f.gpuActiveRenderTimeUs;
+            v[8][c[8]++] = f.gpuFrameTimeUs;
+        }
+        constexpr std::array<const char*, 9> names{"interval", "simulation", "submit", "present", "driver", "queue", "gpu", "gpu_active", "gpu_frame"};
+        out << ",\"frames\":" << n;
+        for (unsigned k = 0; k < names.size(); ++k) {
+            const auto top = max_of(v[k], c[k]);
+            out << ",\"" << names[k] << "\":[" << median_of(v[k], c[k]) << ',' << top << ']';
+        }
+    }
+    out << "}\n" << std::flush;
+}
+// Live perf switches: "<log>.perf-N" holds "<creation> <mask>", sequenced and
+// generation-checked like the multiplier markers. The window before a switch
+// is logged first, so every frame_stats line covers one mask.
+void poll_perf(std::ostream& out, const std::filesystem::path& folder, const std::string& stem, std::uint64_t creation, unsigned& requests) {
+    const auto marker = folder / (stem + ".perf-" + std::to_string(requests + 1));
+    if (!std::filesystem::exists(marker) || std::filesystem::file_size(marker) > 64) return;
+    std::ifstream input(marker); std::uint64_t generation{}; unsigned mask{}; input >> generation >> mask;
+    const bool accepted = bool(input) && generation == creation && mask <= mhw::perf::all_toggles;
+    const auto previous = mhw::perf::toggles.load();
+    ++requests;
+    if (accepted) { log_frames(out, "switch"); mhw::perf::toggles.store(mask); }
+    out << "{\"event\":\"perf_toggles\",\"request\":" << requests << ",\"mask\":" << mask << ",\"previous\":" << previous
+        << ",\"accepted\":" << accepted << "}\n" << std::flush;
+}
 #endif
 DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
@@ -512,6 +585,10 @@ DWORD WINAPI worker(void*) noexcept {
             std::ifstream mode_in(mode_file); std::string mode_text; mode_in >> mode_text;
             fg_plugin = mode_text != "off";
             if (const auto m = mhw::reflex::parse_multiplier(mode_text)) fg_multiplier = m;
+            // "<dll>.perf": initial perf-switch mask (v0.12; 0 = original paths).
+            auto perf_file = dll; perf_file += L".perf";
+            std::ifstream perf_in(perf_file); unsigned mask{};
+            if (perf_in >> mask && mask <= mhw::perf::all_toggles) mhw::perf::toggles.store(mask);
         }
 #endif
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
@@ -525,6 +602,9 @@ DWORD WINAPI worker(void*) noexcept {
         require(pb::host_identity(image, reason), "retail-host-identity");
         FILETIME ct{}, et{}, kt{}, ut{}; require(GetProcessTimes(GetCurrentProcess(), &ct, &et, &kt, &ut) != FALSE, "process-identity");
         const auto creation = (static_cast<std::uint64_t>(ct.dwHighDateTime) << 32) | ct.dwLowDateTime;
+#ifdef MHW_FG_GAME
+        unsigned perf_requests{};
+#endif
 #ifdef MHW_REFLEX_FRAME_PROBE
         const auto name = "reflex-frames-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(creation) + ".jsonl";
         arm_file=output/(name+".arm");require(!std::filesystem::exists(arm_file),"preserve-arm-file");
@@ -544,7 +624,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.11.7\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.0\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -624,10 +704,16 @@ DWORD WINAPI worker(void*) noexcept {
             log_fg_buffers(log, "frames_ready");
 #endif
             const auto wait_start=GetTickCount64();
+#ifdef MHW_FG_GAME
+            log << "{\"event\":\"perf_toggles\",\"request\":0,\"mask\":" << mhw::perf::toggles.load() << ",\"previous\":0,\"accepted\":true}\n" << std::flush;
+            mhw::perf::host_frames.take();auto window_start=wait_start;
+#endif
             while(!std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file) && GetTickCount64()-wait_start<600000) {
                 const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;
 #ifdef MHW_FG_GAME
                 log_lifecycle(log);
+                poll_perf(log,output,name,creation,perf_requests);
+                if(GetTickCount64()-window_start>=5000){log_frames(log,"unarmed");window_start=GetTickCount64();}
 #endif
                 Sleep(100);
             }
@@ -721,6 +807,7 @@ DWORD WINAPI worker(void*) noexcept {
                     }
 #endif
 #ifdef MHW_FG_GAME
+                    poll_perf(log,output,name,creation,perf_requests);
                     {   // Sequenced, generation-checked multiplier requests: "<creation> <total>".
                         const auto marker=output/(name+".mfg-"+std::to_string(multiplier_requests+1));
                         if(std::filesystem::exists(marker)&&std::filesystem::file_size(marker)<=64){
@@ -748,6 +835,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_FG_GAME
                         log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
                         log_fg_buffers(log, "status");
+                        log_frames(log, "armed");log_latency(log);
 #endif
 #endif
                         if(last==started)require(driver_mode("running_on",true),"driver-On-not-enabled");
@@ -804,8 +892,11 @@ DWORD WINAPI worker(void*) noexcept {
         // presentation heartbeat on change, until exit or 30 minutes.
         {
             const auto observed_from=GetTickCount64();std::uint64_t last_resizes=~0ULL,last_swapchains=~0ULL;
+            auto window_start=observed_from;log_frames(log,"stop");
             while(presentation&&GetTickCount64()-observed_from<1800000ULL){
                 log_lifecycle(log);
+                poll_perf(log,output,name,creation,perf_requests);
+                if(GetTickCount64()-window_start>=5000){log_frames(log,"fg_off");log_latency(log);window_start=GetTickCount64();}
                 const auto stats=presentation->snapshot();
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes
