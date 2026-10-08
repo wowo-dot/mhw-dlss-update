@@ -2,6 +2,7 @@
 #include "haze_shader.hpp"
 #include "radial_shader.hpp"
 #include "dof_shader.hpp"
+#include "depth_color_shader.hpp"
 #include <windows.h>
 #include <bcrypt.h>
 #include <wrl/client.h>
@@ -30,7 +31,24 @@ bool shader(std::span<const std::byte> bytes,std::size_t size,const char *expect
     for(unsigned i=0;i<32;++i)if(hex[hash[i]>>4]!=expected[2*i]||hex[hash[i]&15]!=expected[2*i+1])return false;
     return true;
 }
-unsigned index(EffectStage stage){const auto i=static_cast<unsigned>(stage);require(i<7,"effect stage");return i;}
+unsigned index(EffectStage stage){const auto i=static_cast<unsigned>(stage);require(i<8,"effect stage");return i;}
+// Pinned native shader identities per stage (pixel size/hash, vertex size/hash).
+constexpr const char *ps_hash[]{"3eed9b57bbbdf38d14d9a94596fc93a107aa99eab275af7118b95febbbc1ba18",
+    "174a09e5b23c7e01fb6c47ce86b61250d695113109abb4ffae7219117c31a8cb","be6127ba48008790fd0e93558b8248cb8acd7c0577899bf50d28e5618ae37b79",
+    "4f890ffa89ea59a218db7e191d8aab48e9d5fe4be200c50a606b22594bb57f69",
+    "be6127ba48008790fd0e93558b8248cb8acd7c0577899bf50d28e5618ae37b79",
+    "90f3f4d5594357e5350acf3d5bda57db4641b50e6aaa5787d3ae341463860741",
+    "9f04832cb0a0ff800169964919f7ebecba353e7e3c147c2b314e76af7372e3aa",
+    "c0944737c37bec2c5f24759b70bd14b16e89dbb3870aeab662dd7a611cc1f9c1"};
+constexpr unsigned ps_size[]{10008,5824,1080,14596,1080,6444,4604,5568};
+unsigned vs_size(unsigned stage){return stage==5?764:stage==3?712:(stage==2||stage==4||stage==6)?644:752;}
+const char *vs_hash(unsigned stage){
+    return stage==5?"b980e376575d82610809066f45c6ecd6efb090bbee76968d9ee5203d2459a1d2":
+        stage==3?"c7c73b6ac661514c34c53681e217dc3fe7014e21a99a41adb0fcb7befc1f5de6":
+        (stage==2||stage==4||stage==6)?"730b7d23bcdca40477ed973c29c8fff8de7ab7244b05d142d5f9458fbfec5fdd":"abddc634c053c157f295842964b023610ff64a7505d4b253edbe1612680ea937";
+}
+// Packed dependency recipes (radial, DOF composite) use 28-byte vertices.
+bool packed(unsigned stage){return stage==5||stage==6;}
 bool dependent(EffectStage s){return s==EffectStage::scene_copy||s==EffectStage::radial||s==EffectStage::dof_composite;}
 DXGI_FORMAT output_format(EffectStage s){return s==EffectStage::scene_copy?DXGI_FORMAT_R10G10B10A2_UNORM:DXGI_FORMAT_R11G11B10_FLOAT;}
 bool layout(std::span<const D3D12_INPUT_ELEMENT_DESC> elements){
@@ -117,7 +135,7 @@ EffectVertices effect_vertices(EffectStage stage,FilterGeometry g,bool full){
     const float x=float(full?g.output_width:g.render_width)/g.output_width,y=float(full?g.output_height:g.render_height)/g.output_height;
     // Preserve the reduced UV footprint for native depth/noise sampling. The
     // haze PS adapter expands only the final color lookup, never these inputs.
-    if(stage==EffectStage::haze)return {{{-1,1,0,0,-1,-3,0,2.F*g.render_height/g.output_height,3,1,2.F*g.render_width/g.output_width,0}},3,D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
+    if(stage==EffectStage::haze||stage==EffectStage::depth_color)return {{{-1,1,0,0,-1,-3,0,2.F*g.render_height/g.output_height,3,1,2.F*g.render_width/g.output_width,0}},3,D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
     // The native three-vertex screen triangle is also submitted as a strip.
     // Preserve that binding; a triangle-list assumption fails exact admission.
     if(stage==EffectStage::final_screen)return {{{-1,1,0,0,-1,-3,0,2*y-1.F/g.output_height,3,1,2*x-1.F/g.output_width,0}},3,D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
@@ -126,6 +144,16 @@ EffectVertices effect_vertices(EffectStage stage,FilterGeometry g,bool full){
     if(stage==EffectStage::color_grade)return {{{-1,1,0,0,1,1,x,0,-1,-1,0,y,1,-1,x,y}},4,D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
     const auto u=stage==EffectStage::motion_filter?1.F:x,v=stage==EffectStage::motion_filter?1.F:y;
     return {{{-1,1,0,0,-1,-1,0,v,1,1,u,0,1,-1,u,v}},4,D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP};
+}
+bool effect_admitted(const EffectRecipe &r) noexcept {
+    try{
+        const auto stage=index(r.stage);
+        if(!valid_filter_geometry(r.geometry)||!metadata(r)||!(dependent(r.stage)?dependency_geometry(r):layout(r.input_layout)))return false;
+        if(!dependent(r.stage)){const auto native=effect_vertices(r.stage,r.geometry,false);
+            if(r.native_vertices.size()!=4*native.count)return false;
+            for(unsigned i=0;i<4*native.count;++i)if(!std::isfinite(r.native_vertices[i])||std::abs(r.native_vertices[i]-native.values[i])>0.000001F)return false;}
+        return shader(r.pixel_shader,ps_size[stage],ps_hash[stage])&&shader(r.vertex_shader,vs_size(stage),vs_hash(stage));
+    }catch(...){return false;}
 }
 struct Effect::Impl {
     ComPtr<ID3D12Device> device;ComPtr<ID3D12RootSignature> root;ComPtr<ID3D12PipelineState> pipeline;ComPtr<ID3D12Resource> vertices;
@@ -141,19 +169,10 @@ Effect::Effect(ID3D12Device *device,const EffectRecipe &r,bool caller_retained):
     require(r.native_vertices.size()==4*native.count,"effect vertex count");
     for(unsigned i=0;i<4*native.count;++i)require(std::isfinite(r.native_vertices[i])&&std::abs(r.native_vertices[i]-native.values[i])<=0.000001F,"effect native vertices");
     }
-    constexpr const char *ps[]{"3eed9b57bbbdf38d14d9a94596fc93a107aa99eab275af7118b95febbbc1ba18",
-        "174a09e5b23c7e01fb6c47ce86b61250d695113109abb4ffae7219117c31a8cb","be6127ba48008790fd0e93558b8248cb8acd7c0577899bf50d28e5618ae37b79",
-        "4f890ffa89ea59a218db7e191d8aab48e9d5fe4be200c50a606b22594bb57f69",
-        "be6127ba48008790fd0e93558b8248cb8acd7c0577899bf50d28e5618ae37b79",
-        "90f3f4d5594357e5350acf3d5bda57db4641b50e6aaa5787d3ae341463860741",
-        "9f04832cb0a0ff800169964919f7ebecba353e7e3c147c2b314e76af7372e3aa"};
-    constexpr unsigned sizes[]{10008,5824,1080,14596,1080,6444,4604};
-    require(shader(r.pixel_shader,sizes[stage],ps[stage])&&shader(r.vertex_shader,stage==5?764:stage==3?712:(stage==2||stage==4||stage==6)?644:752,
-        stage==5?"b980e376575d82610809066f45c6ecd6efb090bbee76968d9ee5203d2459a1d2":
-        stage==3?"c7c73b6ac661514c34c53681e217dc3fe7014e21a99a41adb0fcb7befc1f5de6":
-        (stage==2||stage==4||stage==6)?"730b7d23bcdca40477ed973c29c8fff8de7ab7244b05d142d5f9458fbfec5fdd":"abddc634c053c157f295842964b023610ff64a7505d4b253edbe1612680ea937"),"effect shader identity");
+    require(shader(r.pixel_shader,ps_size[stage],ps_hash[stage])&&shader(r.vertex_shader,vs_size(stage),vs_hash(stage)),"effect shader identity");
     auto &p=*impl_;p.caller_retained=caller_retained;p.device=device;p.root=r.root;p.stage=r.stage;p.geometry=r.geometry;p.full=effect_vertices(r.stage,r.geometry,true);
-    auto adapted=stage==0?make_filter_shader(r.pixel_shader,r.geometry):stage==3?make_haze_shader(r.pixel_shader,r.geometry):stage==5?make_radial_shader(r.pixel_shader,r.geometry):stage==6?make_dof_shader(r.pixel_shader,r.geometry):std::vector<std::byte>{};
+    auto adapted=stage==0?make_filter_shader(r.pixel_shader,r.geometry):stage==3?make_haze_shader(r.pixel_shader,r.geometry):stage==5?make_radial_shader(r.pixel_shader,r.geometry):stage==6?make_dof_shader(r.pixel_shader,r.geometry):
+        stage==7?make_depth_color_shader(r.pixel_shader,r.geometry):std::vector<std::byte>{};
     const auto pixel=adapted.empty()?r.pixel_shader:std::span<const std::byte>(adapted);
     D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};d.pRootSignature=r.root;d.VS={r.vertex_shader.data(),r.vertex_shader.size()};d.PS={pixel.data(),pixel.size()};
     d.BlendState=r.blend;d.RasterizerState=r.raster;d.DepthStencilState=r.depth;d.SampleMask=UINT_MAX;
@@ -161,12 +180,12 @@ Effect::Effect(ID3D12Device *device,const EffectRecipe &r,bool caller_retained):
     d.NumRenderTargets=1;d.RTVFormats[0]=output_format(r.stage);d.SampleDesc.Count=1;
     hr(device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&p.pipeline)),"effect private PSO");
     const auto radial_vertices=dependency_vertices(r.geometry,false);
-    const std::span<const std::byte> vertex_bytes=stage>=5?std::as_bytes(std::span<const DependencyVertex>(radial_vertices)):std::as_bytes(std::span<const float>(p.full.values));
+    const std::span<const std::byte> vertex_bytes=packed(stage)?std::as_bytes(std::span<const DependencyVertex>(radial_vertices)):std::as_bytes(std::span<const float>(p.full.values));
     D3D12_RESOURCE_DESC b{};b.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;b.Width=vertex_bytes.size();b.Height=1;b.DepthOrArraySize=b.MipLevels=1;
     b.SampleDesc.Count=1;b.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_UPLOAD;
     hr(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&b,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&p.vertices)),"effect immutable vertices");
     void *mapped{};D3D12_RANGE none{};hr(p.vertices->Map(0,&none,&mapped),"effect vertex map");std::memcpy(mapped,vertex_bytes.data(),vertex_bytes.size());p.vertices->Unmap(0,nullptr);
-    p.view={p.vertices->GetGPUVirtualAddress(),static_cast<UINT>(vertex_bytes.size()),stage>=5?28U:16U};
+    p.view={p.vertices->GetGPUVirtualAddress(),static_cast<UINT>(vertex_bytes.size()),packed(stage)?28U:16U};
 }
 Effect::~Effect(){if(impl_&&impl_->issued&&!impl_->retired)(void)impl_.release();}
 bool Effect::record(const EffectBindings &b) noexcept{

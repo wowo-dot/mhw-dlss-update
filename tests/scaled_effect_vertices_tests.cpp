@@ -51,7 +51,15 @@ int main(int argc,char **argv){try{
     }
     for(const auto bad:std::array<sf::FilterGeometry,7>{{{0,720,2560,1440},{1280,0,2560,1440},{1280,720,1920,1080},{1280,720,2560,720},{2560,1440,1280,720},{UINT_MAX,720,2560,1440},{17,9,34,18}}})
         for(auto stage:{sf::EffectStage::motion_filter,sf::EffectStage::color_grade,sf::EffectStage::final_screen,sf::EffectStage::haze})rejects([&]{sf::effect_vertices(stage,bad,true);});
-    rejects([]{sf::effect_vertices(static_cast<sf::EffectStage>(7),{64,32,128,64},true);});
+    rejects([]{sf::effect_vertices(static_cast<sf::EffectStage>(8),{64,32,128,64},true);});
+    // uDepthColorFilter (game-41 capture) draws haze's native triangle and keeps
+    // its render-space UVs at full output; only its color sample expands.
+    for(auto g:std::array<sf::FilterGeometry,3>{{{1280,720,2560,1440},{64,32,128,64},{1706,720,3413,1440}}})for(bool full:{false,true}){
+        const auto d=sf::effect_vertices(sf::EffectStage::depth_color,g,full),h=sf::effect_vertices(sf::EffectStage::haze,g,false);
+        check(d.count==3&&d.topology==h.topology&&d.values==h.values,"depth color uses the native haze triangle");++cases;}
+    {const auto d=sf::effect_vertices(sf::EffectStage::depth_color,{1280,720,2560,1440},false);
+     const std::array<float,12> captured{-1,1,0,0,-1,-3,0,1,3,1,1,0};
+     for(unsigned i=0;i<12;++i)check(d.values[i]==captured[i],"depth color matches the captured native vertices");}
     // A pillarboxed odd scene renders at the truncated half (game-20).
     check(sf::valid_filter_geometry({1706,720,3413,1440})&&!sf::valid_filter_geometry({1707,720,3413,1440})&&!sf::valid_filter_geometry({1705,720,3413,1440}),"truncated half");
     std::cout<<"PASS: "<<cases<<" geometry cases, 29 rejected configurations\n";return 0;

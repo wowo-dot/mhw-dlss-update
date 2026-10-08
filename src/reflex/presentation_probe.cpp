@@ -648,9 +648,9 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.3\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.4\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.7\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.8\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
             << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)

@@ -8,8 +8,9 @@
 
 namespace mhw::scaled_temporal {
 // Values are stable diagnostic identities, not execution order. Haze, when
-// present, executes between motion_filter and color_grade.
-enum class EffectStage { motion_filter, color_grade, final_screen, haze, scene_copy, radial, dof_composite };
+// present, executes between motion_filter and color_grade; depth_color
+// (uDepthColorFilter) between the TAA copy and motion_filter.
+enum class EffectStage { motion_filter, color_grade, final_screen, haze, scene_copy, radial, dof_composite, depth_color };
 struct EffectVertices {
     std::array<float,16> values{};
     unsigned count{};
@@ -47,6 +48,10 @@ struct EffectBindings {
 };
 // Qualifies native coverage and both UV domains without creating GPU objects.
 bool dependency_geometry(const EffectRecipe &) noexcept;
+// Every recipe check the Effect constructor makes that needs no device or root
+// signature (geometry, pipeline metadata, layout, vertices, shader identity),
+// so a plan can reject an unexpected recipe before any draw is claimed.
+bool effect_admitted(const EffectRecipe &) noexcept;
 // Construct before claiming the native draw. Private PSO/VB, immutable root
 // signature and shader bytes. record() replaces one qualified DrawInstanced,
 // expands its viewport/UVs, then restores exactly the four changed bindings.

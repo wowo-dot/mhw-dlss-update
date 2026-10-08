@@ -103,6 +103,9 @@ struct Plan {
  std::uintptr_t grade_input_resource{};
  std::array<OutputDiagnostics::Draw,12> observations{};
  unsigned overlay_count{},ordered_count{};
+ // uDepthColorFilter's draw (game-40, Fatalis smoke): an overlay slot with
+ // dependency 4 that runs first, between the TAA copy and the motion filter.
+ unsigned depth_stage{UINT_MAX};
  std::array<unsigned,12> order{},keys{},targets{};
  unsigned executed{};bool published{},built{},claimed{};
  std::uintptr_t motion_unit{};unsigned motion_thread{},motion_visits{};
@@ -340,11 +343,14 @@ EffectRecipe recipe(Record &r,unsigned stage,ID3D12RootSignature *root){
  // Stored descriptor pointers refer to native strings. Use our bounded copies.
  r.recipe_elements=r.elements;for(unsigned i=0;i<r.before.pipeline.input_count;++i)r.recipe_elements[i].SemanticName=r.semantics[i].data();
  result.input_layout=std::span(r.recipe_elements).first(r.before.pipeline.input_count);result.native_vertices=std::span(r.vertices).first(r.vertex_floats);
- if(r.dependency)result.dependency_vertices=std::span(r.dependency_vertices).first(r.dependency==1?64:112);
+ if(r.dependency&&r.dependency!=4)result.dependency_vertices=std::span(r.dependency_vertices).first(r.dependency==1?64:112);
  return result;
 }
 bool geometry(Record &r,std::uintptr_t context,unsigned stage){
- const bool overlay=stage>=4;
+ // A depth-color draw holds an overlay slot but is a base-style screen
+ // triangle (two-element layout, native vertices), like haze.
+ const bool depth_color=stage>=4&&r.dependency==4,overlay=stage>=4&&!depth_color;
+ const auto kind=depth_color?EffectStage::depth_color:static_cast<EffectStage>(stage);
  plan_vertex_gate={};
  plan_qualification=(stage<<16)|1U;
  if(!source(r)||r.arguments[0]!=(overlay?4U:stage>=2?3U:4U))return false;
@@ -376,7 +382,7 @@ bool geometry(Record &r,std::uintptr_t context,unsigned stage){
  if(!overlay){
   if(!pb::copy_memory(arena+vertex_start,r.vertices.data(),r.vertex_floats*4))return false;
   plan_qualification=(stage<<16)|5U;
-  const auto expected=effect_vertices(static_cast<EffectStage>(stage),{render_w,render_h,width,height},false);
+  const auto expected=effect_vertices(kind,{render_w,render_h,width,height},false);
   for(unsigned i=0;i<r.vertex_floats;++i)if(!std::isfinite(r.vertices[i])||std::abs(r.vertices[i]-expected.values[i])>0.000001F){
    if(!vertex_missed){vertex_missed=true;vertex_miss={stage,i,std::bit_cast<unsigned>(r.vertices[i]),std::bit_cast<unsigned>(expected.values[i])};}
    return false;}}
@@ -394,7 +400,7 @@ bool geometry(Record &r,std::uintptr_t context,unsigned stage){
  plan_qualification=(stage<<16)|8U;
  if(overlay&&!r.dependency&&(r.shaders[0].size!=644||pb::bytes_sha256(r.shaders[0].bytes.data(),644)!="730b7d23bcdca40477ed973c29c8fff8de7ab7244b05d142d5f9458fbfec5fdd"||
      !overlay_pixel_shader(std::span(r.shaders[1].bytes).first(r.shaders[1].size))))return false;
- if(r.dependency){
+ if(r.dependency&&!depth_color){
   plan_qualification=(stage<<16)|5U;
   if(stride!=(r.dependency==1?16U:28U)||vertex_bytes>r.dependency_vertices.size()||
      !pb::copy_memory(arena+vertex_start,r.dependency_vertices.data(),static_cast<unsigned>(vertex_bytes))||
@@ -412,6 +418,10 @@ bool geometry(Record &r,std::uintptr_t context,unsigned stage){
  }
  plan_qualification=(stage<<16)|9U;
  r.signature=signature(recipe(r,recipe_stage(r,stage),nullptr));if(r.signature.empty())return false;
+ // A new recipe's pipeline state is checked here, so an unexpected one leaves
+ // the frame native instead of failing the route when its effect is built.
+ plan_qualification=(stage<<16)|15U;
+ if(depth_color&&!effect_admitted(recipe(r,recipe_stage(r,stage),nullptr)))return false;
  plan_qualification=0;return true;
 }
 bool overlay_inputs(const Plan &p,const Record &r){
@@ -573,7 +583,7 @@ bool retain_recording(Plan &p,ID3D12GraphicsCommandList *list,std::uint64_t gen,
 // post-filter queue. Keys narrow the search; owners, packet fields, geometry and
 // shader recipes prove each identity. No packet is selected by an address alone.
 bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &observation){
- p.overlay_count=p.ordered_count=p.extra_resources=0;p.dof.reset();
+ p.overlay_count=p.ordered_count=p.extra_resources=0;p.dof.reset();p.depth_stage=UINT_MAX;
  const auto overlay_failure=[&](OutputCommands::Branch branch,unsigned key,std::uintptr_t packet=0,
      unsigned index=UINT32_MAX,unsigned raw=0,bool raw_read=false,unsigned seen=0){
   observation.command_gate={branch,key,packet,index,raw,raw_read,seen,p.overlay_count};
@@ -581,6 +591,7 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  plan_rejection=plan_detail=plan_qualification=0;plan_vertex_gate={};const auto &s=p.stamp;std::uintptr_t filters{},motion_in{},motion_out{},grade{},grade_in{},grade_out{},final_dest{},attachment{},endpoint{};
  std::array<ColorLink,16> middle_links{};std::array<unsigned,8> middle_path{};unsigned middle_size{},middle_count{};
  unsigned count{},taas{},motions{},grades{},ends{},hazes{};std::uintptr_t haze_unit{},haze_in{},haze_out{};
+ unsigned depth_colors{};std::uintptr_t depth_unit{},depth_in{},depth_out{};
  if(!same_stamp(s)||!field(cfg.image,0x51cc238,filters)||!field(filters,0x3c,count)||!count||count>16){plan_rejection=1;return /* rejected */ false;}
  for(unsigned i=0;i<count;++i){std::uintptr_t e{},u{},type{},input{},output{};unsigned stage{},order{};
   if(!field(filters,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,u)||!field(e,0x10,input)||!field(e,0x18,output)||(u&&!field(u,0,type))){plan_rejection=2;return /* rejected */ false;}
@@ -590,6 +601,9 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   if(type==cfg.image+0x35372b0&&stage==15&&order==20000){
    if(e!=u+0x140||!input||!output||input==output){plan_rejection=6;plan_detail=7;return false;}
    ++hazes;haze_unit=u;haze_in=input;haze_out=output;}
+  if(type==cfg.image+0x3423850&&stage==15&&order==0x50){
+   if(e!=u+0x140||!input||!output||input==output){plan_rejection=6;plan_detail=9;return false;}
+   ++depth_colors;depth_unit=u;depth_in=input;depth_out=output;}
   if(type==cfg.image+0x3538400&&stage==15&&order==0){grade=u;++grades;}
   if(stage==15&&order==0x7fffff1){std::array<unsigned char,3> flags{};
    if(u||!field(e,0x20,flags)||flags!=std::array<unsigned char,3>{1,0,0}){plan_rejection=5;return /* rejected */ false;}endpoint=e;++ends;}
@@ -600,13 +614,15 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  const auto link=[&](std::uintptr_t at,unsigned offset,std::uintptr_t &value,unsigned bit,unsigned slot){
   const bool ok=field(at,offset,value);if(ok)observation.link_reads|=1U<<bit;
   if(slot<observation.links.size())observation.links[slot]=value;return ok;};
- if(taas!=1||motions!=1||grades!=1||ends!=1||hazes>1)plan_detail=1;
+ if(taas!=1||motions!=1||grades!=1||ends!=1||hazes>1||depth_colors>1)plan_detail=1;
  else if(endpoint!=grade+0x238)plan_detail=2;
- else if(!link(unit,0x150,check,0,8)||check!=motion_in||!link(unit,0x158,motion_out,1,4))plan_detail=3;
+ // With a depth-color filter the motion unit reads its output, not the TAA copy.
+ else if(!link(unit,0x150,check,0,8)||check!=(depth_colors?depth_out:motion_in)||!link(unit,0x158,motion_out,1,4))plan_detail=3;
  else if(!link(grade,0x248,grade_in,2,5)||!grade_in||!link(grade,0x250,grade_out,3,6))plan_detail=4;
  else if(!final_identity(final,s)||final.source.object!=grade_out)plan_detail=5;
  else if(!field(s.view,0x460,attachment)||!field(attachment,0x58,final_dest)||final_dest!=final.destination.object)plan_detail=6;
  if(!plan_detail&&hazes&&(haze_in!=motion_out||!haze_unit))plan_detail=7;
+ if(!plan_detail&&depth_colors&&(depth_in!=motion_in||!depth_unit))plan_detail=9;
  if(!plan_detail){
   for(unsigned i=0;i<observation.count;++i){const auto &v=observation.filters[i];
    if(v[1]==15&&v[2]>100&&v[2]<0x7fffff1&&v[5]&&v[6])middle_links[middle_size++]={static_cast<unsigned>((v[1]<<27)|v[2]),v[5],v[6]};}
@@ -615,6 +631,7 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  }
  if(plan_detail){plan_rejection=6;return false;}
  p.has_haze=hazes==1;
+ tb::Owner depth_output;if(depth_colors&&!owner(depth_out,depth_output)){plan_rejection=7;return false;}
  tb::Owner transfer,grade_input;
  if(!owner(grade_in,grade_input)){plan_rejection=7;return false;}p.grade_input_resource=grade_input.resource;
  if(!owner(motion_in,transfer)||!owner(motion_out,p.draws[0].output)||!owner(grade_out,p.draws[1].output)||!owner(final_dest,p.draws[2].output)){plan_rejection=7;return /* rejected */ false;}
@@ -657,6 +674,14 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
       return overlay_failure(OutputCommands::ambiguous_key,c.key,c.packet,base+j);}
     else overlay=&overlays[k];
    }
+   if(depth_colors&&c.key==0x78000050U){
+    if(!field(c.packet,0,raw)){plan_rejection=10;return false;}
+    if((raw&31)==11)continue;  // state-list packets remain native
+    if((raw&31)!=0||p.depth_stage!=UINT_MAX)return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
+    if(p.overlay_count==8)return overlay_failure(OutputCommands::draw_capacity,c.key,c.packet,base+j,raw,true);
+    const auto stage=4+p.overlay_count++;p.keys[stage]=c.key;p.draws[stage].output=depth_output;
+    p.draws[stage].dependency_source=0;p.draws[stage].draw.packet=c.packet;p.depth_stage=stage;continue;
+   }
    if(!overlay&&c.key!=0x78000002&&c.key!=0x78000064&&c.key!=0x7ffffff1&&c.key!=0x80000000&&c.key!=0x78004e20)continue;
    if(!field(c.packet,0,raw)){if(overlay){observation.command_gate={OutputCommands::packet_read,c.key,c.packet,base+j,0,0,overlay->seen,p.overlay_count};}plan_rejection=10;return /* rejected */ false;}
    if(overlay){
@@ -692,6 +717,7 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   }
  }
  for(unsigned i=0;i<found.size();++i)if(found[i]!=(i==3&&!p.has_haze?0U:1U)){plan_rejection=15;return /* rejected */ false;}
+ if(depth_colors&&p.depth_stage==UINT_MAX){plan_rejection=15;return false;}
  unsigned again{};std::uintptr_t again_array{};
  if(!field(s.context,0x2b80,again)||again!=commands||!field(s.context,0x2b78,again_array)||again_array!=array||!same_stamp(s)){plan_rejection=16;return /* rejected */ false;}
  for(unsigned stage=0;stage<4;++stage){if(stage==3&&!p.has_haze)continue;
@@ -715,6 +741,13 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  unsigned preceding=UINT_MAX;
  for(unsigned i=0;i<p.ordered_count;++i){const auto stage=p.order[i];
   if(stage<4){preceding=stage;continue;}
+  // The depth-color draw is first in native order (its key precedes every
+  // other effect); the motion filter, a base stage, must follow it.
+  if(stage==p.depth_stage){
+   if(i){plan_qualification=(stage<<16)|10U;return overlay_failure(OutputCommands::output_order,p.keys[stage],p.draws[stage].draw.packet);}
+   if(!geometry(p.draws[stage],s.context,stage))return overlay_failure(OutputCommands::geometry,p.keys[stage],p.draws[stage].draw.packet);
+   continue;
+  }
   if(preceding==UINT_MAX||preceding==2||(!p.draws[stage].dependency&&p.draws[stage].output!=p.draws[preceding].output)){plan_qualification=(stage<<16)|10U;return overlay_failure(OutputCommands::output_order,p.keys[stage],p.draws[stage].draw.packet);}
   if(!geometry(p.draws[stage],s.context,stage))return overlay_failure(OutputCommands::geometry,p.keys[stage],p.draws[stage].draw.packet);
   if(!p.draws[stage].dependency){
@@ -1373,7 +1406,8 @@ struct SceneWriteLock {SceneWriteLock(){AcquireSRWLockExclusive(&scene_write_loc
 void write_summary(std::ostream &o){
  Lock lock;const auto a=[&](const auto &v){o<<'[';for(unsigned i=0;i<v.size();++i){if(i)o<<',';o<<v[i];}o<<']';};
  o<<"{\"fault\":"<<fault.load()<<",\"published\":"<<published<<",\"built\":"<<built<<",\"claimed\":"<<claimed
-  <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"plan_rejections\":";a(rejection_counts);
+  <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"failure\":"<<std::quoted(failure)
+  <<",\"dependency_draws\":";a(dependency_draws);o<<",\"plan_rejections\":";a(rejection_counts);
  o<<",\"readiness\":";a(readiness.reasons());
  o<<",\"inserted_capture\":{\"attempts\":"<<inserted_dependencies.attempts()<<",\"samples\":"<<inserted_dependencies.size()<<",\"saved\":"<<inserted_saved<<",\"errors\":";
  a(inserted_dependencies.errors());o<<"},\"latest_rejection\":";
@@ -1405,7 +1439,7 @@ void write(std::ostream &o){
  o<<",\"extended_draws\":"<<overlay_extended_draws<<",\"extended_layout\":";
  if(overlay_extended_draws){o<<'[';for(unsigned i=0;i<overlay_extended_layout.size();++i){if(i)o<<',';o<<overlay_extended_layout[i];}o<<']';}else o<<"null";o<<"}";
  o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
- o<<",\"dependency_route\":{\"schema\":2,\"copy_draws\":"<<dependency_draws[0]<<",\"radial_draws\":"<<dependency_draws[1]<<",\"dof_draws\":"<<dependency_draws[2]<<",\"rejection\":"<<dependency_rejection<<",\"last_description\":[";
+ o<<",\"dependency_route\":{\"schema\":2,\"copy_draws\":"<<dependency_draws[0]<<",\"radial_draws\":"<<dependency_draws[1]<<",\"dof_draws\":"<<dependency_draws[2]<<",\"depth_color_draws\":"<<dependency_draws[3]<<",\"rejection\":"<<dependency_rejection<<",\"last_description\":[";
  for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}
  o<<"],\"texture_check\":"<<dependency_texture_check<<",\"failures\":"<<dependency_failures<<",\"first_failure\":[";
  for(unsigned i=0;i<dependency_first_failure.size();++i){if(i)o<<',';o<<dependency_first_failure[i];}o<<"]}";
