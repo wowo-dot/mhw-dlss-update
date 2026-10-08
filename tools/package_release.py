@@ -72,6 +72,8 @@ builds.
 
 Logs: mhw_dlss/logs, one file per launch. Please include it when reporting a
 problem.
+If the mod turns itself off before it can log, the reason is in
+mhw_dlss/startup-error.jsonl (with Mod Organizer 2: in its overwrite folder).
 
 Uninstall: delete winmm.dll and the mhw_dlss folder.
 
