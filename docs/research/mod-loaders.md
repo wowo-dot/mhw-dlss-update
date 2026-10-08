@@ -80,6 +80,30 @@ PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ.
   - 15,284 HUD-less frames tagged, 0 no_restore;
   - 0 exceptions, 0 Streamline errors.
 
+## CMFM's measurement and decision (2026-10-08)
+
+CMFM run entry-slot-1 (its `docs/research/entry-slot.md`) timed the same MO2
+setup by load time, in ms after process creation:
+
+| ms | Event |
+|---:|---|
+| 294 | System32 WINMM: a static import of steamclient64.dll, SteamStub's ownership check |
+| 586 | Our winmm.dll, through the game's delay-load (redirected by usvfs); d3d12.dll arrives with it as our DLL's static import |
+| 670 | dxgi |
+| 949–1043 | Device creation |
+| 4732 | Stracker's dinput8.dll |
+
+This explains the early System32 copy in game-51: static imports bypass
+usvfs's LoadLibrary redirection. Only WINMM, among the non-KnownDLL delay
+imports, is called before the device.
+
+CMFM chose its own launcher: start the game suspended, load `cmfm.dll`,
+resume. It uses no proxy slot, so there is no winmm.dll collision with this
+mod or SPL. Steam's Play button without launch options does not run the
+launcher, so this mod keeps its standalone winmm.dll mode. As a CMFM plugin it
+would load first; the single-instance mutex then keeps the standalone copy
+inert.
+
 ## Implications (hypotheses until tested)
 
 - SPL and the alpha both install winmm.dll in the game folder. One overwrites

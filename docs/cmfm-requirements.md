@@ -1,7 +1,8 @@
 # CMFM requirements (moved)
 
 The DLSS mod's requirements for CMFM (Configuration Menu For Mods) now live in
-the CMFM repository: `D:\mh world modding\CMFM\docsequirements-dlss-mod.md`.
+the CMFM repository: `D:\mh world modding\CMFM\docs
+equirements-dlss-mod.md`.
 That copy is canonical. Change it there, together with the CMFM agent, when this
 mod's needs change.
 
@@ -13,5 +14,7 @@ Summary of what this mod relies on:
 - typed settings, with `mhw_dlss.ini` kept as the source of truth;
 - warning popups and the game's AA/DLSS option lockout.
 
-Until CMFM exists, the mod ships standalone as `winmm.dll` + `mhw_dlss\`
-([research/mod-loaders.md](research/mod-loaders.md)).
+CMFM's entry is its own launcher (decided 2026-10-08, CMFM `docs/decisions.md`
+item 6). Steam's Play button without launch options does not start it, so the
+mod keeps its standalone `winmm.dll` + `mhw_dlss\` mode permanently, not only
+until CMFM exists ([research/mod-loaders.md](research/mod-loaders.md)).
