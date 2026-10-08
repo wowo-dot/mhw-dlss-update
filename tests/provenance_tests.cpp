@@ -496,7 +496,13 @@ int main(int argc,char **argv) {
     if(mode=="prewatch")construct();
     check(pv::install_owned_watch(config),"install watcher");std::string why;
     if(mode.rfind("readback_",0)==0) {
-      const auto path=std::filesystem::path(argc>2?std::string(argv[2])+".depth.f32":"readback-"+mode+"-"+std::to_string(GetCurrentProcessId())+".f32");
+      // A process ID alone repeats across runs (the save refuses an existing
+      // file); an automatic name also carries the tick and is removed on return.
+      const auto path=std::filesystem::path(argc>2?std::string(argv[2])+".depth.f32":
+        "readback-"+mode+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+".f32");
+      struct Remove{std::filesystem::path p;~Remove(){if(p.empty())return;std::error_code ignored;std::filesystem::remove(p,ignored);
+        for(unsigned i=0;i<8;++i)for(const char *ext:{".f32",".json"}){auto side=p;side+=".control-"+std::to_string(i)+ext;std::filesystem::remove(side,ignored);}}}
+        remove_output{argc>2?std::filesystem::path{}:path};
       if(config.triplet_readback)triplet_readback_case(path);else if(config.same_frame_readback)aligned_readback_case(path);else readback_case(path);
       if(mode=="readback_discard" || mode=="readback_resubmit") {
         check(pb::remove_owned() && pv::remove_owned_watch(),"discard hook cleanup");

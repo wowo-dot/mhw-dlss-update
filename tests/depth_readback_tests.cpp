@@ -55,7 +55,9 @@ int main(int argc,char **argv) {
     }
     dr::Site site{};site.marker=1;site.reset=2;site.barrier=4;site.copy=6;site.copy_exit=7;site.begin=8;
     site.command=address(list.Get());site.resource=address(source.Get());site.identity=address(canonical.Get());site.allocator=address(allocator.Get());
-    const auto path=std::filesystem::path("readback-"+mode+"-"+std::to_string(GetCurrentProcessId())+".f32");
+    // Unique per run (a reused process ID found the old file) and removed on return.
+    const auto path=std::filesystem::path("readback-"+mode+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())+".f32");
+    struct Remove{std::filesystem::path p;~Remove(){std::error_code ignored;std::filesystem::remove(p,ignored);}} remove_output{path};
     check(!capture.save(path.wstring()),"map before issue");
     if(mode=="identity")++site.identity;
     const bool issued=capture.issue(list.Get(),source.Get(),site);
