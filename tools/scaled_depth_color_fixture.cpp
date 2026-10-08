@@ -158,7 +158,7 @@ struct Fixture {
         auto cb=buffer(device.Get(),constants.size()*4,D3D12_HEAP_TYPE_UPLOAD);void *p{};D3D12_RANGE none{};hr(cb->Map(0,&none,&p),"CB map");std::memcpy(p,constants.data(),constants.size()*4);cb->Unmap(0,nullptr);
         // The production native and full-output vertices (the native triangle;
         // depth color keeps render-space UVs like haze).
-        const auto geometry=sf::effect_vertices(sf::EffectStage::depth_color,g,run!=Run::native);
+        const auto geometry=sf::effect_vertices(sf::EffectStage::screen_filter,g,run!=Run::native);
         auto vertices=buffer(device.Get(),48,D3D12_HEAP_TYPE_UPLOAD);
         {void *mapped{};D3D12_RANGE empty{};hr(vertices->Map(0,&empty,&mapped),"vertices");std::memcpy(mapped,geometry.values.data(),48);vertices->Unmap(0,nullptr);}
         static constexpr D3D12_INPUT_ELEMENT_DESC elements[]{

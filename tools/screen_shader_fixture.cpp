@@ -169,7 +169,7 @@ struct Gpu {
         auto out_desc=D3D12_RESOURCE_DESC{};out_desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;out_desc.Width=ow;out_desc.Height=oh;out_desc.DepthOrArraySize=out_desc.MipLevels=1;
         out_desc.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;out_desc.SampleDesc.Count=1;out_desc.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         auto output=resource(device.Get(),out_desc,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);device->CreateRenderTargetView(output.Get(),nullptr,rtv->GetCPUDescriptorHandleForHeapStart());
-        const auto geometry=sf::effect_vertices(sf::EffectStage::depth_color,g,false);
+        const auto geometry=sf::effect_vertices(sf::EffectStage::screen_filter,g,false);
         auto vertices=buffer(device.Get(),48,D3D12_HEAP_TYPE_UPLOAD);{void *p{};D3D12_RANGE none{};hr(vertices->Map(0,&none,&p),"vb");std::memcpy(p,geometry.values.data(),48);vertices->Unmap(0,nullptr);}
         static constexpr D3D12_INPUT_ELEMENT_DESC elements[]{{"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},{"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}};
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};pd.pRootSignature=root.Get();pd.VS={vs.data(),vs.size()};pd.PS={ps.data(),ps.size()};pd.InputLayout={elements,2};

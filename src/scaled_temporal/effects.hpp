@@ -8,9 +8,10 @@
 
 namespace mhw::scaled_temporal {
 // Values are stable diagnostic identities, not execution order. Haze, when
-// present, executes between motion_filter and color_grade; depth_color
-// (uDepthColorFilter) between the TAA copy and motion_filter.
-enum class EffectStage { motion_filter, color_grade, final_screen, haze, scene_copy, radial, dof_composite, depth_color };
+// present, executes between motion_filter and color_grade. screen_filter is
+// any approved single-pass filter (screen_filters.hpp), e.g. uDepthColorFilter
+// between the TAA copy and motion_filter.
+enum class EffectStage { motion_filter, color_grade, final_screen, haze, scene_copy, radial, dof_composite, screen_filter };
 struct EffectVertices {
     std::array<float,16> values{};
     unsigned count{};
