@@ -70,4 +70,8 @@ bool queue_disable() noexcept;
 void disabled(bool) noexcept;
 bool healthy() noexcept;
 void write(std::ostream &);
+// Counters only for the alpha's minute log: plan rejections by reason,
+// readiness rejections by reason, and the latest rejected plan graph when
+// there were new rejections since the previous call.
+void write_summary(std::ostream &);
 }

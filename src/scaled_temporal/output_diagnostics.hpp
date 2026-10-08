@@ -48,8 +48,17 @@ private:
  static bool same(const Submission &a,const Submission &b){return a[0]&&a[1]&&a[0]==b[0]&&a[1]==b[1];}
  void lookup(Submission &s)const {for(const auto &h:history_)if(same(s,h)&&(!s[3]||h[3]<s[3]))s=h;}
  template<class F>void each(F f){for(unsigned i=0;i<orders_.size()&&i<order_count_;++i)f(orders_[i]);if(order_count_>orders_.size())f(latest_);}
+ static void array(std::ostream &o,const auto &v){o<<'[';bool comma=false;for(auto x:v){if(comma)o<<',';o<<x;comma=true;}o<<']';}
+ static void write_graph(std::ostream &o,const GraphSample &s){const auto &v=s.value;const auto a=[&](const auto &x){array(o,x);};o<<"{\"ordinal\":"<<s.ordinal<<",\"at\":";a(v.at);
+  o<<",\"count\":"<<v.count<<",\"reason\":"<<v.reason<<",\"detail\":"<<v.detail<<",\"qualification\":"<<v.qualification<<",\"link_reads\":"<<v.link_reads<<",\"links\":";a(v.links);
+  o<<",\"vertex_gate\":";if((v.qualification&65535U)==3U)a(v.vertex_gate);else o<<"null";
+  o<<",\"command_gate\":";if(v.command_gate[0])a(v.command_gate);else o<<"null";
+  o<<",\"filters\":[";for(unsigned i=0;i<v.count;++i){if(i)o<<',';a(v.filters[i]);}o<<"]}";}
 public:
  OutputCommands commands;
+ std::uint64_t rejected_graphs() const {return graph_rejected_;}
+ // The latest rejected plan graph (filters, links, failed gate), or null.
+ void write_latest_rejection(std::ostream &o) const {if(graph_rejected_)write_graph(o,graph_latest_);else o<<"null";}
  void graph(const Graph &g,bool accepted){
   ++graph_attempts_;
   if(accepted){if(!graph_accepted_++)graph_baseline_={graph_attempts_,g};return;}
@@ -79,12 +88,8 @@ public:
   }
  }
  void write(std::ostream &o)const{
-  const auto a=[&](const auto &v){o<<'[';bool comma=false;for(auto x:v){if(comma)o<<',';o<<x;comma=true;}o<<']';};
-  const auto graph=[&](const GraphSample &s){const auto &v=s.value;o<<"{\"ordinal\":"<<s.ordinal<<",\"at\":";a(v.at);
-   o<<",\"count\":"<<v.count<<",\"reason\":"<<v.reason<<",\"detail\":"<<v.detail<<",\"qualification\":"<<v.qualification<<",\"link_reads\":"<<v.link_reads<<",\"links\":";a(v.links);
-   o<<",\"vertex_gate\":";if((v.qualification&65535U)==3U)a(v.vertex_gate);else o<<"null";
-   o<<",\"command_gate\":";if(v.command_gate[0])a(v.command_gate);else o<<"null";
-   o<<",\"filters\":[";for(unsigned i=0;i<v.count;++i){if(i)o<<',';a(v.filters[i]);}o<<"]}";};
+  const auto a=[&](const auto &v){array(o,v);};
+  const auto graph=[&](const GraphSample &s){write_graph(o,s);};
   const auto order=[&](const Order &v){o<<"{\"ordinal\":"<<v.ordinal<<",\"frame\":"<<v.frame<<",\"epoch\":"<<v.epoch<<",\"tick\":"<<v.tick<<",\"executed\":"<<v.executed<<",\"packets\":";a(v.packets);
    o<<",\"identity\":";a(v.identity);o<<",\"draws\":[";for(unsigned i=0;i<4;++i){if(i)o<<',';a(v.draws[i]);}o<<"],\"submissions\":[";for(unsigned i=0;i<5;++i){if(i)o<<',';a(v.submissions[i]);}o<<"]}";};
   o<<"{\"schema\":2,\"policy\":\"bounded-output-correlations-v2\",\"diagnostic_only\":true,\"capacity\":4,\"history_capacity\":128,\"graph_attempts\":"<<graph_attempts_

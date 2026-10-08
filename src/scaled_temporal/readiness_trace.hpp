@@ -28,6 +28,7 @@ private:
     std::uint64_t attempts_{},accepted_{},rejected_{};
     std::array<std::uint64_t,reason_count> reasons_{};
 public:
+    const std::array<std::uint64_t,reason_count> &reasons() const {return reasons_;}
     template<class Capture>void note(Reason reason,Capture capture) noexcept {
         ++attempts_;++reasons_[reason];
         if(reason==accepted){if(!accepted_++)baseline_={capture(),attempts_,0,reason};return;}

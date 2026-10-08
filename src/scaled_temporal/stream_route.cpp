@@ -234,6 +234,8 @@ std::uint64_t published{},built{},unqualified{},claimed{},copies{},draws{},warmu
 std::uint64_t haze_claimed{},haze_complete{},haze_draws{};
 std::uint64_t final_captured{},final_rejected{};
 std::uint64_t spatial_frames{},native_frames{},prepared_frames{},early_draws{},multilist_frames{},submitted_frames{};
+std::array<std::uint64_t,19> rejection_counts{};  // rejected plan builds by graph reason (18: other)
+std::uint64_t summarized_rejections{};
 bool abandoned{};
 std::string failure;unsigned plan_rejection{},plan_detail{},plan_qualification{};
 std::array<std::uint64_t,10> plan_vertex_gate{};
@@ -742,6 +744,7 @@ bool build_plan(Plan &p,std::uintptr_t unit){
  if(!accepted)compute_dependencies.observe_compute_bundle(observation,[](std::uint64_t at,void *out,std::size_t bytes){
   return pb::copy_memory(static_cast<std::uintptr_t>(at),out,static_cast<unsigned>(bytes));},[&]{return same_stamp(s);},cfg.image+0x3526650);
  compute_gpu_capture();
+ if(!accepted)++rejection_counts[(std::min)(observation.reason,18U)];
  diagnostics.graph(observation,accepted);return accepted;
 }
 struct PostReceipt {unsigned slot{UINT_MAX};std::uint64_t frame{},epoch{};std::uintptr_t unit{};unsigned thread{};};
@@ -1357,6 +1360,14 @@ SceneTrace scene_snapshot;
 SRWLOCK scene_write_lock=SRWLOCK_INIT;
 struct SceneWriteLock {SceneWriteLock(){AcquireSRWLockExclusive(&scene_write_lock);}~SceneWriteLock(){ReleaseSRWLockExclusive(&scene_write_lock);}};
 #endif
+void write_summary(std::ostream &o){
+ Lock lock;const auto a=[&](const auto &v){o<<'[';for(unsigned i=0;i<v.size();++i){if(i)o<<',';o<<v[i];}o<<']';};
+ o<<"{\"fault\":"<<fault.load()<<",\"published\":"<<published<<",\"built\":"<<built<<",\"claimed\":"<<claimed
+  <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"plan_rejections\":";a(rejection_counts);
+ o<<",\"readiness\":";a(readiness.reasons());o<<",\"latest_rejection\":";
+ if(diagnostics.rejected_graphs()!=summarized_rejections)diagnostics.write_latest_rejection(o);else o<<"null";
+ summarized_rejections=diagnostics.rejected_graphs();o<<'}';
+}
 void write(std::ostream &o){
 #ifdef MHW_FG_SCENE_PROBE
  SceneWriteLock scene_guard;
