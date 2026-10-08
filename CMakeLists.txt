@@ -826,11 +826,7 @@ if(TARGET mhw_dlss_sdk_live)
             mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
         target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
         target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
-        # Shipped as winmm.dll in the game folder (src/winmm_proxy): every winmm export
-        # passes through to the system DLL; MHW delay-loads it (first winmm call).
-        target_sources(mhw_dlss_alpha PRIVATE src/winmm_proxy/winmm_proxy.cpp src/winmm_proxy/winmm_stubs.asm
-            src/winmm_proxy/winmm_exports.def)
-        target_include_directories(mhw_dlss_alpha PRIVATE src/winmm_proxy)
+        # A CMFM plugin: CMFM injects it from its plugin folder (MO2 force-load in development).
         set_target_properties(mhw_dlss_alpha PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # Opt-in metadata variant; default observer targets retain their behavior.
@@ -1030,19 +1026,6 @@ if(BUILD_TESTING)
     target_compile_options(restore_bindings_gpu_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     set_target_properties(restore_bindings_gpu_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME restore_bindings_gpu COMMAND restore_bindings_gpu_tests)
-    # The alpha's winmm.dll pass-through on its own, under its shipping name.
-    add_library(winmm_proxy_standalone SHARED src/winmm_proxy/winmm_proxy.cpp src/winmm_proxy/winmm_stubs.asm
-        src/winmm_proxy/winmm_exports.def)
-    target_compile_features(winmm_proxy_standalone PRIVATE cxx_std_20)
-    target_include_directories(winmm_proxy_standalone PRIVATE src/winmm_proxy)
-    target_compile_options(winmm_proxy_standalone PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8>)
-    set_target_properties(winmm_proxy_standalone PROPERTIES OUTPUT_NAME winmm RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/winmm_proxy")
-    add_executable(winmm_proxy_tests tests/winmm_proxy_tests.cpp)
-    target_compile_features(winmm_proxy_tests PRIVATE cxx_std_20)
-    target_compile_options(winmm_proxy_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
-    set_target_properties(winmm_proxy_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-    add_dependencies(winmm_proxy_tests winmm_proxy_standalone)
-    add_test(NAME winmm_proxy COMMAND winmm_proxy_tests $<TARGET_FILE:winmm_proxy_standalone>)
     add_test(NAME temporal_present_warp COMMAND mhw_temporal_present_fixture --warp)
     add_test(NAME temporal_spatial_warp COMMAND mhw_temporal_present_fixture --spatial)
     add_test(NAME temporal_spatial_fractional_warp COMMAND mhw_temporal_present_fixture --spatial-fractional)

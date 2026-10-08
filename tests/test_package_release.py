@@ -48,8 +48,8 @@ class PackageRelease(unittest.TestCase):
         self.run_tool()
         folder = self.out / 'mhw-dlss-9.8.7'
         data = folder / 'mhw_dlss'
-        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['mhw_dlss', 'winmm.dll'])
-        self.assertEqual(pr.sha(folder / 'winmm.dll'), pr.sha(self.dll))
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['mhw_dlss'])
+        self.assertEqual(pr.sha(data / 'mhw_dlss.dll'), pr.sha(self.dll))
         for name in ['mhw_dlss.ini', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
                      *pr.STREAMLINE, *pr.NGX, *(f'licenses/{dst}' for _, dst in pr.LICENSES['streamline'] + pr.LICENSES['dlss'])]:
             self.assertTrue((data / name).is_file(), name)
@@ -63,7 +63,9 @@ class PackageRelease(unittest.TestCase):
         self.assertIn('runtime_dir = .', ini); self.assertIn('log_dir = logs', ini)
         readme = (data / 'README.txt').read_text(encoding='utf-8')
         self.assertIn('not affiliated with, sponsored or endorsed by NVIDIA', readme)
-        self.assertIn('delete winmm.dll and the mhw_dlss folder', readme)
+        self.assertIn('Uninstall: delete the mhw_dlss folder.', readme)
+        self.assertIn('CMFM', readme)
+        self.assertNotIn('winmm', readme)
         with zipfile.ZipFile(self.out / 'mhw-dlss-9.8.7.zip') as z:
             self.assertEqual(sorted(z.namelist()),
                              sorted(f'mhw-dlss-9.8.7/{p}' for p in [e['path'] for e in manifest['files']] + ['mhw_dlss/manifest.json']))

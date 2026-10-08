@@ -29,8 +29,8 @@
 // itself once the game is ready and runs until exit, with light logging.
 namespace {
 mhw::alpha::Config alpha_config;
-// The shipped layout's mhw_dlss folder (empty under MO2 force-load): the only
-// place inside the game folder the alpha reads its runtime from and logs to.
+// The plugin's own folder (empty when the DLL sits in the game folder itself):
+// the only place inside the game folder the alpha reads its runtime from and logs to.
 // Lexical, as the configuration's paths are: under MO2 the module reports its
 // virtual game-folder path while canonical() resolves to the mod's real folder.
 std::wstring alpha_home;
@@ -586,8 +586,8 @@ DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
         reinterpret_cast<LPCWSTR>(&worker), &pin)) return 1;
-    {   // One active copy per process: a second one (e.g. force-loaded and also
-        // present as winmm.dll) stays inert. The handle lives as long as the process.
+    {   // One active copy per process: a second one (e.g. loaded by CMFM and also
+        // force-loaded by MO2) stays inert. The handle lives as long as the process.
         const auto name = L"Local\\mhw_dlss.instance." + std::to_wstring(GetCurrentProcessId());
         const HANDLE instance = CreateMutexW(nullptr, FALSE, name.c_str());
         if (!instance || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
@@ -601,12 +601,15 @@ DWORD WINAPI worker(void*) noexcept {
         const std::filesystem::path dll(dll_name);
 #ifdef MHW_ALPHA
         {
-            // Shipped layout: winmm.dll in the game folder, its configuration,
-            // NVIDIA runtime and logs in the mhw_dlss folder next to it.
-            auto base = dll.parent_path(); std::error_code missing;
-            if (std::filesystem::is_regular_file(base / L"mhw_dlss" / L"mhw_dlss.ini", missing)) {
-                base /= L"mhw_dlss"; alpha_home = base.lexically_normal().wstring();
-            }
+            // Plugin layout: mhw_dlss.dll, mhw_dlss.ini, the NVIDIA runtime and
+            // logs in one folder, injected by CMFM (MO2 force-load in development).
+            // With the ini beside the DLL in a folder of its own (not the game
+            // folder itself), that folder is the one place inside the game
+            // folder the alpha may read its runtime from and log to.
+            const auto base = dll.parent_path().lexically_normal(); std::error_code missing;
+            const auto game_folder = std::filesystem::path(host_name).parent_path().lexically_normal();
+            if (std::filesystem::is_regular_file(base / L"mhw_dlss.ini", missing) && _wcsicmp(base.c_str(), game_folder.c_str()))
+                alpha_home = base.wstring();
             alpha_base = base;
             std::ifstream in(base / L"mhw_dlss.ini", std::ios::binary);
             const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -643,8 +646,8 @@ DWORD WINAPI worker(void*) noexcept {
         for (const auto& path : {output, runtime}) {
             const auto text = path.wstring();
 #ifdef MHW_ALPHA
-            // The shipped layout keeps the NVIDIA runtime and logs in the mod's own
-            // mhw_dlss folder inside the game folder; nothing else there is used.
+            // The plugin folder may sit inside the game folder (CMFM, MO2 virtual
+            // paths); nothing else there is used.
             if (!alpha_home.empty() && under(path.lexically_normal().wstring(), alpha_home)) continue;
 #endif
             require(!under(text, game_root), "configuration-in-game-directory");
@@ -678,7 +681,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.10\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.11\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
         log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.14\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
@@ -1107,7 +1110,7 @@ DWORD WINAPI worker(void*) noexcept {
         // one line next to mhw_dlss.ini so the silent fail-closed is explainable.
         if (!log.is_open() && !alpha_base.empty()) try {
             std::ofstream early(alpha_base / L"startup-error.jsonl", std::ios::binary | std::ios::app);
-            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.13.10\",\"pid\":" << GetCurrentProcessId()
+            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.13.11\",\"pid\":" << GetCurrentProcessId()
                 << ",\"reason\":" << quoted(e.what()) << "}\n" << std::flush;
         } catch (...) {}
 #endif

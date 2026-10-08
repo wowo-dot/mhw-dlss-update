@@ -15,6 +15,18 @@ Summary of what this mod relies on:
 - warning popups and the game's AA/DLSS option lockout.
 
 CMFM's entry is its own launcher (decided 2026-10-08, CMFM `docs/decisions.md`
-item 6). Steam's Play button without launch options does not start it, so the
-mod keeps its standalone `winmm.dll` + `mhw_dlss\` mode permanently, not only
-until CMFM exists ([research/mod-loaders.md](research/mod-loaders.md)).
+item 6). **CMFM is a requirement of this mod** (user's decision, 2026-10-08).
+There is no standalone `winmm.dll` mode any more (removed in v0.13.11). The
+mod is a plain `mhw_dlss.dll` in a self-contained plugin folder
+(`mhw_dlss.dll`, `mhw_dlss.ini`, NVIDIA runtime, `logs`).
+
+What CMFM's loader must do for it, before any API exists:
+- Load `mhw_dlss.dll` by full path before the game loads dxgi.dll and creates
+  its device: at injection or at the post-unpack phase. Its DllMain only
+  starts a worker thread.
+- Load only that DLL from the folder. The NVIDIA DLLs beside it
+  (`sl.*.dll`, `nvngx_*.dll`) are not plugins, and the mod loads them itself
+  by full path after hash checks.
+- Keep the plugin folder separate from the game folder itself. That folder is
+  the one place inside the game folder the mod reads its runtime from and
+  logs to.

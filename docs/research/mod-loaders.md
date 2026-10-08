@@ -99,10 +99,14 @@ imports, is called before the device.
 
 CMFM chose its own launcher: start the game suspended, load `cmfm.dll`,
 resume. It uses no proxy slot, so there is no winmm.dll collision with this
-mod or SPL. Steam's Play button without launch options does not run the
-launcher, so this mod keeps its standalone winmm.dll mode. As a CMFM plugin it
-would load first; the single-instance mutex then keeps the standalone copy
-inert.
+mod or SPL.
+
+**User's decision, 2026-10-08: CMFM is a requirement of this mod.** There is
+no standalone mode. v0.13.11 removed the winmm.dll proxy (src/winmm_proxy, its
+generator and test). The mod is now a plain `mhw_dlss.dll` in its own plugin
+folder, beside `mhw_dlss.ini`, the NVIDIA runtime and its logs. CMFM injects
+it; MO2 force-load does the same during development. The single-instance mutex
+stays.
 
 ## Implications (hypotheses until tested)
 

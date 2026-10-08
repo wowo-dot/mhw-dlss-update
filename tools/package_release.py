@@ -3,11 +3,10 @@
   python -B tools/package_release.py --dll <built mhw_dlss_alpha.dll> --version X.Y.Z
       --streamline-sdk <Streamline SDK root> --dlss-sdk <DLSS SDK root> --out <folder>
 
-Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as
-the game folder receives it:
+Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip. The package
+is one CMFM plugin folder; CMFM (required) injects mhw_dlss.dll from it:
 
-  winmm.dll                         the mod (MHW delay-loads winmm.dll; every
-                                    winmm function passes through to Windows)
+  mhw_dlss/mhw_dlss.dll             the mod
   mhw_dlss/mhw_dlss.ini             default configuration
   mhw_dlss/sl.*.dll, nvngx_dlss*    NVIDIA runtime, unmodified, verified by SHA-256
   mhw_dlss/licenses/                NVIDIA's license files for those DLLs
@@ -60,11 +59,10 @@ Requirements
   turns itself off and the game runs normally.
 - The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
   plugin setups already have.
+- CMFM, which loads this mod. Start the game through CMFM's launcher.
 
-Install: copy winmm.dll and the mhw_dlss folder into the game folder (next to
-MonsterHunterWorld.exe), or install the archive as a mod in Mod Organizer 2.
-It works with or without Stracker's Loader. It cannot share the game folder
-with another mod's winmm.dll; SharpPluginLoader also installs one.
+Install: put the mhw_dlss folder into CMFM's plugin folder (see CMFM's install
+guide), or install the archive as a mod in Mod Organizer 2.
 
 Configuration: mhw_dlss/mhw_dlss.ini (comments in the file). DLSS currently
 runs at Performance quality (half resolution); other modes come with later
@@ -75,7 +73,7 @@ problem.
 If the mod turns itself off before it can log, the reason is in
 mhw_dlss/startup-error.jsonl (with Mod Organizer 2: in its overwrite folder).
 
-Uninstall: delete winmm.dll and the mhw_dlss folder.
+Uninstall: delete the mhw_dlss folder.
 
 Credits and licenses
 This mod uses NVIDIA DLSS, NVIDIA DLSS Frame Generation, NVIDIA Streamline
@@ -131,7 +129,7 @@ def main():
 
     data = folder / 'mhw_dlss'
     (data / 'licenses').mkdir(parents=True)
-    shutil.copyfile(a.dll, folder / 'winmm.dll')
+    shutil.copyfile(a.dll, data / 'mhw_dlss.dll')
     (data / 'mhw_dlss.ini').write_text(INI, encoding='utf-8', newline='\r\n')
     for root, pins in sources:
         for file in pins:
