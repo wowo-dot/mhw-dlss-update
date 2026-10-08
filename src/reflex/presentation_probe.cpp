@@ -572,6 +572,42 @@ void poll_perf(std::ostream& out, const std::filesystem::path& folder, const std
     out << "{\"event\":\"perf_toggles\",\"request\":" << requests << ",\"mask\":" << mask << ",\"previous\":" << previous
         << ",\"accepted\":" << accepted << "}\n" << std::flush;
 }
+#ifndef MHW_ALPHA
+// Experiment (v0.12.11, perf bit pf_full_scale; docs/research/native-dlss-path.md):
+// while the bit is on, the renderer's post-filter content scale (renderer+504,
+// "ContentScalePF") is set to ContentScaleBase (+516); clearing the bit
+// restores the saved value if the game has not changed it meanwhile. One
+// float the game reads; checked by page protection and value range first.
+struct PfScale { bool applied{}; float original{}, written{}; unsigned overwritten{}; } pf_scale;
+bool write_float(std::uintptr_t at, float value) noexcept {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!VirtualQuery(reinterpret_cast<void*>(at), &m, sizeof(m)) || m.State != MEM_COMMIT ||
+        !(m.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) || (m.Protect & PAGE_GUARD)) return false;
+    __try { *reinterpret_cast<volatile float*>(at) = value; return true; } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void apply_pf_scale(std::ostream& out) {
+    const bool want = mhw::perf::on(mhw::perf::pf_full_scale);
+    if (!want && !pf_scale.applied) return;
+    std::uintptr_t renderer{}; float scene{}, pf{}, base{};
+    const bool read = image && pb::read(image + 0x51C4480, renderer) && renderer && pb::read(renderer + 500, scene) &&
+        pb::read(renderer + 504, pf) && pb::read(renderer + 516, base);
+    const auto event = [&](const char* phase, bool ok) {
+        out << "{\"event\":\"pf_scale\",\"phase\":\"" << phase << "\",\"ok\":" << ok << ",\"scene\":" << scene << ",\"pf\":" << pf
+            << ",\"base\":" << base << ",\"original\":" << pf_scale.original << ",\"overwritten\":" << pf_scale.overwritten << "}\n" << std::flush; };
+    if (want && !pf_scale.applied) {
+        const bool ok = read && base == 1.0f && pf > 0.0f && pf <= 1.0f && write_float(renderer + 504, base);
+        if (ok) pf_scale = {true, pf, base, 0};
+        event("apply", ok);
+        if (!ok) mhw::perf::toggles.fetch_and(~unsigned(mhw::perf::pf_full_scale));
+    } else if (want) {
+        // Re-assert if the game rewrote it (a settings change); count each one.
+        if (read && pf != pf_scale.written) { ++pf_scale.overwritten; write_float(renderer + 504, pf_scale.written); event("reassert", true); }
+    } else {
+        const bool ok = read && pf == pf_scale.written && write_float(renderer + 504, pf_scale.original);
+        event("restore", ok); pf_scale.applied = false;
+    }
+}
+#endif
 #endif
 DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
@@ -650,7 +686,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_ALPHA
         log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.6\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.10\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.11\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
             << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
@@ -782,6 +818,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_FG_GAME
                 log_lifecycle(log);
                 poll_perf(log,output,name,creation,perf_requests);
+                apply_pf_scale(log);
                 if(GetTickCount64()-window_start>=5000){log_frames(log,"unarmed");mhw::perf::sampler::write(log);window_start=GetTickCount64();}
 #endif
                 Sleep(100);
