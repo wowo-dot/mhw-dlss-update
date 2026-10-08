@@ -1,12 +1,20 @@
 // All access serialized by the route lock. No native bytecode is modified.
-std::array<std::shared_ptr<SilhouetteCpu>,32> silhouette_cpu_cache;
+std::array<std::shared_ptr<SilhouetteCpu>,64> silhouette_cpu_cache;
 struct SilhouettePipeline {
  std::shared_ptr<SilhouetteCpu> recipe;std::unique_ptr<SilhouetteDraw> draw;
 };
-std::array<SilhouettePipeline,32> silhouette_pipelines;
+std::array<SilhouettePipeline,64> silhouette_pipelines;
 std::uint64_t silhouette_recorded{},silhouette_native{},silhouette_corrected{},silhouette_restored{};
 std::array<std::uint64_t,12> silhouette_rejections{};
 unsigned silhouette_cache_count{};
+// Pixel shaders outside the allowlist, by engine code identity, so a rejected
+// program is copied and hashed once rather than on every draw. A stale entry
+// can only keep a draw native.
+struct SilhouetteUnknown {std::uintptr_t set{},data{};unsigned size{};};
+std::array<SilhouetteUnknown,32> silhouette_unknown{};
+unsigned silhouette_unknown_count{};
+std::uint64_t silhouette_unknown_draws{},silhouette_cache_full{};
+ShaderHash silhouette_unknown_hash{};
 bool silhouette_code_stable(const SilhouetteCpu &r){
  for(unsigned i=0;i<2;++i){const auto &s=r.identity[i];std::uintptr_t entry{},desc{},data{};unsigned size{};
   if(!field(r.set,0x50+8*i,entry)||entry!=s.entry||!field(entry,0x10,desc)||desc!=s.descriptor||
@@ -22,15 +30,23 @@ std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet){
  if(!pb::snapshot_native_pipeline(cfg.image,packet,native)||!field(native.shader_handle,0,set)||!set||native.input_count>32)return {};
  for(const auto &cached:silhouette_cpu_cache)if(cached&&cached->set==set&&silhouette_recipe_equal(cached->native,native)){
   if(!layout(cached->layout,true)||!silhouette_code_stable(*cached))return {};return cached;}
+ {std::uintptr_t entry{},descriptor{},data{};unsigned size{};
+  if(field(set,0x58,entry)&&field(entry,0x10,descriptor)&&field(descriptor,0,size)&&field(descriptor,8,data))
+   for(unsigned i=0;i<silhouette_unknown_count;++i){const auto &u=silhouette_unknown[i];
+    if(u.set==set&&u.data==data&&u.size==size){++silhouette_unknown_draws;return {};}}}
  unsigned empty=UINT_MAX;for(unsigned i=0;i<silhouette_cpu_cache.size();++i)if(!silhouette_cpu_cache[i]){empty=i;break;}
- if(empty==UINT_MAX)return {};
+ if(empty==UINT_MAX){++silhouette_cache_full;return {};}
  auto r=std::make_shared<SilhouetteCpu>();r->native=native;r->set=set;r->layout.before.pipeline=native;
  if(!layout(r->layout,false))return {};
  for(unsigned i=0;i<2;++i){auto &s=r->identity[i];
   if(!field(set,0x50+8*i,s.entry)||!field(s.entry,0x10,s.descriptor)||!field(s.descriptor,0,s.size)||s.size<52||s.size>131072||!field(s.descriptor,8,s.data))return {};
   r->bytes[i].resize(s.size);if(!pb::copy_memory(s.data,r->bytes[i].data(),s.size)||!pb::dxbc_valid(r->bytes[i].data(),s.size))return {};
  }
- if(!known_silhouette_shader(r->bytes[1]))return {};
+ if(!known_silhouette_shader(r->bytes[1])){
+  ++silhouette_unknown_draws;shader_sha256(r->bytes[1],silhouette_unknown_hash);
+  if(silhouette_unknown_count<silhouette_unknown.size())
+   silhouette_unknown[silhouette_unknown_count++]={set,r->identity[1].data,r->identity[1].size};
+  return {};}
  silhouette_cpu_cache[empty]=r;return r;
 }
 IndexedScope indexed_before(const pb::Frame &f) noexcept {
@@ -49,6 +65,10 @@ IndexedScope indexed_before(const pb::Frame &f) noexcept {
   if(!field(f.gpr[1],8,scope.state)||!field(scope.state,0x20,scope.draw.command))fail(14);
  }catch(...){Lock lock;fail(14);}return scope;
 }
+// Engine global binding IDs (shader census): CBScreen 12, CBMhMaterialGlobal
+// 433, tVolumeBlendDepthMap 159, tGBuffer1 41. The hidden-surface variants bind
+// them in different registers (mask t1..t20, material b5 or b6); only some
+// sample depth. Screen, material and mask are required.
 bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std::array<unsigned,5> &material,
                          std::array<ComPtr<ID3D12Resource>,2> &textures){
  const auto set=r.recipe->set,graphics=r.bindings[2];std::uintptr_t words{},ids{},modes{};unsigned count{};std::array<unsigned short,2> range{};
@@ -56,18 +76,18 @@ bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std
     !field(set,0x14,range)||range[0]>128||unsigned(range[0])+range[1]>4096)return false;
  std::array<unsigned,128> binding{};unsigned found{};
  if(!pb::copy_memory(words+4ULL*range[1],binding.data(),4*range[0]))return false;
- for(unsigned i=0;i<range[0];++i){const auto w=binding[i],kind=w&15,index=(w>>4)&255,reg=w>>24;
-  const unsigned wanted=kind==0&&reg==1?0:kind==0&&reg==5?1:kind==2&&reg==0?2:kind==2&&reg==18?3:UINT_MAX;
-  if(wanted==UINT_MAX)continue;unsigned id{};unsigned char mode{};std::uintptr_t object{};
-  constexpr unsigned expected[]{12,433,159,41};
-  if(index>=count||(found&(1U<<wanted))||!field(ids,index*4,id)||id!=expected[wanted]||!field(modes,index,mode)||mode||
-     !field(graphics,0x30+8*index,object)||!object)return false;
+ for(unsigned i=0;i<range[0];++i){const auto w=binding[i],kind=w&15,index=(w>>4)&255;
+  if((kind!=0&&kind!=2)||index>=count)continue;unsigned id{};
+  if(!field(ids,index*4,id))return false;
+  const unsigned wanted=kind==0&&id==12?0:kind==0&&id==433?1:kind==2&&id==159?2:kind==2&&id==41?3:UINT_MAX;
+  if(wanted==UINT_MAX)continue;unsigned char mode{};std::uintptr_t object{};
+  if((found&(1U<<wanted))||!field(modes,index,mode)||mode||!field(graphics,0x30+8*index,object)||!object)return false;
   found|=1U<<wanted;
   if(wanted<2){if(wanted==0?!pb::copy_memory(object,screen.data(),sizeof(screen)):!pb::copy_memory(object,material.data(),sizeof(material)))return false;}
   else{tb::Owner owner;if(!tb::read_owner(reader,object,owner)||!indexed_description(owner.resource)[1])return false;
    textures[wanted-2]=reinterpret_cast<ID3D12Resource *>(owner.resource);}
  }
- return found==15;
+ return (found&11U)==11U;
 }
 bool silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers){
  if(!b.ready()||b.vertex_mask!=1||!b.index_known||b.topology!=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST||b.index_buffer.Format!=DXGI_FORMAT_R16_UINT)return false;
@@ -79,7 +99,7 @@ bool silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::ar
   if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||description[3]<bytes||description[13]!=address)return false;
   if(i){if(b.index_buffer.BufferLocation!=address+offset||b.index_buffer.SizeInBytes!=bytes-offset||
       (UINT64(r.arguments[0])+r.arguments[1])*2>b.index_buffer.SizeInBytes)return false;}
-  else{if(!field(ia,0x20,stride)||(stride!=32&&stride!=36&&stride!=40)||b.vertex_buffer.BufferLocation!=address+offset||
+  else{if(!field(ia,0x20,stride)||(stride<12||stride>128||stride%4)||b.vertex_buffer.BufferLocation!=address+offset||
       b.vertex_buffer.SizeInBytes!=bytes-offset||b.vertex_buffer.StrideInBytes!=stride)return false;}
   buffers[i]=reinterpret_cast<ID3D12Resource *>(resource);
  }return true;
@@ -123,8 +143,8 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  const auto &b=blend.RenderTarget[0];
  if(b.RenderTargetWriteMask!=15||!b.BlendEnable||b.LogicOpEnable||b.SrcBlend!=D3D12_BLEND_SRC_ALPHA||b.DestBlend!=D3D12_BLEND_INV_SRC_ALPHA||
     b.BlendOp!=D3D12_BLEND_OP_ADD||b.SrcBlendAlpha!=D3D12_BLEND_ONE||b.DestBlendAlpha!=D3D12_BLEND_ZERO||b.BlendOpAlpha!=D3D12_BLEND_OP_ADD||
-    blend.AlphaToCoverageEnable||depth.DepthEnable||depth.StencilEnable||rs.FillMode!=D3D12_FILL_MODE_SOLID||rs.CullMode!=D3D12_CULL_MODE_BACK||
-    !rs.FrontCounterClockwise||!rs.DepthClipEnable||rs.DepthBias||rs.DepthBiasClamp||rs.SlopeScaledDepthBias||rs.MultisampleEnable||rs.AntialiasedLineEnable||
+    blend.AlphaToCoverageEnable||depth.DepthEnable||depth.StencilEnable||rs.FillMode!=D3D12_FILL_MODE_SOLID||
+    !rs.DepthClipEnable||rs.DepthBias||rs.DepthBiasClamp||rs.SlopeScaledDepthBias||rs.MultisampleEnable||rs.AntialiasedLineEnable||
     rs.ForcedSampleCount||rs.ConservativeRaster!=D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF)return native(2);
  for(unsigned i=0;i<3;++i){std::uintptr_t extra{};if(!field(r.recipe->set,0x60+8*i,extra)||extra)return native(3);}
  const auto &v=raster.viewport;const auto &sc=raster.scissor;
@@ -136,12 +156,13 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
     screen[4]!=std::bit_cast<unsigned>(float(width))||screen[5]!=std::bit_cast<unsigned>(float(height))||screen[6]!=std::bit_cast<unsigned>(1.F/width)||screen[7]!=std::bit_cast<unsigned>(1.F/height)||
     screen[10]!=render_w||screen[11]!=render_h||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(render_w))||screen[15]!=std::bit_cast<unsigned>(float(render_h))||
     screen[16]!=std::bit_cast<unsigned>(2.F/width)||screen[17]!=std::bit_cast<unsigned>(2.F/height))return native(6);
- for(unsigned i=0;i<2;++i){const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
+ for(unsigned i=0;i<2;++i){if(!textures[i])continue;const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
     d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))return native(7);}
  if(!silhouette_buffers(r,raster,buffers)||!layout(r.recipe->layout,true)||!silhouette_code_stable(*r.recipe))return native(8);
  for(auto ptr:{root,pipeline}){std::uintptr_t method{};for(unsigned slot:{0U,2U,7U})if(!pb::system_method(ptr,slot,method))return native(9);}
  auto *cache=silhouette_pipeline(r.recipe,reinterpret_cast<ID3D12RootSignature *>(root));if(!cache)return native(10);
- std::array<IUnknown *,9> pins{reinterpret_cast<IUnknown *>(pipeline),reinterpret_cast<IUnknown *>(root),textures[0].Get(),textures[1].Get(),buffers[0].Get(),buffers[1].Get(),cache->draw->pipeline()};unsigned size=7;
+ std::array<IUnknown *,9> pins{reinterpret_cast<IUnknown *>(pipeline),reinterpret_cast<IUnknown *>(root),textures[1].Get(),buffers[0].Get(),buffers[1].Get(),cache->draw->pipeline()};unsigned size=6;
+ if(textures[0])pins[size++]=textures[0].Get();
  for(auto heap:roots.heaps)if(heap)pins[size++]=reinterpret_cast<IUnknown *>(heap);
  if(!retain_recording(p,list,roots.generation,std::span(pins).first(size)))throw std::runtime_error("silhouette draw pins");
  injecting=true;
@@ -157,6 +178,14 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
 void silhouette_after(bool returned) noexcept {
  if(indexed_scope.slot==UINT_MAX)return;Lock lock;
  if(!returned||indexed_scope.calls!=1)fail(14);
+}
+void silhouette_summary(std::ostream &o){
+ o<<"{\"recorded\":"<<silhouette_recorded<<",\"native\":"<<silhouette_native<<",\"corrected\":"<<silhouette_corrected
+  <<",\"pipelines\":"<<silhouette_cache_count<<",\"allowlist\":"<<known_silhouette_shader_count()<<",\"rejections\":";
+ indexed_array(o,silhouette_rejections);
+ o<<",\"unknown_draws\":"<<silhouette_unknown_draws<<",\"unknown_programs\":"<<silhouette_unknown_count<<",\"cache_full\":"<<silhouette_cache_full<<",\"unknown_ps_sha256\":";
+ if(silhouette_unknown_count){static const char *d="0123456789abcdef";o<<'"';for(auto b:silhouette_unknown_hash)o<<d[b>>4]<<d[b&15];o<<'"';}else o<<"null";
+ o<<'}';
 }
 void silhouette_write(std::ostream &o){
  o<<"{\"schema\":1,\"policy\":\"indexed-native-coordinate-adapter-v1\",\"planned\":"<<silhouette_planned<<",\"recorded\":"<<silhouette_recorded

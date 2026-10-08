@@ -10,6 +10,9 @@ namespace mhw::scaled_temporal {
 struct SilhouetteRecipe {
     FilterGeometry geometry;
     D3D12_GRAPHICS_PIPELINE_STATE_DESC native{};
+    // Fixture only: adapt a census candidate without the allowlist check, to
+    // decide whether it may join the allowlist. The route never sets this.
+    bool candidate{};
 };
 class SilhouetteDraw {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;

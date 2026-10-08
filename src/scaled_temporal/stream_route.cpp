@@ -1425,6 +1425,8 @@ void write_summary(std::ostream &o){
  // Late indexed draws (hunter silhouette pieces): a rejected scan leaves the frame native.
  o<<",\"late_draws\":{\"planned\":"<<silhouette_planned<<",\"rejected\":"<<indexed_candidates_rejected<<",\"reasons\":";
  a(indexed_candidate_reasons);o<<",\"max\":"<<indexed_candidates_max<<",\"capacity\":"<<Plan::late_capacity<<'}';
+ // Which late draws drew the output-sized silhouette, and why others stayed native.
+ o<<",\"silhouette\":";silhouette_summary(o);
  // Dependency discovery failures: {rejection, stage, texture check, role, engine
  // format, DXGI format, width, height} of the first and the latest.
  o<<",\"dependency_failures\":"<<dependency_failures<<",\"dependency_failure\":{\"first\":";a(dependency_first_failure);

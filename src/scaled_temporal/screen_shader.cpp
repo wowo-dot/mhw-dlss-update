@@ -147,8 +147,12 @@ std::vector<Word> adapt(std::span<const Word> program,FilterGeometry g,unsigned 
         std::vector<Word> words=ins.words;
         for(auto o=ops.rbegin();o!=ops.rend();++o){
             if(o->type==type_input&&o->index==position&&o->dims){
-                require(o->simple&&!(o->token>>31)&&o->count==2,"position read form");
-                words[o->at]=temp_token(o->token);words[o->at+1]=lattice_reg;lattice=true;++edits.position_reads;
+                // Plain, or with one operand-modifier extension (neg/abs, e.g. -v0.z)
+                // that stays attached; 1-D immediate index.
+                const bool extended=o->token>>31;
+                const bool modifier=extended&&o->count==3&&(words[o->at+1]&0x3fU)==1&&!(words[o->at+1]>>31);
+                require(o->simple&&(!extended||modifier)&&o->count==(extended?3U:2U),"position read form");
+                words[o->at]=temp_token(o->token)|(o->token&0x80000000U);words[o->at+o->count-1]=lattice_reg;lattice=true;++edits.position_reads;
             }
         }
         if(scene_load){
@@ -181,10 +185,12 @@ std::vector<Word> adapt(std::span<const Word> program,FilterGeometry g,unsigned 
     }
     if(added&&!temps_at)out.insert(out.end(),{0x02000068U,added});
     if(lattice){
-        // rL.xy = raster position on the render lattice; rL.zw = position zw.
+        // rL.xy = raster position on the render lattice; rL.z/w = position z/w,
+        // only the components the input declares (v0.xyz has no readable w).
         out.insert(out.end(),{0x0a000038U,0x00100032U,lattice_reg,0x00101046U,position,0x00004002U,
             bits(float(g.render_width)/g.output_width),bits(float(g.render_height)/g.output_height),0,0});
-        if(position_mask&12)out.insert(out.end(),{0x05000036U,0x001000c2U,lattice_reg,0x00101ae6U,position});
+        // Source swizzle .zwzw: lane z reads z, lane w reads w.
+        if(position_mask&12)out.insert(out.end(),{0x05000036U,0x00100002U|((position_mask&12U)<<4),lattice_reg,0x00101ee6U,position});
     }
     if(raster_full)out.insert(out.end(),{0x0500001bU,0x00100032U,full_reg,0x00101046U,position,0x08000036U,0x001000c2U,full_reg,0x00004002U,0,0,0,0});
     for(const auto &i:code){out.insert(out.end(),i.before.begin(),i.before.end());out.insert(out.end(),i.words.begin(),i.words.end());}

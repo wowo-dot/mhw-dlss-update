@@ -108,20 +108,35 @@ struct Fixture {
   if(FAILED(result)){CloseHandle(event);hr(result,"fence completion");}const auto wait=WaitForSingleObject(event,30000);CloseHandle(event);require(wait==WAIT_OBJECT_0,"GPU completion");
  }
  void review(){const auto count=messages->GetNumStoredMessages();for(UINT64 i=0;i<count;++i){SIZE_T n{};hr(messages->GetMessage(i,nullptr,&n),"message size");std::vector<std::byte> b(n);auto *m=reinterpret_cast<D3D12_MESSAGE *>(b.data());hr(messages->GetMessage(i,m,&n),"message");
-   if(m->Severity<=D3D12_MESSAGE_SEVERITY_WARNING){std::cerr<<m->pDescription<<'\n';throw std::runtime_error("D3D12 warning/error");}}
+   if(m->Severity<=D3D12_MESSAGE_SEVERITY_WARNING){std::cerr<<m->pDescription<<'\n';messages->ClearStoredMessages();throw std::runtime_error("D3D12 warning/error");}}
   messages->ClearStoredMessages();
  }
+ bool candidate{};
  std::vector<float> draw(std::span<const std::byte> ps,sf::FilterGeometry g,bool full,float z,unsigned scenario,bool adapted=false,bool full_choice=true){
   hr(allocator->Reset(),"reset allocator");hr(list->Reset(allocator.Get(),nullptr),"reset list");mhw::temporal_present::observer::reset(list.Get(),++generation,nullptr);auto reflected=reflect(ps);auto vs=vertex(reflected.Get(),z);
   const auto w=g.output_width,h=g.output_height;
   D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=48;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   ComPtr<ID3D12DescriptorHeap> heap,rtv;hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)),"heap");hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=3;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv)),"RTVs");
   const auto step=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  std::vector<float> constants(16*16384,0);auto cb=[&](unsigned i){return constants.data()+i*16384;};
-  cb(0)[104]=1;cb(0)[105]=1;cb(0)[106]=100; // linear depth = 100/z
-  cb(1)[6]=1.F/w;cb(1)[7]=1.F/h;cb(1)[10]=std::bit_cast<float>(g.render_width);cb(1)[11]=std::bit_cast<float>(g.render_height);
-  cb(4)[5]=1;cb(5)[2]=std::bit_cast<float>(1U);cb(5)[3]=std::bit_cast<float>(7680U);cb(5)[4]=.1F;
-  std::fill(cb(11),cb(11)+4,1.F);
+  std::vector<float> constants(16*16384,0);
+  // Fields by reflected name, wherever each shader binds its buffers: linear
+  // depth = 100/z, CBScreen at output allocation/render view, the captured
+  // hidden-surface material values, opaque transparency and base colour.
+  {D3D11_SHADER_DESC sd{};hr(reflected->GetDesc(&sd),"PS desc");
+   for(unsigned i=0;i<sd.ConstantBuffers;++i){auto *buffer_reflection=reflected->GetConstantBufferByIndex(i);D3D11_SHADER_BUFFER_DESC bd{};
+    if(FAILED(buffer_reflection->GetDesc(&bd))||bd.Type!=D3D_CT_CBUFFER)continue;D3D11_SHADER_INPUT_BIND_DESC bind{};
+    if(FAILED(reflected->GetResourceBindingDescByName(bd.Name,&bind))||bind.BindPoint>=16)continue;
+    for(unsigned v=0;v<bd.Variables;++v){D3D11_SHADER_VARIABLE_DESC vd{};hr(buffer_reflection->GetVariableByIndex(v)->GetDesc(&vd),"variable");
+     require(vd.StartOffset+16<=65536,"constant offset");float *at=constants.data()+bind.BindPoint*16384+vd.StartOffset/4;const std::string n=vd.Name;
+     if(n=="fZToLinear"){at[0]=1;at[1]=1;at[2]=100;}
+     else if(n=="fScreenInverseSize"){at[0]=1.F/w;at[1]=1.F/h;}
+     else if(n=="iViewSize"){at[0]=std::bit_cast<float>(g.render_width);at[1]=std::bit_cast<float>(g.render_height);}
+     else if(n=="fGlobalTransparency")at[0]=1;
+     else if(n=="bMaterialCustomLighting")at[0]=std::bit_cast<float>(1U);
+     else if(n=="iMaterialCustomLightingGBufferIdMask")at[0]=std::bit_cast<float>(7680U);
+     else if(n=="fMaterialHiddenSurfaceDrawIntensity")at[0]=.1F;
+     else if(n.starts_with("fBaseMapFactor"))std::fill(at,at+4,1.F);
+    }}}
   auto constant_buffer=buffer(device.Get(),constants.size()*4,D3D12_HEAP_TYPE_UPLOAD);upload(constant_buffer.Get(),constants.data(),constants.size()*4);
   for(unsigned i=0;i<16;++i){D3D12_CONSTANT_BUFFER_VIEW_DESC c{constant_buffer->GetGPUVirtualAddress()+UINT64(i)*65536,65536};device->CreateConstantBufferView(&c,{heap->GetCPUDescriptorHandleForHeapStart().ptr+SIZE_T(i)*step});}
   D3D11_SHADER_DESC reflected_desc{};hr(reflected->GetDesc(&reflected_desc),"PS desc");
@@ -133,19 +148,23 @@ struct Fixture {
    }
    device->CreateShaderResourceView(nullptr,&s,{heap->GetCPUDescriptorHandleForHeapStart().ptr+SIZE_T(16+i)*step});
   }
-  std::array<ComPtr<ID3D12Resource>,4> inputs;std::vector<Pixels> uploads;uploads.reserve(4);
-  const std::array<unsigned,4> slots{0,18,19,20};
-  for(unsigned i=0;i<4;++i){auto d=texture(w,h,DXGI_FORMAT_R32G32B32A32_FLOAT);inputs[i]=resource(device.Get(),d,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST);uploads.emplace_back(device.Get(),d,D3D12_HEAP_TYPE_UPLOAD);
+  // Every bound 2-D texture gets data by name: depth pattern, G-buffer ID
+  // mask pattern, flat normal, or white (albedo, alpha and other maps).
+  std::vector<ComPtr<ID3D12Resource>> inputs;std::vector<Pixels> uploads;uploads.reserve(32);
+  for(unsigned j=0;j<reflected_desc.BoundResources;++j){D3D11_SHADER_INPUT_BIND_DESC b{};hr(reflected->GetResourceBindingDesc(j,&b),"binding");
+   if(b.Type!=D3D_SIT_TEXTURE||b.Dimension!=D3D_SRV_DIMENSION_TEXTURE2D||b.BindPoint>=32)continue;const std::string n=b.Name;
+   const unsigned role=n=="tVolumeBlendDepthMap"||n=="tWaterReflectionDepth"?0:n=="tGBuffer1"?1:n.find("NormalMap")!=std::string::npos?3:2;
+   auto d=texture(w,h,DXGI_FORMAT_R32G32B32A32_FLOAT);inputs.push_back(resource(device.Get(),d,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_COPY_DEST));uploads.emplace_back(device.Get(),d,D3D12_HEAP_TYPE_UPLOAD);
    std::vector<float> pixels(std::size_t(w)*h*4,0);
    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){const auto at=(std::size_t(y)*w+x)*4;const bool active=x<g.render_width&&y<g.render_height;
-    if(i==0)pixels[at]=active?(scenario==1&&((x/5+y/3)%2)? .1F:.9F):.1F;
-    if(i==1)pixels[at+3]=active&&((x/7+y/5)%3!=0)?88.F/255.F:0;
-    if(i==2)std::fill(pixels.begin()+at,pixels.begin()+at+4,1.F);
-    if(i==3){pixels[at]=pixels[at+1]=.501961F;pixels[at+2]=pixels[at+3]=1;}
+    if(role==0)pixels[at]=active?(scenario==1&&((x/5+y/3)%2)? .1F:.9F):.1F;
+    if(role==1)pixels[at+3]=active&&((x/7+y/5)%3!=0)?88.F/255.F:0;
+    if(role==2)std::fill(pixels.begin()+at,pixels.begin()+at+4,1.F);
+    if(role==3){pixels[at]=pixels[at+1]=.501961F;pixels[at+2]=pixels[at+3]=1;}
    }
-   uploads.back().write(pixels);uploads.back().copy(list.Get(),inputs[i].Get(),true);barrier(list.Get(),inputs[i].Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+   uploads.back().write(pixels);uploads.back().copy(list.Get(),inputs.back().Get(),true);barrier(list.Get(),inputs.back().Get(),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
    D3D12_SHADER_RESOURCE_VIEW_DESC s{};s.Format=d.Format;s.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;s.Texture2D.MipLevels=1;s.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-   device->CreateShaderResourceView(inputs[i].Get(),&s,{heap->GetCPUDescriptorHandleForHeapStart().ptr+SIZE_T(16+slots[i])*step});
+   device->CreateShaderResourceView(inputs.back().Get(),&s,{heap->GetCPUDescriptorHandleForHeapStart().ptr+SIZE_T(16+b.BindPoint)*step});
   }
   std::array<ComPtr<ID3D12Resource>,3> outputs;std::array<DXGI_FORMAT,3> formats{DXGI_FORMAT_R32G32B32A32_FLOAT,DXGI_FORMAT_R32_UINT,DXGI_FORMAT_R32G32_FLOAT};
   const auto rtv_step=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -167,7 +186,7 @@ struct Fixture {
   list->IASetVertexBuffers(0,1,&vv);list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);list->IASetIndexBuffer(&iv);
   std::unique_ptr<sf::SilhouetteDraw> correction;ComPtr<ID3D12Resource> selector;
   if(adapted){
-   sf::SilhouetteRecipe recipe{g,p};correction=std::make_unique<sf::SilhouetteDraw>(device.Get(),recipe);
+   sf::SilhouetteRecipe recipe{g,p,candidate};correction=std::make_unique<sf::SilhouetteDraw>(device.Get(),recipe);
    selector=buffer(device.Get(),8,D3D12_HEAP_TYPE_UPLOAD);const std::uint64_t choice=full_choice?1:0;upload(selector.Get(),&choice,8);
    const D3D12_VIEWPORT native_view{0,0,float(g.render_width),float(g.render_height),0,1};
    const D3D12_RECT native_clip{0,0,LONG(g.render_width),LONG(g.render_height)};
@@ -190,34 +209,69 @@ struct Fixture {
   barrier(list.Get(),outputs[0].Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_SOURCE);result.copy(list.Get(),outputs[0].Get(),false);finish();auto pixels=result.read();review();return pixels;
  }
 };
+// One shader: reflection preserved, 1x identity, 2x mask/depth/position
+// preservation against the native render-size draw (two occluder patterns,
+// two depths), wrong-coordinate negative control and the selector's native branch.
+struct Verdict {unsigned pixel_checks{},negative_checks{};};
+Verdict verify(Fixture &fixture,std::span<const std::byte> original,bool candidate,const std::filesystem::path &prefix,bool keep){
+ Verdict v;const sf::FilterGeometry g{64,36,128,72};fixture.candidate=candidate;
+ auto adapted=candidate?sf::adapt_silhouette_shader(original,g):sf::make_silhouette_shader(original,g);
+ auto x=reflect(original),y=reflect(adapted);D3D11_SHADER_DESC xd{},yd{};hr(x->GetDesc(&xd),"native desc");hr(y->GetDesc(&yd),"adapted desc");
+ require(xd.BoundResources==yd.BoundResources&&xd.InputParameters==yd.InputParameters&&xd.OutputParameters==yd.OutputParameters,"preserved reflection");
+ if(keep){ComPtr<ID3DBlob> asm_blob;hr(D3DDisassemble(adapted.data(),adapted.size(),0,nullptr,&asm_blob),"adapted disassembly");
+  save(prefix.wstring()+L".dxbc",adapted.data(),adapted.size());save(prefix.wstring()+L".asm",asm_blob->GetBufferPointer(),asm_blob->GetBufferSize());}
+ bool rejected=false;try{sf::adapt_silhouette_shader(original,{0,18,64,36});}catch(const std::exception &){rejected=true;}require(rejected,"bad geometry rejected");++v.negative_checks;
+ if(!candidate){std::vector<std::byte> altered(original.begin(),original.end());altered.back()^=std::byte{1};require(!sf::known_silhouette_shader(altered),"corrupted shader rejected");++v.negative_checks;}
+ // Native and adapted at 1x are identical.
+ const sf::FilterGeometry one{64,36,64,36};
+ const auto native_one=fixture.draw(original,one,true,.1F,0),adapted_one=fixture.draw(original,one,true,.1F,0,true);
+ require(native_one.size()==adapted_one.size(),"identity size");
+ for(std::size_t j=0;j<native_one.size();++j){require(std::isfinite(native_one[j])&&std::isfinite(adapted_one[j])&&std::abs(native_one[j]-adapted_one[j])<.00001F,"identity shader equivalence");++v.pixel_checks;}
+ // At 2x every output pixel equals the native render-size pixel it covers.
+ unsigned lit=0,dark=0,wrong_pixels=0;
+ for(const float z:{.1F,.9F})for(unsigned scenario=0;scenario<2;++scenario){
+  auto native=fixture.draw(original,g,false,z,scenario);auto fixed=fixture.draw(original,g,true,z,scenario,true);auto wrong=fixture.draw(original,g,true,z,scenario);
+  for(unsigned py=0;py<g.render_height;++py)for(unsigned px=0;px<g.render_width;++px){const auto source=(std::size_t(py)*g.output_width+px)*4;
+   for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx){const auto target=(std::size_t(py*2+dy)*g.output_width+px*2+dx)*4;
+    for(unsigned c=0;c<4;++c){require(std::isfinite(fixed[target+c])&&std::abs(fixed[target+c]-native[source+c])<.00002F,"2x mask/depth preservation");++v.pixel_checks;}
+    if(fixed[target+3]>.01F)++lit;else ++dark;if(std::abs(wrong[target+3]-fixed[target+3])>.01F)++wrong_pixels;
+   }}
+ }
+ // The scenarios must exercise the shader: visible and hidden pixels, and an
+ // enlarged viewport without adaptation must differ (position dependence).
+ require(lit>100&&dark>100&&wrong_pixels>100,"oracle and wrong-coordinate negative control");++v.negative_checks;
+ const auto native_selected=fixture.draw(original,g,false,.1F,0,true,false),native_control=fixture.draw(original,g,false,.1F,0);
+ require(native_selected==native_control,"GPU selector native branch exact equivalence");++v.negative_checks;
+ return v;
+}
+std::string hex(const sf::ShaderHash &h){static const char *d="0123456789abcdef";std::string s;for(auto b:h){s+=d[b>>4];s+=d[b&15];}return s;}
 }
 int wmain(int argc,wchar_t **argv){try{
- require(argc>=3,"usage: silhouette_shader_fixture output-directory captured-PS...");const std::filesystem::path output=argv[1];require(!std::filesystem::exists(output),"fresh output directory");std::filesystem::create_directories(output);
- Fixture fixture;unsigned variants=0,pixel_checks=0,negative_checks=0;
- for(int i=2;i<argc;++i){const auto original=read(argv[i]);require(sf::known_silhouette_shader(original),"recognized shader");const sf::FilterGeometry g{64,36,128,72};auto adapted=sf::make_silhouette_shader(original,g);
-  auto x=reflect(original),y=reflect(adapted);D3D11_SHADER_DESC xd{},yd{};hr(x->GetDesc(&xd),"native desc");hr(y->GetDesc(&yd),"adapted desc");require(xd.BoundResources==yd.BoundResources&&xd.InputParameters==yd.InputParameters&&xd.OutputParameters==yd.OutputParameters,"preserved reflection");
-  ComPtr<ID3DBlob> asm_blob;hr(D3DDisassemble(adapted.data(),adapted.size(),0,nullptr,&asm_blob),"adapted disassembly");const auto prefix=output/std::to_wstring(i-2);save(prefix.wstring()+L".dxbc",adapted.data(),adapted.size());save(prefix.wstring()+L".asm",asm_blob->GetBufferPointer(),asm_blob->GetBufferSize());
-  auto altered=original;altered.back()^=std::byte{1};require(!sf::known_silhouette_shader(altered),"corrupted shader rejected");bool rejected=false;try{sf::make_silhouette_shader(original,{0,18,64,36});}catch(const std::exception &){rejected=true;}require(rejected,"bad geometry rejected");negative_checks+=2;
-  // Every admitted shader must validate and execute, including its extended
-  // negated position operand. Native/adapted at 1x should be identical.
-  const sf::FilterGeometry one{64,36,64,36};sf::make_silhouette_shader(original,one);
-  const auto native_one=fixture.draw(original,one,true,.1F,0),adapted_one=fixture.draw(original,one,true,.1F,0,true);
-  require(native_one.size()==adapted_one.size(),"identity size");for(std::size_t j=0;j<native_one.size();++j){require(std::isfinite(native_one[j])&&std::isfinite(adapted_one[j])&&std::abs(native_one[j]-adapted_one[j])<.00001F,"identity shader equivalence");++pixel_checks;}
-  if(i==2){ // Actual skin program: alternating occluders and material masks.
-   for(unsigned scenario=0;scenario<2;++scenario){auto native=fixture.draw(original,g,false,.1F,scenario);auto fixed=fixture.draw(original,g,true,.1F,scenario,true);auto wrong=fixture.draw(original,g,true,.1F,scenario);
-    unsigned lit=0,dark=0,wrong_pixels=0;for(unsigned py=0;py<g.render_height;++py)for(unsigned px=0;px<g.render_width;++px){const auto source=(std::size_t(py)*g.output_width+px)*4;
-     for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx){const auto target=(std::size_t(py*2+dy)*g.output_width+px*2+dx)*4;
-      for(unsigned c=0;c<4;++c){require(std::isfinite(fixed[target+c])&&std::abs(fixed[target+c]-native[source+c])<.00002F,"2x mask/depth preservation");++pixel_checks;}
-      if(fixed[target+3]>.01F)++lit;else ++dark;if(std::abs(wrong[target+3]-fixed[target+3])>.01F)++wrong_pixels;
-     }}
-    require(lit>100&&dark>100&&wrong_pixels>100,"oracle and wrong-coordinate negative control");++negative_checks;
-   }
-   auto hidden=fixture.draw(original,g,true,.1F,0,true),visible=fixture.draw(original,g,true,.9F,0,true);unsigned opaque=0;
-   for(std::size_t j=3;j<visible.size();j+=4){require(visible[j]==0,"unoccluded depth test preserved");if(hidden[j]>.01F)++opaque;++pixel_checks;}require(opaque>100,"occluded-depth contrast");++negative_checks;
-  }
-  const auto native_selected=fixture.draw(original,g,false,.1F,0,true,false),native_control=fixture.draw(original,g,false,.1F,0);
-  require(native_selected==native_control,"GPU selector native branch exact equivalence");++negative_checks;
-  ++variants;
+ require(argc>=3,"usage: silhouette_shader_fixture output-directory [--candidates] PS-path|@list ...");const std::filesystem::path output=argv[1];
+ require(!std::filesystem::exists(output),"fresh output directory");std::filesystem::create_directories(output);
+ bool candidate=false;std::vector<std::filesystem::path> paths;
+ for(int i=2;i<argc;++i){const std::wstring a=argv[i];
+  if(a==L"--candidates"){candidate=true;continue;}
+  if(a.starts_with(L"@")){std::wifstream list{std::filesystem::path(a.substr(1))};std::wstring line;
+   while(std::getline(list,line)){while(!line.empty()&&(line.back()==L'\r'||line.back()==L' '))line.pop_back();if(!line.empty())paths.emplace_back(line);}continue;}
+  paths.emplace_back(a);}
+ require(!paths.empty(),"no shaders");
+ // Candidate runs record a verdict per shader; allowlist runs stop at the first failure.
+ Fixture fixture;unsigned variants=0,failed=0,pixel_checks=0,negative_checks=0;std::ostringstream shaders;
+ for(std::size_t i=0;i<paths.size();++i){const auto original=read(paths[i]);sf::ShaderHash hash;require(sf::shader_sha256(original,hash),"shader hash");
+  if(!candidate)require(sf::known_silhouette_shader(original),"recognized shader");
+  std::string reason;Verdict v;
+  try{v=verify(fixture,original,candidate,output/std::to_wstring(i),!candidate);}
+  catch(const std::exception &e){if(!candidate)throw;reason=e.what();}
+  if(reason.empty()){++variants;pixel_checks+=v.pixel_checks;negative_checks+=v.negative_checks;}else ++failed;
+  if(i)shaders<<',';shaders<<"{\"sha256\":\""<<hex(hash)<<"\",\"size\":"<<original.size()<<",\"passed\":"<<(reason.empty()?"true":"false")
+   <<",\"reason\":\""<<reason<<"\",\"pixel_checks\":"<<v.pixel_checks<<'}';
+  std::cerr<<(i+1)<<'/'<<paths.size()<<' '<<hex(hash).substr(0,8)<<' '<<(reason.empty()?"passed":reason)<<'\n';
  }
- std::ostringstream report;report<<"{\"passed\":true,\"adapter\":\"WARP\",\"gpu_validation\":true,\"variants\":"<<variants<<",\"pixel_checks\":"<<pixel_checks<<",\"indexed_private_draw\":true,\"conditional_branches\":true,\"binding_restore\":true,\"negative_checks\":"<<negative_checks<<"}\n";auto text=report.str();save(output/L"result.json",text.data(),text.size());std::cout<<text;return 0;
+ std::ostringstream report;report<<"{\"passed\":"<<(failed?"false":"true")<<",\"candidates\":"<<(candidate?"true":"false")<<",\"adapter\":\"WARP\",\"gpu_validation\":true"
+  <<",\"allowlist\":"<<sf::known_silhouette_shader_count()<<",\"variants\":"<<variants<<",\"failed\":"<<failed<<",\"pixel_checks\":"<<pixel_checks
+  <<",\"indexed_private_draw\":true,\"conditional_branches\":true,\"binding_restore\":true,\"negative_checks\":"<<negative_checks<<",\"shaders\":["<<shaders.str()<<"]}\n";
+ auto text=report.str();save(output/L"result.json",text.data(),text.size());
+ std::cout<<"{\"passed\":"<<(failed?"false":"true")<<",\"variants\":"<<variants<<",\"failed\":"<<failed<<",\"pixel_checks\":"<<pixel_checks<<"}\n";
+ return candidate||!failed?0:1;
  }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

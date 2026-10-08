@@ -12,6 +12,8 @@ namespace mhw::scaled_temporal {
 //  1. Every read of the raster position (SV_Position input) is replaced by
 //     the position on the render lattice (v0.xy * render/output), so auxiliary
 //     render-size inputs, CBScreen and projection math stay in render space.
+//     z/w are copied as declared; a neg/abs source modifier stays attached.
+//     Also used alone for the hidden-surface silhouette (silhouette_shader).
 //  2. Every UV sample of the scene register (sample, sample_l, sample_b,
 //     sample_c, sample_c_lz, gather4) is expanded by output/render: native UVs
 //     address the render rectangle; the scene now covers the whole output.

@@ -15,7 +15,7 @@ SilhouetteDraw::SilhouetteDraw(ID3D12Device *device,const SilhouetteRecipe &r):g
     if(FAILED(n.pRootSignature->GetDevice(IID_PPV_ARGS(&actual)))||actual.Get()!=device)
         throw std::runtime_error("silhouette root device");
     const auto native=std::span(static_cast<const std::byte *>(n.PS.pShaderBytecode),n.PS.BytecodeLength);
-    auto adapted=make_silhouette_shader(native,geometry_);
+    auto adapted=r.candidate?adapt_silhouette_shader(native,geometry_):make_silhouette_shader(native,geometry_);
     auto desc=n;desc.PS={adapted.data(),adapted.size()};desc.CachedPSO={};
     if(FAILED(device->CreateGraphicsPipelineState(&desc,IID_PPV_ARGS(&pipeline_))))
         throw std::runtime_error("silhouette private PSO");

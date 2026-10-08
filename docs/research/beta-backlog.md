@@ -14,6 +14,12 @@ not admit (`known_silhouette_shader`), so it keeps its native render-size
 geometry. Not investigated yet; the user asked to finish the performance work
 first.
 
+2026-10-08: the correction admitted 5 of the 97 hidden-surface pixel shaders
+in the census, with fixed binding registers. v0.13.10 admits every variant the
+fixture verifies, finds bindings by engine ID, and logs late-draw rejections in
+`dlss_summary`. In-game check pending. Details in
+[hunter-silhouette-route.md](hunter-silhouette-route.md#all-hidden-surface-variants-v01310-2026-10-08).
+
 ## Severe slowdown in the first silhouette correction run
 
 Deferred at the user's request on 2026-10-02. In v1.25.44 the user confirmed that

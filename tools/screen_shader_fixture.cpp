@@ -270,6 +270,12 @@ std::vector<Case> synthetic(){
     // Vignette shape: scene UV sample plus a radial term from the raster position and CBScreen.
     add("vignette","Texture2D<float4> s:register(t0);SamplerState f:register(s1);cbuffer CBScreen:register(b1){float2 fScreenOffset,fScreenScale,fScreenSize,fScreenInverseSize;};"
         "float4 main(float4 p:SV_Position,float2 uv:TexCoord0):SV_Target{float4 x=s.Sample(f,uv);float2 c=p.xy*fScreenInverseSize-.5;return float4(x.rgb*(1-dot(c,c)*.5),x.a);}",0,{1,1,0},1e-3,1);
+    // Hidden-surface shape (silhouette; rule 1 only): mask load and depth sample at the
+    // raster position, v0.xyz declared, z read negated (-v0.z modifier) and compared.
+    add("hidden_surface","Texture2D<float4> m:register(t0);Texture2D<float> d:register(t1);SamplerState f:register(s0);"
+        "cbuffer CBScreen:register(b1){float2 fScreenOffset,fScreenScale,fScreenSize,fScreenInverseSize;};"
+        "float4 main(float4 p:SV_Position):SV_Target{float id=m.Load(int3(p.xy,0)).a;float z=d.Sample(f,p.xy*fScreenInverseSize);"
+        "return float4(id,z,saturate(1-p.z)*.5+(z>p.z?.25:0),1);}",UINT_MAX,{4,0,0},1e-3,1);
     // Blink shape: no textures; screen math on the native UV only.
     add("blink","cbuffer B:register(b3){float4 k;};float4 main(float4 p:SV_Position,float2 uv:TexCoord0):SV_Target{float2 c=uv*2-1;return float4(saturate(1-length(c)*k.xyz),1);}",
         UINT_MAX,{0,0,0},1e-2,0);
