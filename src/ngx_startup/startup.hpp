@@ -29,4 +29,8 @@ unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 bool run(HMODULE,const char *version,bool hook_pool_reserved=false,bool shared_provider=false) noexcept;
+// Alpha: run() logs to this folder and takes the NGX runtime from this folder
+// (mhw_dlss.ini), instead of the research sidecars <dll>.output-dir and
+// <output>/sdk-runtime-dir.txt. Both must be existing absolute directories.
+void use_paths(const std::filesystem::path &output,const std::filesystem::path &runtime) noexcept;
 }

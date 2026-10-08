@@ -66,6 +66,9 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     events<<"{\"event\":\"reservation\",\"ready\":true,\"slot\":"<<pb::pool_state().slot<<",\"hooks_installed\":false}\n"<<std::flush;
 #ifdef MHW_FG_GAME
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
+#ifdef MHW_ALPHA
+    mhw::ngx_startup::use_paths(directory,runtime);  // mhw_dlss.ini, no research sidecars
+#endif
     require(mhw::ngx_startup::run(module,temporal_version,true,true),"coexistence-NGX-startup");
 #else
     require(mhw::ngx_startup::run(module,temporal_version,true),"coexistence-NGX-startup");

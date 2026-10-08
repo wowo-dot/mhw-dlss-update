@@ -10,6 +10,7 @@
 namespace {
 namespace fs=std::filesystem;namespace pb=mhw::projection_binding;namespace startup=mhw::ngx_startup;
 void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
+fs::path preset_output,preset_runtime;  // use_paths() (alpha); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
     bool unreadable=false;
     for(unsigned i=0;i<7;++i){std::uintptr_t value{};
@@ -48,6 +49,9 @@ fs::path read_path(const fs::path &file){
     const fs::path p(wide);require(p.is_absolute()&&fs::is_directory(p),"config-directory");return fs::canonical(p).make_preferred();
 }
 }
+void mhw::ngx_startup::use_paths(const fs::path &output,const fs::path &runtime) noexcept {
+    try{preset_output=output;preset_runtime=runtime;}catch(...){preset_output.clear();preset_runtime.clear();}
+}
 bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_reserved,bool shared_provider) noexcept {
     HMODULE pinned{};
     if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCWSTR>(&run),&pinned))return false;
@@ -55,9 +59,10 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
     try {
         wchar_t dll_name[32768]{},host_name[32768]{};
         require(GetModuleFileNameW(module,dll_name,32768)>0&&GetModuleFileNameW(nullptr,host_name,32768)>0,"module-path");
-        const fs::path dll(dll_name),host(host_name);const auto folder=read_path(fs::path(dll.wstring()+L".output-dir"));
+        const fs::path dll(dll_name),host(host_name);const auto preset=[](const fs::path &p){require(p.is_absolute()&&fs::is_directory(p),"config-directory");return fs::canonical(p).make_preferred();};
+        const auto folder=preset_output.empty()?read_path(fs::path(dll.wstring()+L".output-dir")):preset(preset_output);
         require(folder!=fs::canonical(host.parent_path()),"output-game-directory");
-        const auto runtime=read_path(folder/L"sdk-runtime-dir.txt");
+        const auto runtime=preset_runtime.empty()?read_path(folder/L"sdk-runtime-dir.txt"):preset(preset_runtime);
         const auto base=reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));std::string reason;
         require(pb::host_identity(base,reason),"host-identity");
         FILETIME ct{},et{},kt{},ut{};require(GetProcessTimes(GetCurrentProcess(),&ct,&et,&kt,&ut)!=0,"process-times");

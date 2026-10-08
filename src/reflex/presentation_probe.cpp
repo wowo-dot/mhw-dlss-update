@@ -27,7 +27,12 @@
 #include <iterator>
 // Alpha build: mhw_dlss.ini replaces the research sidecars, the session arms
 // itself once the game is ready and runs until exit, with light logging.
-namespace { mhw::alpha::Config alpha_config; }
+namespace {
+mhw::alpha::Config alpha_config;
+// The shipped layout's mhw_dlss folder (empty under MO2 force-load): the only
+// place inside the game folder the alpha reads its runtime from and logs to.
+std::wstring alpha_home;
+}
 #endif
 #include <cstdio>
 #include <memory>
@@ -595,7 +600,10 @@ DWORD WINAPI worker(void*) noexcept {
             // Shipped layout: winmm.dll in the game folder, its configuration,
             // NVIDIA runtime and logs in the mhw_dlss folder next to it.
             auto base = dll.parent_path(); std::error_code missing;
-            if (std::filesystem::is_regular_file(base / L"mhw_dlss" / L"mhw_dlss.ini", missing)) base /= L"mhw_dlss";
+            if (std::filesystem::is_regular_file(base / L"mhw_dlss" / L"mhw_dlss.ini", missing)) {
+                base /= L"mhw_dlss"; alpha_home = std::filesystem::weakly_canonical(base, missing).wstring();
+                if (missing) alpha_home.clear();
+            }
             std::ifstream in(base / L"mhw_dlss.ini", std::ios::binary);
             const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
             alpha_config = mhw::alpha::parse_config(text, base);
@@ -623,11 +631,19 @@ DWORD WINAPI worker(void*) noexcept {
         }
 #endif
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
+        const auto under = [](const std::wstring& text, const std::wstring& root) {
+            return text.size() >= root.size() && CompareStringOrdinal(text.data(), static_cast<int>(root.size()),
+                root.data(), static_cast<int>(root.size()), TRUE) == CSTR_EQUAL &&
+                (text.size() == root.size() || text[root.size()] == L'\\' || text[root.size()] == L'/');
+        };
         for (const auto& path : {output, runtime}) {
             const auto text = path.wstring();
-            const bool prefix = text.size() >= game_root.size() && CompareStringOrdinal(text.data(), static_cast<int>(game_root.size()),
-                game_root.data(), static_cast<int>(game_root.size()), TRUE) == CSTR_EQUAL;
-            require(!(prefix && (text.size() == game_root.size() || text[game_root.size()] == L'\\' || text[game_root.size()] == L'/')), "configuration-in-game-directory");
+#ifdef MHW_ALPHA
+            // The shipped layout keeps the NVIDIA runtime and logs in the mod's own
+            // mhw_dlss folder inside the game folder; nothing else there is used.
+            if (!alpha_home.empty() && under(text, alpha_home)) continue;
+#endif
+            require(!under(text, game_root), "configuration-in-game-directory");
         }
         image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)); std::string reason;
         require(pb::host_identity(image, reason), "retail-host-identity");
