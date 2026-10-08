@@ -827,7 +827,7 @@ if(TARGET mhw_dlss_sdk_live)
         target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
         target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
         # Shipped as winmm.dll in the game folder (src/winmm_proxy): every winmm export
-        # passes through to the system DLL; MHW maps it at process start.
+        # passes through to the system DLL; MHW delay-loads it (first winmm call).
         target_sources(mhw_dlss_alpha PRIVATE src/winmm_proxy/winmm_proxy.cpp src/winmm_proxy/winmm_stubs.asm
             src/winmm_proxy/winmm_exports.def)
         target_include_directories(mhw_dlss_alpha PRIVATE src/winmm_proxy)

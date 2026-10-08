@@ -6,7 +6,7 @@
 Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as
 the game folder receives it:
 
-  winmm.dll                         the mod (MHW maps winmm.dll at startup; every
+  winmm.dll                         the mod (MHW delay-loads winmm.dll; every
                                     winmm function passes through to Windows)
   mhw_dlss/mhw_dlss.ini             default configuration
   mhw_dlss/sl.*.dll, nvngx_dlss*    NVIDIA runtime, unmodified, verified by SHA-256
@@ -64,7 +64,7 @@ Requirements
 Install: copy winmm.dll and the mhw_dlss folder into the game folder (next to
 MonsterHunterWorld.exe), or install the archive as a mod in Mod Organizer 2.
 It works with or without Stracker's Loader. It cannot share the game folder
-with another mod's winmm.dll.
+with another mod's winmm.dll; SharpPluginLoader also installs one.
 
 Configuration: mhw_dlss/mhw_dlss.ini (comments in the file). DLSS currently
 runs at Performance quality (half resolution); other modes come with later

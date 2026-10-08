@@ -2,7 +2,7 @@
 
   python -B tools/gen_winmm_proxy.py [--dll C:\\Windows\\System32\\winmm.dll] [--out src/winmm_proxy]
 
-The alpha DLL is shipped as winmm.dll (MHW imports winmm at startup), so it
+The alpha DLL is shipped as winmm.dll (MHW delay-imports winmm), so it
 exports every winmm function, by the same name and ordinal, as a jump through
 a table filled from the system winmm.dll (winmm_proxy.cpp). Writes:
 
