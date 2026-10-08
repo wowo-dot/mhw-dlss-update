@@ -66,8 +66,13 @@ PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ.
   logging: under usvfs, GetModuleFileNameW gives the virtual game path but
   weakly_canonical() gives the real mod folder. Fixed in v0.13.9 (lexical
   comparison, startup-error.jsonl).
-- game-52 (v0.13.9, same layout): d3d12 was not yet loaded when the worker
-  started (api_module kind 0, was_loaded false). Startup:
+- game-52 (v0.13.9, same layout): the hooks went in before the game created
+  its device and factory:
+  - the D3D12CreateDevice hook logged `device_checked` for the game's own call
+    (return RVA 0x23a4e2e);
+  - dxgi.dll was not yet loaded when CreateDXGIFactory2 was hooked
+    (api_module kind 0, was_loaded false). d3d12.dll was already loaded (kind 1).
+  Startup:
   - NGX accepted the shared provider by path and hash under the VFS;
   - the alpha armed 6.2 s after launch.
   Run totals:
