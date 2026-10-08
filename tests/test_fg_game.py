@@ -18,11 +18,13 @@ def rows(version='0.8.0', armed=True, stopped=False):
 
 class FgGameTests(unittest.TestCase):
     def test_perf_mask_names(self):
-        self.assertEqual(perf_mask('all'), 127)
+        self.assertEqual(perf_mask('all'), 383)
         self.assertEqual(perf_mask('none'), 0)
         self.assertEqual(perf_mask('cached_reads, packet_filter'), 1 | 8)
-        self.assertEqual(len(PERF_TOGGLES), 8)
+        self.assertEqual(len(PERF_TOGGLES), 9)
         self.assertEqual(perf_mask('cached_reads,sample_profile'), 1 | 128)
+        self.assertEqual(perf_mask('all,sample_profile'), 511)
+        self.assertEqual(perf_mask('all,cached_reads'), 383)
         with self.assertRaises(Exception):
             perf_mask('cached_reads,unknown')
         with self.assertRaises(Exception):

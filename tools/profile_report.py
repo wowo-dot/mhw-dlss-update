@@ -1,12 +1,13 @@
 """Stack-sampler report for the FG game build (v0.12.2+, perf switch sample_profile).
 
-  python -B tools/profile_report.py --run <folder> [--pid N] [--mask M] [--top 25]
+  python -B tools/profile_report.py --run <folder> [--pid N] [--mask M] [--phase P] [--top 25]
 
 Reads the "profile" events of one launch (optionally only those taken with
-perf mask M) and prints, for the host Present thread and for the other
-threads: where samples landed (leaf function), the innermost and the
-outermost function of the mod on the stack, and for the mod's outermost
-functions which module the time was spent in. Counts are wall-clock samples
+perf mask M or in one phase) and prints, for the host Present thread and for
+the other threads: where samples landed (leaf function); the innermost run of
+mod frames, by its first frame (inner) and the hook the game called (outer,
+v0.12.3+; before that the outermost mod frame), and that hook with the module
+the time was spent in; and the innermost game frame (v0.12.3+). Counts are wall-clock samples
 (waiting included) at about 1 kHz for the Present thread.
 
 Symbols: the mod from the linker map (<run>/mhw_fg_game_probe.map, else the
@@ -27,7 +28,7 @@ from pathlib import Path
 from fg_game import log_path, rows_of
 
 REPO = Path(__file__).resolve().parents[1]
-TABLES = ('leaf', 'inner', 'outer', 'outer_leaf_module')
+TABLES = ('leaf', 'inner', 'outer', 'outer_leaf_module', 'game')
 UNKNOWN = 0xFFF
 
 
@@ -80,30 +81,39 @@ def undecorate(name):
 
 
 class ExportSymbols:
-    """Nearest exported symbol of a DLL, through dbghelp."""
-
-    _next_base = 0x10000000
+    """Nearest named export at or below an RVA, from the DLL's export table."""
 
     def __init__(self, path):
-        self.base = ExportSymbols._next_base
-        ExportSymbols._next_base += 0x10000000
-        self.ok = bool(dbghelp().SymLoadModuleExW(w.HANDLE(0x4D48), None, str(path), None, self.base, 0, None, 0))
+        data = Path(path).read_bytes()
+        u16 = lambda o: int.from_bytes(data[o:o + 2], 'little')
+        u32 = lambda o: int.from_bytes(data[o:o + 4], 'little')
+        pe = u32(0x3c)
+        sections = [(u32(s + 12), u32(s + 8), u32(s + 20)) for s in
+                    (pe + 24 + u16(pe + 20) + 40 * i for i in range(u16(pe + 6)))]  # (rva, size, file offset)
+
+        def offset(rva):
+            for va, size, raw in sections:
+                if va <= rva < va + max(size, 1):
+                    return raw + rva - va
+            raise ValueError(rva)
+        export_rva = u32(pe + 24 + 112)  # PE32+ data directory 0
+        found = {}
+        if export_rva:
+            e = offset(export_rva)
+            functions, names, ordinals = offset(u32(e + 28)), offset(u32(e + 32)), offset(u32(e + 36))
+            for i in range(u32(e + 24)):
+                name_at = offset(u32(names + 4 * i))
+                name = data[name_at:data.index(bytes(1), name_at)].decode('ascii', 'replace')
+                found.setdefault(u32(functions + 4 * u16(ordinals + 2 * i)), name)
+        self.starts = sorted(found)
+        self.names = [found[r] for r in self.starts]
+        self.ok = bool(self.starts)
 
     def name(self, rva):
-        if not self.ok:
+        i = bisect.bisect_right(self.starts, rva) - 1
+        if i < 0:
             return None, rva
-        class SymbolInfo(ctypes.Structure):
-            _fields_ = [('SizeOfStruct', w.ULONG), ('TypeIndex', w.ULONG), ('Reserved', ctypes.c_uint64 * 2), ('Index', w.ULONG),
-                        ('Size', w.ULONG), ('ModBase', ctypes.c_uint64), ('Flags', w.ULONG), ('Value', ctypes.c_uint64),
-                        ('Address', ctypes.c_uint64), ('Register', w.ULONG), ('Scope', w.ULONG), ('Tag', w.ULONG),
-                        ('NameLen', w.ULONG), ('MaxNameLen', w.ULONG), ('Name', ctypes.c_wchar * 512)]
-        info = SymbolInfo()
-        info.SizeOfStruct = ctypes.sizeof(SymbolInfo) - 511 * ctypes.sizeof(ctypes.c_wchar)
-        info.MaxNameLen = 512
-        displacement = ctypes.c_uint64()
-        if not dbghelp().SymFromAddrW(w.HANDLE(0x4D48), self.base + rva, ctypes.byref(displacement), ctypes.byref(info)):
-            return None, rva
-        return info.Name, rva - displacement.value
+        return self.names[i] + (f'+{rva - self.starts[i]:#x}' if rva != self.starts[i] else ''), self.starts[i]
 
 
 def module_file(name, run):
@@ -134,11 +144,20 @@ def main():
     p.add_argument('--run', type=Path, required=True)
     p.add_argument('--pid', type=int)
     p.add_argument('--mask', type=int, help='only events taken with this perf mask')
+    p.add_argument('--phase', help='unarmed, armed or fg_off')
+    p.add_argument('--last', type=int, help='only the last N matching events (5-second windows)')
     p.add_argument('--top', type=int, default=25)
     a = p.parse_args()
     rows, _ = rows_of(log_path(a.run, a.pid))
     header = rows[0]
-    events = [r for r in rows if r.get('event') == 'profile' and (a.mask is None or r['perf'] == a.mask)]
+    events, phase = [], None
+    for r in rows:  # a profile event follows its window's frame_stats line
+        if r.get('event') == 'frame_stats':
+            phase = r['phase']
+        elif r.get('event') == 'profile' and (a.mask is None or r['perf'] == a.mask) and (a.phase is None or phase == a.phase):
+            events.append(r)
+    if a.last:
+        events = events[-a.last:]
     if not events:
         raise SystemExit('no profile events')
     mod, mod_source = mod_symbols(a.run, header)
@@ -161,7 +180,7 @@ def main():
             xname = names[extra] if table == 3 and extra != UNKNOWN and extra < len(names) else None
             own = module == e['self']
             if mname is None:
-                label = '(not in the mod)' if table in (1, 2, 3) else '(unknown module)'
+                label = {1: '(not in the mod)', 2: '(not in the mod)', 3: '(not in the mod)', 4: '(no game frame)'}.get(table, '(unknown module)')
             elif own and mod:
                 sym, _ = mod.name(rva)
                 label = f'mod!{sym}' if sym else f'mod+{rva:#x}'
@@ -179,7 +198,7 @@ def main():
     print(f'mod symbols: {mod_source}')
     for kind, title in ((0, 'HOST PRESENT THREAD'), (1, 'OTHER THREADS (rotation)')):
         total = samples[kind] or 1
-        for table in range(4):
+        for table in range(len(TABLES)):
             items = sorted(((n, label) for (t, k, label), n in counts.items() if t == table and k == kind), reverse=True)[:a.top]
             print(f'\n== {title}: {TABLES[table]}')
             for n, label in items:

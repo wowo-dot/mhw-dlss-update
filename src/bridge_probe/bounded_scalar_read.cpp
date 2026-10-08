@@ -22,22 +22,26 @@ bool readable(const MEMORY_BASIC_INFORMATION &memory) noexcept {
          access == PAGE_WRITECOPY || access == PAGE_EXECUTE_READ ||
          access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
 }
+// One entry per 64 KB block of address space, direct-mapped: the render
+// thread reads from many separate allocations per frame, which eight
+// round-robin entries could not hold (game-33: 26% of its time was still in
+// NtQueryVirtualMemory).
 struct CachedRegion {
   std::uintptr_t base{}, end{};
   std::uint64_t tick{};
 };
-thread_local std::array<CachedRegion, 8> regions{};
-thread_local unsigned next_region{};
+constexpr unsigned cache_slots = 256U, cache_ms = 100U;
+thread_local std::array<CachedRegion, cache_slots> regions{};
 } // namespace
 
 std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
   const bool cached = perf::on(perf::cached_reads);
   std::uint64_t now{};
+  auto &slot = regions[(address >> 16) & (cache_slots - 1U)];
   if (cached) {
     now = GetTickCount64();
-    for (const auto &r : regions)
-      if (address >= r.base && address < r.end && now - r.tick < 32U)
-        return r.end;
+    if (address >= slot.base && address < slot.end && now - slot.tick < cache_ms)
+      return slot.end;
   }
   MEMORY_BASIC_INFORMATION memory{};
   if (VirtualQuery(reinterpret_cast<const void *>(address), &memory,
@@ -50,7 +54,7 @@ std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
     return 0U;
   const auto end = base + memory.RegionSize;
   if (cached)
-    regions[next_region++ & 7U] = {base, end, now};
+    slot = {base, end, now};
   return end;
 }
 

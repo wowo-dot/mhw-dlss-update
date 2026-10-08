@@ -501,11 +501,14 @@ void completed(Plan &p){
  }
 }
 bool prepare_selector(Plan &p){
- D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_UPLOAD;
- D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;desc.Width=8;
- desc.Height=desc.DepthOrArraySize=desc.MipLevels=1;desc.SampleDesc.Count=1;desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
- auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
- if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&p.selector))))return false;
+ // perf::pooled_selectors: a buffer kept from the slot's retired plan (publish) is rewritten.
+ if(!p.selector||!perf::on(perf::pooled_selectors)){
+  D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_UPLOAD;
+  D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;desc.Width=8;
+  desc.Height=desc.DepthOrArraySize=desc.MipLevels=1;desc.SampleDesc.Count=1;desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+  auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
+  if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&p.selector))))return false;
+ }
  void *mapped{};D3D12_RANGE none{};
  if(FAILED(p.selector->Map(0,&none,&mapped)))return false;
  const std::uint64_t native=0;std::memcpy(mapped,&native,8);const D3D12_RANGE written{0,8};p.selector->Unmap(0,&written);return true;
@@ -1051,7 +1054,12 @@ void publish(const tb::Snapshot &s,const tb::Packet &packet) noexcept{
  unwatch(static_cast<unsigned>(s.frame%plans.size()));
  // Expanded overlay recipes must not create a half-megabyte stack temporary
  // on the game's render worker when a retired ring slot is reused.
+ // perf::pooled_selectors: the GPU no longer reads the previous plan's selector
+ // (a prepared plan must be retired before its slot is published again, and an
+ // unprepared one was never submitted), so the slot keeps the buffer.
+ auto selector=perf::on(perf::pooled_selectors)?std::move(p.selector):ComPtr<ID3D12Resource>{};
  std::destroy_at(&p);std::construct_at(&p);p.stamp=s;p.temporal=packet;p.published=true;++published;
+ p.selector=std::move(selector);
 }
 bool copy_region(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *d,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *s,const D3D12_BOX *box) noexcept{
  if(!originals[2])return false;reinterpret_cast<CopyFn>(originals[2])(list,d,x,y,z,s,box);return true;

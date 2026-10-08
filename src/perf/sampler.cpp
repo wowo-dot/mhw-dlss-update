@@ -27,16 +27,19 @@ struct Cell {
     std::uint64_t key{};
     std::uint32_t count{};
 };
-// Tables in a cell key: what ran, our innermost and outermost frame, and the
-// outermost frame of ours together with the module that ran.
-enum Table : unsigned { leaf, inner, outer, outer_leaf_module };
+// Tables in a cell key: what ran; the innermost run of mod frames on the
+// stack, by its first frame (closest to what ran) and its last frame (the hook
+// the game called), and that hook with the module that ran; and the innermost
+// game frame (which game function waited or spun). Frame-boundary hooks that
+// wrap the whole frame sit below the game's frames, outside that run.
+enum Table : unsigned { leaf, inner, outer, outer_leaf_module, game };
 
 // Sampler thread only, apart from the names and cells (table_lock).
 std::array<Module, module_capacity> modules;
 unsigned module_count{};
 std::array<std::array<char, 48>, name_capacity> names{};
 unsigned name_count{};
-unsigned self_id = unknown_module;
+unsigned self_id = unknown_module, game_id = unknown_module;
 std::array<Thread, thread_capacity> threads;
 unsigned thread_count{}, next_thread{};
 std::array<Cell, cell_capacity> cells;
@@ -98,6 +101,7 @@ void refresh_modules() noexcept {
         if (!exception_table(m.base, m.table, m.count)) continue;
         m.id = name_id(entry.szModule);
         if (entry.hModule == self) self_id = m.id;
+        if (entry.hModule == GetModuleHandleW(nullptr)) game_id = m.id;
         modules[n++] = m;
     }
     CloseHandle(snapshot);
@@ -225,17 +229,23 @@ void sample(Thread& t, unsigned kind) noexcept {
         ++failed;
         return;
     }
-    unsigned leaf_module{}, inner_module = unknown_module, outer_module = unknown_module;
-    std::uint32_t leaf_rva{}, inner_rva{}, outer_rva{};
+    unsigned leaf_module{}, inner_module = unknown_module, outer_module = unknown_module, game_module = unknown_module;
+    std::uint32_t leaf_rva{}, inner_rva{}, outer_rva{}, game_rva{};
     frame_id(pcs[0], true, leaf_module, leaf_rva);
+    bool island_done = false;
     for (unsigned i = 0; i < n; ++i) {
         unsigned module{};
         std::uint32_t rva{};
         frame_id(pcs[i], i == 0, module, rva);
-        if (module != self_id) continue;
-        if (inner_module == unknown_module) inner_module = module, inner_rva = rva;
-        outer_module = module;
-        outer_rva = rva;
+        if (module == game_id && game_module == unknown_module) game_module = module, game_rva = rva;
+        if (module == self_id && !island_done) {
+            if (inner_module == unknown_module) inner_module = module, inner_rva = rva;
+            outer_module = module;
+            outer_rva = rva;
+        } else if (inner_module != unknown_module) {
+            island_done = true;
+        }
+        if (island_done && game_module != unknown_module) break;
     }
     AcquireSRWLockExclusive(&table_lock);
     ++samples[kind];
@@ -244,6 +254,7 @@ void sample(Thread& t, unsigned kind) noexcept {
     count(inner, kind, inner_module, inner_rva, 0);
     count(outer, kind, outer_module, outer_rva, 0);
     count(outer_leaf_module, kind, outer_module, outer_rva, leaf_module);
+    count(game, kind, game_module, game_rva, 0);
     ReleaseSRWLockExclusive(&table_lock);
 }
 DWORD WINAPI run(void*) noexcept {
@@ -315,7 +326,7 @@ void write(std::ostream& out) {
     // hot leaf function can spread over many cells; the report regroups them.
     if (taken.size() > 2000) taken.resize(2000);
     out << "{\"event\":\"profile\",\"perf\":" << toggles.load() << ",\"ms\":" << elapsed << ",\"samples\":[" << counted[0] << ','
-        << counted[1] << "],\"failed\":" << failures << ",\"truncated\":" << cuts << ",\"overflow\":" << lost << ",\"self\":" << self_id
+        << counted[1] << "],\"failed\":" << failures << ",\"truncated\":" << cuts << ",\"overflow\":" << lost << ",\"self\":" << self_id << ",\"game\":" << game_id
         << ",\"modules\":[";
     for (unsigned i = 0; i < known.size(); ++i) out << (i ? "," : "") << '"' << known[i].data() << '"';
     out << "],\"cells\":[";

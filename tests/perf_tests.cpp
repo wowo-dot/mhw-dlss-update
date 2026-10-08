@@ -75,7 +75,7 @@ void region_tests() {
     const auto result = read(base + 8);
     check(cached == base + page * 2 ? result == bp::ScalarReadResult::fault : result == bp::ScalarReadResult::unreadable,
           "stale cache entry: guarded read fails");
-    Sleep(80);  // past the cache window
+    Sleep(150);  // past the cache window
     check(bp::readable_end(base + 8) == 0 && read(base + 8) == bp::ScalarReadResult::unreadable, "cache entry expires");
     // Without the cache the protection change is seen at once.
     mhw::perf::toggles.store(0);
