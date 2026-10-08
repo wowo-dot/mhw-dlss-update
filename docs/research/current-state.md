@@ -27,13 +27,25 @@ Working so far (`frame-generation-lifecycle.md`):
   also made Streamline ignore the HUD-less image. `fg_game.py status` now
   reports Streamline's own errors.
 
-The current build is v0.11.7 (git tag `v0.11.7`).
+**Performance (v0.12.0 to v0.12.6, `performance-v012-result.md`).**
+- **Hub:** the armed base rate went from 32 fps to 187-208 fps with FG 2x
+  (unmodded: about 210).
+- **Training grounds:** from 49 fps to 190-270 fps.
+- **The cost was CPU work on the render thread.** The worst items were one
+  VirtualQuery per guarded read and a process-wide lock on every command-list
+  call.
+- **Each fix is a live perf switch.**
+- **FG input staging** now survives the game recording a frame's final draw
+  before that frame's DLSS (v0.12.6).
+
+The current build is v0.12.6 (git tag `v0.12.6`).
 
 Both 21:9 layouts were re-checked with v0.11.7 (game-29, game-30): HUD-less was
 accepted on every frame, with zero Streamline errors and a stable HUD.
 
-**Next:** the configuration-based alpha with performance cleanup (including
-4K).
+**Next:** the configuration-based alpha (config file, arming at startup, lean
+paths on, diagnostics compiled out, DLSS-G plugin only with FG enabled), then
+4K.
 
 ## Latest result
 
@@ -57,9 +69,10 @@ Things to know:
 - When interpolation resumes, the driver's flip handshake causes one or two
   dropouts of about 150 ms. These come from the driver and Streamline, not from
   our inputs.
-- The base rate in gameplay is about 30 fps in both the FG build and the
-  DLSS-only v0.6.5 build. That is diagnostic-build overhead and must be fixed
-  before the alpha.
+- With every perf switch on (`<dll>.perf` = 895), the armed base rate matches
+  the unmodded game. With the DLSS-G plugin loaded and the mod not armed, the
+  frame rate is about half the unmodded rate: Streamline's swap chain uses
+  frame latency 1. Arming with Reflex removes this.
 - With DLSS-G loaded, NGX keeps Streamline's first search path, so the game's
   DLSS provider lives in the same combined runtime folder
   (`tools/fg_runtime.py`).
@@ -80,6 +93,7 @@ Things to know:
    - Remove the diagnostic readers and overhead, and restore the base frame
      rate.
    - Keep the research build separate.
+   - Overhead: done in v0.12.x (perf switches; all on in the alpha).
    - The pixel ceiling is 16,777,216 since v0.11.0, and the DLSS readbacks are
      off in the game.
 
@@ -88,23 +102,26 @@ a stable HUD, and the game blends its UI in linear space before the brightness
 curve, so exact recomposition is not possible
 (`frame-generation-hudless-capture-result.md`).
 
-## Installed now: v0.11.7
+## Installed now: v0.12.6
 
-`mhw_fg_game_probe` is in the MO2 slot. It includes:
-- the scene extent for the aspect option;
-- the FG scene rectangle (Streamline's field order since v0.11.7);
-- the game's own render extent for odd scenes, with the edge-column fill;
-- the DOF sequence from the screen size;
-- the v0.10.0 lifecycle guard.
+`mhw_fg_game_probe` is in the MO2 slot, with the slot sidecar `<dll>.perf` =
+895: every lean path, including keyed FG staging. It includes everything from
+v0.11.7 plus:
+- the perf switches;
+- frame-time windows and the driver report every 5 s;
+- the stack sampler (switch `sample_profile`; `tools/profile_report.py`);
+- per-frame FG staging.
 
-The latest sealed run is `local/fg-game-20261006/game-30` (21:9 letterbox,
-FG with HUD-less). `fg_game.py stop` also ends the status logging. A run
-folder can hold several launches when MHW is restarted for a setting;
-`fg_game.py` uses the newest, or `--pid`. Install or restore with
-`tools/mo2_slot.py` (the receipt in the run folder has the restore command).
-`<dll>.fg-mode` can contain `off` (run without DLSS-G) or `2x`..`8x` (the
-starting multiplier; default 2x). `fg_game.py multiplier --run <run> --x N`
-changes the multiplier while armed.
+The latest sealed run is `local/fg-game-20261006/game-36`; game-37 is the
+v0.12.6 check (FG stable in the training grounds). `fg_game.py frames` prints
+the frame windows, and `fg_game.py perf --set all[,sample_profile]` switches
+live. `fg_game.py stop` also ends the status logging. A run folder can hold
+several launches when MHW is restarted for a setting; `fg_game.py` uses the
+newest, or `--pid`. Install or restore with `tools/mo2_slot.py` (the receipt
+in the run folder has the restore command; the linker map is copied in for
+the sampler). `<dll>.fg-mode` can contain `off` (run without DLSS-G) or
+`2x`..`8x` (the starting multiplier; default 2x). `fg_game.py multiplier
+--run <run> --x N` changes the multiplier while armed.
 
 Procedure: launch through MO2 to the main menu, then
 `python -B tools/fg_game.py arm --run <run>` (DLSS, Reflex and FG On, 600 s),
