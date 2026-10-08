@@ -2,6 +2,7 @@
 #include "frame_generation/input_ring.hpp"
 #include "frame_generation/screen_transform.hpp"
 #include "frame_generation/scene_rect.hpp"
+#include "frame_generation/staging_queue.hpp"
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -207,6 +208,57 @@ void subrect_tests() {
     require(!g::inside({1281, 0, 3840, 1440}, 5120, 1440) && !g::inside({0, 1280, 2560, 1440}, 5120, 1440) && !g::inside({0, 0, 0, 1440}, 5120, 1440),
             "rectangles outside or empty");
 }
+// perf::keyed_staging (v0.12.5). game-35, training grounds: MHW recorded
+// frame f's DLSS before frame f-1's final draw, so the single staged slot
+// always held the wrong frame and FG switched off on most frames.
+void staging_tests() {
+    using Queue = fg::StagingQueue<3, int>;
+    {   // Hub order: stage f, final f.
+        Queue q;
+        for (std::uint64_t f = 10; f < 20; ++f) {
+            require(q.push(f, 1, int(f)) == f % 3, "copy index is frame % 3");
+            const auto t = q.take(f, 1);
+            require(t && t->entry.payload == int(f) && t->copy == f % 3, "in-order final takes its own frame");
+        }
+        require(q.dropped == 0 && !q.newest(), "nothing dropped or left");
+    }
+    {   // Training grounds order: stage f, final f-1.
+        Queue q;
+        q.push(10, 1, 10);
+        for (std::uint64_t f = 11; f < 30; ++f) {
+            q.push(f, 1, int(f));
+            const auto t = q.take(f - 1, 1);
+            require(t && t->entry.payload == int(f - 1) && t->copy == (f - 1) % 3, "pipelined final takes its own frame");
+            require(q.newest() == f, "the next frame stays staged");
+        }
+        require(q.dropped == 0, "pipelining drops nothing");
+    }
+    {   // A frame whose final draw never comes is dropped by a later final draw.
+        Queue q;
+        q.push(5, 1, 5);
+        q.push(6, 1, 6);
+        const auto t = q.take(6, 1);
+        require(t && t->entry.frame == 6 && q.dropped == 1 && !q.newest(), "older entry released");
+        require(!q.take(5, 1), "a released frame is not found");
+    }
+    {   // Two frames of lag would reuse frame f's copy at f+3: f is dropped first.
+        Queue q;
+        q.push(3, 1, 3);
+        q.push(4, 1, 4);
+        q.push(5, 1, 5);
+        require(q.push(6, 1, 6) == 0 && q.dropped == 1, "frame 3's copy is reused by frame 6");
+        require(!q.take(3, 1) && q.take(4, 1), "frame 3 gone, frame 4 still staged");
+    }
+    {   // Epoch must match; a restaged (older or equal) frame replaces newer entries.
+        Queue q;
+        q.push(7, 1, 7);
+        require(!q.take(7, 2), "different epoch");
+        q.push(8, 1, 8);
+        q.push(8, 2, 80);
+        const auto t = q.take(8, 2);
+        require(t && t->entry.payload == 80, "restaged frame wins");
+    }
+}
 }  // namespace
 
 int main() {
@@ -215,6 +267,7 @@ int main() {
         ring_tests();
         screen_tests();
         subrect_tests();
+        staging_tests();
     } catch (const std::exception &e) {
         std::fprintf(stderr, "failed: %s\n", e.what());
         return 1;

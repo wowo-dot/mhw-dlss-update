@@ -39,9 +39,14 @@ bool frame_generation_on() noexcept;
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;
 
-// DLSS replacement thread, after a successful evaluation. No GPU work.
-void stage(std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth, ID3D12Resource *motion,
-           const SlotCamera &camera) noexcept;
+// DLSS replacement thread, after a successful evaluation. Without
+// perf::keyed_staging no GPU work: the final draw copies `depth`/`motion`
+// (DLSS's converted inputs, rewritten every frame). With it, they are copied
+// on `list` (the DLSS list, in the converter output state) into one of three
+// per-frame staging copies, so a final draw recorded after the next frame's
+// DLSS (heavy scenes pipeline them) still reads its own frame's inputs.
+void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
+           ID3D12Resource *motion, const SlotCamera &camera) noexcept;
 // Final-scene observer (stream_route::FinalSceneObserver contract): `scene` is
 // the HUD-free final target in RENDER_TARGET; state must match `roots` after.
 void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,

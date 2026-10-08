@@ -33,9 +33,9 @@ from reflex_frames import check, control, HOST_SHA
 
 # src/perf/toggles.hpp, in bit order.
 PERF_TOGGLES = ('cached_reads', 'cached_methods', 'list_locks', 'packet_filter', 'quiet_status', 'no_viewport_trace',
-                'no_output_sentinel', 'sample_profile', 'pooled_selectors')
-LEAN_MASK = 383  # 'all': every lean path (pooled_selectors v0.12.3+); sample_profile is named explicitly
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.4')
+                'no_output_sentinel', 'sample_profile', 'pooled_selectors', 'keyed_staging')
+LEAN_MASK = 895  # 'all': every lean path (pooled_selectors v0.12.3+, keyed_staging v0.12.5+); sample_profile by name
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.4', '0.12.5')
 
 
 def log_path(run, pid=None):

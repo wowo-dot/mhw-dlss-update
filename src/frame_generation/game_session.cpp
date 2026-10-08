@@ -1,11 +1,13 @@
 #include "game_session.hpp"
 #include "camera_constants.hpp"
 #include "input_ring.hpp"
+#include "staging_queue.hpp"
 #include "hudless_pass.hpp"
 #include "../temporal_present/bindings.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../reflex/frame_generation_policy.hpp"
 #include "../reflex/streamline.hpp"
+#include "../perf/toggles.hpp"
 #include <wrl/client.h>
 #include <algorithm>
 #include <cstddef>
@@ -45,6 +47,11 @@ struct Staged {
     ComPtr<ID3D12Resource> depth, motion;
     SlotCamera camera;
 };
+// perf::keyed_staging: staging copies of the DLSS inputs (staging_queue.hpp).
+constexpr unsigned staging_count = 3;
+struct StagingCopy {
+    ComPtr<ID3D12Resource> depth, motion;
+};
 struct Last {
     bool valid{};
     std::uint64_t frame{}, epoch{};
@@ -69,6 +76,12 @@ struct Session {
     std::array<Images, slot_count> images;
     std::array<bool, slot_count> slot_hudless{};
     Staged staged;
+    StagingQueue<staging_count, SlotCamera> queue;  // perf::keyed_staging
+    std::array<StagingCopy, staging_count> staging{};
+    bool staging_failed{};
+    // final frame - newest staged frame at a mismatch: -2, -1, +1, +2, other.
+    std::array<std::uint64_t, 5> mismatch_delta{};
+    std::uint64_t keyed_hits{}, staging_copies{};
     std::unique_ptr<HudlessPass> hudless;
     bool hudless_failed{};
     std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
@@ -233,19 +246,64 @@ void multiplier(unsigned total) noexcept {
     if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
 }
 
-void stage(std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth, ID3D12Resource *motion,
-           const SlotCamera &camera) noexcept {
+void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
+    const auto d = static_cast<std::int64_t>(frame - staged);
+    ++s.mismatch_delta[d == -2 ? 0 : d == -1 ? 1 : d == 1 ? 2 : d == 2 ? 3 : 4];
+}
+bool staging_ready(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
+    if (s.staging_failed) return false;
+    if (s.staging[0].depth) return same_image(depth->GetDesc(), s.staging[0].depth->GetDesc()) &&
+                                   same_image(motion->GetDesc(), s.staging[0].motion->GetDesc());
+    ComPtr<ID3D12Device> device;
+    if (FAILED(depth->GetDevice(IID_PPV_ARGS(&device)))) return !(s.staging_failed = true);
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    auto d = depth->GetDesc(), m = motion->GetDesc();
+    d.Flags = m.Flags = D3D12_RESOURCE_FLAG_NONE;
+    for (auto &c : s.staging)
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
+                                                   IID_PPV_ARGS(&c.depth))) ||
+            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &m, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
+                                                   IID_PPV_ARGS(&c.motion)))) {
+            s.staging = {};
+            return !(s.staging_failed = true);
+        }
+    return true;
+}
+
+void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
+           ID3D12Resource *motion, const SlotCamera &camera) noexcept {
     auto &s = session;
     if (!s.armed.load()) return;
     try {
         std::lock_guard lock(s.mutex);
-        if (s.staged.valid) ++s.staged_dropped;  // previous frame's final draw never qualified
-        s.staged = {};
         if (!depth || !motion) {
             ++s.record_failed;
             return;
         }
-        s.staged = {true, frame, epoch, depth, motion, camera};
+        if (!perf::on(perf::keyed_staging)) {
+            s.queue.clear();
+            if (s.staged.valid) ++s.staged_dropped;  // previous frame's final draw never qualified
+            s.staged = {true, frame, epoch, depth, motion, camera};
+            ++s.staged_count;
+            return;
+        }
+        s.staged = {};
+        if (!list || !staging_ready(s, depth, motion)) {
+            ++s.record_failed;
+            return;
+        }
+        auto &copy = s.staging[s.queue.push(frame, epoch, camera)];
+        std::array<D3D12_RESOURCE_BARRIER, 4> b{transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+                                               transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+                                               transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
+                                               transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
+        list->ResourceBarrier(4, b.data());
+        list->CopyResource(copy.depth.Get(), depth);
+        list->CopyResource(copy.motion.Get(), motion);
+        for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
+        list->ResourceBarrier(4, b.data());
+        ++s.staging_copies;
         ++s.staged_count;
     } catch (...) {
         ++session.record_failed;
@@ -259,16 +317,38 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
     try {
         std::lock_guard lock(s.mutex);
         if (!s.sdk || s.create_failed) return;
-        if (!s.staged.valid) {
-            ++s.final_unstaged;
-            return;
+        const bool keyed = perf::on(perf::keyed_staging);
+        Staged staged;
+        if (keyed) {
+            const auto newest = s.queue.newest();
+            const auto taken = s.queue.take(frame, epoch);
+            if (!taken) {
+                if (!newest)
+                    ++s.final_unstaged;
+                else {
+                    ++s.final_mismatch;
+                    note_mismatch(s, *newest, frame);
+                }
+                return;
+            }
+            const auto &copy = s.staging[taken->copy];
+            staged = {true, frame, epoch, copy.depth, copy.motion, taken->entry.payload};
+            ++s.keyed_hits;
+        } else {
+            if (!s.staged.valid) {
+                ++s.final_unstaged;
+                return;
+            }
+            staged = std::move(s.staged);
+            s.staged = {};
+            if (staged.frame != frame || staged.epoch != epoch) {
+                ++s.final_mismatch;
+                note_mismatch(s, staged.frame, frame);
+                return;
+            }
         }
-        const Staged staged = std::move(s.staged);
-        s.staged = {};
-        if (staged.frame != frame || staged.epoch != epoch) {
-            ++s.final_mismatch;
-            return;
-        }
+        // Staging copies stay in COPY_SOURCE; DLSS's own images are in tag_state.
+        const auto source_state = keyed ? D3D12_RESOURCE_STATE_COPY_SOURCE : tag_state;
         const auto generation = roots.generation;
         auto *depth = staged.depth.Get(), *motion = staged.motion.Get();
         if (!list || !scene || !generation) {
@@ -307,11 +387,12 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                                                transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
                                                transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
                                                transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
-        list->ResourceBarrier(4, b.data());
+        const UINT barriers = source_state == tag_state ? 4U : 2U;  // staging copies are already sources
+        list->ResourceBarrier(barriers, b.data());
         list->CopyResource(image.depth.Get(), depth);
         list->CopyResource(image.motion.Get(), motion);
         for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
-        list->ResourceBarrier(4, b.data());
+        list->ResourceBarrier(barriers, b.data());
 
         // HUD-less colour from the HUD-free final scene; the brightness comes
         // from the last screen write's CBSystem (closing()).
@@ -592,8 +673,11 @@ void write(std::ostream &o) {
     o << "],\"captures\":" << s.captures
       << ",\"capture_no_cbv\":" << s.capture_no_cbv << ",\"capture_limited\":" << s.capture_limited
       << ",\"capture_failed\":" << s.capture_failed << ",\"error\":\"" << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
-      << ",\"staged_dropped\":" << s.staged_dropped << ",\"final_unstaged\":" << s.final_unstaged
-      << ",\"final_mismatch\":" << s.final_mismatch
+      << ",\"staged_dropped\":" << s.staged_dropped + s.queue.dropped << ",\"final_unstaged\":" << s.final_unstaged
+      << ",\"final_mismatch\":" << s.final_mismatch << ",\"mismatch_delta\":[" << s.mismatch_delta[0] << ','
+      << s.mismatch_delta[1] << ',' << s.mismatch_delta[2] << ',' << s.mismatch_delta[3] << ',' << s.mismatch_delta[4]
+      << "],\"keyed\":{\"on\":" << perf::on(perf::keyed_staging) << ",\"hits\":" << s.keyed_hits
+      << ",\"copies\":" << s.staging_copies << ",\"failed\":" << s.staging_failed << '}' 
       << ",\"presented_frames\":[";
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"

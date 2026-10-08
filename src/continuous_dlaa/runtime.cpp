@@ -696,7 +696,9 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
      for(unsigned i=0;i<16;++i)camera.projection[i]=std::bit_cast<float>(h.projection[i]);
      camera.jitter_x=frame.jitter_x;camera.jitter_y=frame.jitter_y;camera.reset=decision.reset;
      const auto images=pass->private_images();
-     frame_generation::game::stage(consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);}
+     const bool outer=injected;injected=true;  // our staging copy is not native work
+     frame_generation::game::stage(list,consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);
+     injected=outer;}
 #endif
     history_telemetry.record(previous,consumer.projection.history,decision);
     history_depth=consumer.resources[3];previous=consumer.projection.history;lease.evaluated=true;++frames;last_skip=0;if(decision.reset)++reset_count;

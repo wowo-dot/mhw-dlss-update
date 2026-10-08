@@ -17,9 +17,10 @@ enum Toggle : unsigned {
     no_output_sentinel = 64U, // no diagnostic clear of the DLSS output before evaluation
     sample_profile = 128U,    // research build: stack sampler (sampler.hpp); not a lean path
     pooled_selectors = 256U,  // scaled route: a plan slot keeps its GPU selector buffer
+    keyed_staging = 512U,     // FG: per-frame copies of the DLSS inputs, matched by frame (v0.12.5)
 };
-inline constexpr unsigned all_toggles = 383U;  // every lean path
-inline constexpr unsigned toggle_mask = 511U;  // every defined bit
+inline constexpr unsigned all_toggles = 895U;   // every lean path and keyed_staging
+inline constexpr unsigned toggle_mask = 1023U;  // every defined bit
 
 inline std::atomic<unsigned> toggles{};
 inline bool on(Toggle t) noexcept { return (toggles.load(std::memory_order_relaxed) & t) != 0; }
