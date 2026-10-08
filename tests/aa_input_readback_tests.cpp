@@ -182,7 +182,10 @@ int main(int argc,char **argv){
     check(g::finish()&&g::disabled(),"finish");check(g::qualified()==positive,"qualification");
     ID3D12Fence *released_fence{};
     check(!sub::completed_receipt(7,&released_fence)&&!released_fence,"retired journal cannot lend released fence");
-    const auto folder=argc>2?std::filesystem::path(argv[2]):std::filesystem::current_path()/("aa-input-fixture-"+std::to_string(GetCurrentProcessId()));
+    // A process ID alone repeats across runs; with the tick the folder is new.
+    // An automatic folder is removed after the run (127 MB per run otherwise).
+    const bool own_folder=argc<=2;
+    const auto folder=own_folder?std::filesystem::current_path()/("aa-input-fixture-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64())):std::filesystem::path(argv[2]);
     std::filesystem::create_directories(folder);const auto prefix=folder/L"input";
     const bool saved=rb::save(prefix.wstring());check(saved==positive,"safe save");
     if(saved)for(auto receipt:rb::receipts)for(unsigned role=0;role<3;++role){
@@ -191,6 +194,7 @@ int main(int argc,char **argv){
         std::vector<unsigned> words(2560*1440);check(bool(in.read(reinterpret_cast<char *>(words.data()),14745600)),"saved read");
         for(auto value:words)check(value==values[role],"pixel mismatch");
     }
+    if(own_folder){std::error_code ignored;std::filesystem::remove_all(folder,ignored);}
     std::cout<<std::boolalpha;g::write(std::cout);rb::write(std::cout);drain(device.Get(),queue.Get());
     ComPtr<ID3D12InfoQueue> info;check(SUCCEEDED(device.As(&info)),"debug info queue");
     for(UINT64 i=0;i<info->GetNumStoredMessagesAllowedByRetrievalFilter();++i){SIZE_T bytes{};check(SUCCEEDED(info->GetMessage(i,nullptr,&bytes)),"message size");
