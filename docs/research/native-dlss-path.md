@@ -33,40 +33,46 @@ reading only; nothing ran in game.
   scale (renderer+176/+184) and sets renderer+512 to it, clamped to 0.5-1.0.
   The graphics menu (`0x43DCB0`, `0x4431F0`, `0x440870`) uses the same query to
   show DLSS and pick the anti-aliasing mode.
-- **A separate post-filter scale exists.** The renderer reflects
-  `mContentScaleActivePF` ("ContentScalePF", float at renderer+504,
-  initialised to 1.0). The screen constants (`0x23CE3C0`) publish
-  `fContentScale` (+500), `fContentScalePF` (+516 x +504), `fContentScaleBase`
-  (+516), `fContentScaleActual` (+520) and `fContentScalePassScreen` (+524)
-  to the shaders separately.
+- **Scale fields (corrected after a live read, see below).** The renderer
+  reflects `mContentScaleActivePF` ("ContentScalePF", renderer+504) and the
+  screen constants (`0x23CE3C0`) publish `fContentScale` (+500),
+  `fContentScalePF` (+516 x +504), `fContentScaleBase` (+516),
+  `fContentScaleActual` (+520) and `fContentScalePassScreen` (+524). "PF" is
+  the engine's previous-frame suffix (as in `fViewProjPF`), not "post
+  filter": the native scale update preserves the old active scale (+0x1f4)
+  in +0x1f8 (`dlss-render-resolution-control.md`). It exists for temporal
+  reprojection across a scale change.
 
-## Not established
+## Live read (game-47 and game-48)
 
-- Whether post filters actually run at a different resolution when
-  ContentScalePF differs from the scene scale, and what the engine sets it to
-  in DLSS mode. The writers of renderer+504 were not isolated (a field-offset
-  scan near the renderer global returned mostly unrelated structures).
-- Whether the native path can run on the user's RTX 5090 at all: DLSS 1.x
-  hides its menu row there (`docs/runtime/rtx50-unlock-test.md`), so the NGX
-  context and its ready byte would have to be supplied by the mod.
+| Field | Alpha armed (game-47) | Research build, unarmed (game-48) |
+|---|---|---|
+| +496/+500 active scale | 0.5 | 1.0 |
+| +504 previous-frame active scale | 0.5 | 1.0 |
+| +512/+516 allocation scale | 1.0 | 1.0 |
+| +520 product | 0.5 | 1.0 |
+| +165 mUseDLSS, NGX context | 1, none | 1, none |
+
+The alpha's resolution control lowers the active scale (the scene draws into
+the upper-left of full-size textures). The post filters follow the active
+scale, which is why the stream route re-records them at full output. The
+game's own DLSS 1 sizing (`0x229A8C0`) writes the allocation channel (+0x200)
+instead; what the post chain does in that mode is unknown, and it cannot run
+on the user's RTX 5090 (no NGX context).
 
 ## Assessment
 
-Capcom put DLSS where the mod puts it, with the same inputs, and the engine
-has a dedicated post-filter content scale. If the engine renders the post
-chain at full output once that scale is set, the mod could drop the
-stream route's per-draw interception and re-recording for that work and let
-the game do it. That is a large simplification and the main CPU saving.
-It is a hypothesis until a runtime check shows the post chain's actual size.
+There is no separate post-filter resolution switch to flip: the earlier
+"ContentScalePF" reading was wrong, and the v0.12.11 experiment built on it
+was reverted unused. Riding the game's own DLSS mode would need the native
+DLSS 1 sizing path (allocation scale) mapped end to end and an NGX context
+supplied by the mod. That is a large reverse-engineering project with an
+uncertain result, so it is parked. Reducing the mod's CPU cost continues
+within the current route (cached shader identities, plan reuse, cheaper
+submit/reset/present hooks).
 
-## Next steps
+## If this is resumed
 
-1. **Read-only live check** (next run, no code change): read renderer
-   +496..+524, +165, +176..+196 and +180 from the running game in the current
-   setup (game resolution scaling, DLSS mod armed) to see which fields carry
-   0.5 and what ContentScalePF holds.
-2. **Diagnostic experiment** (separate build, behind a switch): set
-   ContentScalePF for one session and record the post filters' render-target
-   sizes and viewports with the existing observers. If the chain renders at
-   full output by itself, design a v2 route around it.
-3. Keep the current route as the shipping path until that is proven.
+1. Map the allocation-scale path: what `0x229A8C0`'s +0x200 write does to
+   texture sizes, the TAA output and the post chain.
+2. Only then consider a live experiment, behind a switch, in the research build.
