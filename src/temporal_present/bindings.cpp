@@ -43,6 +43,7 @@ void Bindings::constants(bool g, unsigned index, unsigned offset, std::span<cons
     for (unsigned i=0; i<values.size(); ++i) { a.values[offset+i] = values[i]; a.mask |= std::uint64_t(1) << (offset+i); }
 }
 bool Bindings::ready() const noexcept { return known && valid && generation && pipeline && compute.signature; }
+bool Bindings::ready_graphics() const noexcept { return known && valid && generation && pipeline && graphics.signature; }
 
 using Microsoft::WRL::ComPtr;
 struct RestoreBindings::Impl {
@@ -52,8 +53,9 @@ struct RestoreBindings::Impl {
     ComPtr<ID3D12RootSignature> compute, graphics;
     std::array<ComPtr<ID3D12DescriptorHeap>,2> heaps;
 };
-RestoreBindings::RestoreBindings(ID3D12GraphicsCommandList *list, const Bindings &state) : impl_(std::make_unique<Impl>()) {
-    if (!list || !state.ready() || list->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) throw std::runtime_error("presentation binding snapshot incomplete");
+RestoreBindings::RestoreBindings(ID3D12GraphicsCommandList *list, const Bindings &state, bool compute_optional) : impl_(std::make_unique<Impl>()) {
+    const bool complete = state.ready() || (compute_optional && !state.compute.signature && state.ready_graphics());
+    if (!list || !complete || list->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT) throw std::runtime_error("presentation binding snapshot incomplete");
     auto &p=*impl_; p.state=state; p.list=list;
     p.pipeline=reinterpret_cast<ID3D12PipelineState *>(state.pipeline);
     p.compute=reinterpret_cast<ID3D12RootSignature *>(state.compute.signature);
@@ -65,6 +67,9 @@ void RestoreBindings::apply() noexcept {
     const auto &p=*impl_; auto *list=p.list.Get();
     ID3D12DescriptorHeap *heaps[]{p.heaps[0].Get(),p.heaps[1].Get()};
     list->SetDescriptorHeaps(p.state.heap_count,heaps);
+    // A null compute signature (compute_optional) unbinds ours: the list then
+    // matches a recording that never set one, and the game sets its own
+    // signature before any compute work, as it must after Reset.
     list->SetComputeRootSignature(p.compute.Get());
     list->SetGraphicsRootSignature(p.graphics.Get());
     list->SetPipelineState(p.pipeline.Get());

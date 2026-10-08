@@ -92,6 +92,10 @@ struct Session {
     std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
         probe_ok{}, probe_fallback{}, probe_invalid{};
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
+    // Why a HUD-less record found no restorable binding snapshot (no_restore):
+    // not known, invalid, no generation, no pipeline, no graphics signature,
+    // and graphics-only snapshots restored by unbinding compute (v0.13.7).
+    std::array<std::uint64_t, 6> restore_reasons{};
     HudlessPass::Probe last_probe{};
     std::array<SlotCamera, slot_count> cameras;
     D3D12_RESOURCE_DESC depth_desc{}, motion_desc{};
@@ -421,9 +425,14 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
         else {
             std::unique_ptr<temporal_present::RestoreBindings> restore;
             try {
-                restore = std::make_unique<temporal_present::RestoreBindings>(list, roots);
+                // A worker's final-scene list may never set a compute root
+                // signature (game-44..46: no_restore rising since v0.12.6).
+                restore = std::make_unique<temporal_present::RestoreBindings>(list, roots, true);
+                if (!roots.compute.signature) ++s.restore_reasons[5];
             } catch (...) {
                 ++s.hud_skips[static_cast<unsigned>(HudSkip::no_restore)];
+                const bool reasons[]{!roots.known, !roots.valid, !roots.generation, !roots.pipeline, !roots.graphics.signature};
+                for (unsigned i = 0; i < 5; ++i) if (reasons[i]) ++s.restore_reasons[i];
             }
             if (restore) {
                 try {
@@ -691,6 +700,9 @@ void write(std::ostream &o) {
       << ",\"hudless\":{\"available\":" << (s.hudless != nullptr) << ",\"failed\":" << s.hudless_failed
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
+    o << "},\"restore_reasons\":{";
+    constexpr const char *restore_names[]{"unknown", "invalid", "no_generation", "no_pipeline", "no_graphics", "graphics_only"};
+    for (unsigned i = 0; i < s.restore_reasons.size(); ++i) o << (i ? "," : "") << '"' << restore_names[i] << "\":" << s.restore_reasons[i];
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
       << ",\"gamma_ex\":" << Number{s.last_probe.gamma_ex} << ",\"gamma\":" << Number{s.last_probe.gamma} << ",\"gpu_attempts\":"
       << s.last_probe.attempts << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":["

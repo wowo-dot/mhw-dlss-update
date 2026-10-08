@@ -35,12 +35,17 @@ struct Bindings {
     void constants(bool graphics_stage, unsigned index, unsigned offset, std::span<const std::uint32_t>) noexcept;
     void invalidate() noexcept { valid = false; }
     bool ready() const noexcept;
+    // ready() for a graphics-only recording that has not set a compute root
+    // signature in this generation (an FG final scene on a worker list).
+    bool ready_graphics() const noexcept;
 };
 // Restores both root signatures and their recorded arguments, shared PSO/heaps.
 // This is NOT a blanket guarantee about arbitrary vendor SDK state changes.
+// With compute_optional, a state that never set a compute root signature is
+// accepted (ready_graphics) and restored by unbinding the compute signature.
 class RestoreBindings {
 public:
-    RestoreBindings(ID3D12GraphicsCommandList *, const Bindings &);
+    RestoreBindings(ID3D12GraphicsCommandList *, const Bindings &, bool compute_optional = false);
     ~RestoreBindings();
     RestoreBindings(const RestoreBindings &) = delete;
     RestoreBindings &operator=(const RestoreBindings &) = delete;
