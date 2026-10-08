@@ -33,8 +33,9 @@ from reflex_frames import check, control, HOST_SHA
 
 # src/perf/toggles.hpp, in bit order.
 PERF_TOGGLES = ('cached_reads', 'cached_methods', 'list_locks', 'packet_filter', 'quiet_status', 'no_viewport_trace',
-                'no_output_sentinel')
-VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0', '0.12.1')
+                'no_output_sentinel', 'sample_profile')
+LEAN_MASK = 127  # 'all': every lean path; sample_profile (v0.12.2+) is named explicitly
+VERSIONS = ('0.7.0', '0.8.0', '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.10.0', '0.10.1', '0.10.2', '0.10.3', '0.10.4', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.11.5', '0.11.6', '0.11.7', '0.12.0', '0.12.1', '0.12.2')
 
 
 def log_path(run, pid=None):
@@ -125,7 +126,7 @@ def request_multiplier(rows, path, total):
 def perf_mask(names):
     names = [n.strip() for n in names.split(',') if n.strip()]
     if names == ['all']:
-        return (1 << len(PERF_TOGGLES)) - 1
+        return LEAN_MASK
     if names == ['none']:
         return 0
     check(names and all(n in PERF_TOGGLES for n in names), 'perf switch names')

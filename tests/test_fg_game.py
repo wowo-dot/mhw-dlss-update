@@ -21,7 +21,8 @@ class FgGameTests(unittest.TestCase):
         self.assertEqual(perf_mask('all'), 127)
         self.assertEqual(perf_mask('none'), 0)
         self.assertEqual(perf_mask('cached_reads, packet_filter'), 1 | 8)
-        self.assertEqual(len(PERF_TOGGLES), 7)
+        self.assertEqual(len(PERF_TOGGLES), 8)
+        self.assertEqual(perf_mask('cached_reads,sample_profile'), 1 | 128)
         with self.assertRaises(Exception):
             perf_mask('cached_reads,unknown')
         with self.assertRaises(Exception):

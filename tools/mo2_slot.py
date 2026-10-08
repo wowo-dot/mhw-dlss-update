@@ -58,6 +58,8 @@ def install(a):
     if a.ngx_runtime_dir:  # Overrides the seeded NGX runtime folder.
         (run / 'sdk-runtime-dir.txt').write_bytes(str(a.ngx_runtime_dir.resolve()).encode('utf-8'))
     shutil.copyfile(a.dll, run / a.dll.name)
+    if a.dll.with_suffix('.map').exists():  # symbols for tools/profile_report.py
+        shutil.copyfile(a.dll.with_suffix('.map'), run / a.dll.with_suffix('.map').name)
     receipt = dict(schema=1, installed_utc=datetime.now(timezone.utc).isoformat(), slot=str(slot), dll=a.dll.name,
                    dll_sha256=sha(a.dll), previous=previous, git=git_identity(Path(__file__).resolve().parents[1]),
                    output_dir=str(run), runtime_dir=str(a.runtime_dir.resolve()) if a.runtime_dir else None,

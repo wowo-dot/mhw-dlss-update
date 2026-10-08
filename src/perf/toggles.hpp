@@ -15,8 +15,10 @@ enum Toggle : unsigned {
     quiet_status = 16U,       // no 5-second status dumps under the render locks
     no_viewport_trace = 32U,  // no per-RSSetViewports telemetry
     no_output_sentinel = 64U, // no diagnostic clear of the DLSS output before evaluation
+    sample_profile = 128U,    // research build: stack sampler (sampler.hpp); not a lean path
 };
-inline constexpr unsigned all_toggles = 127U;
+inline constexpr unsigned all_toggles = 127U;  // every lean path
+inline constexpr unsigned toggle_mask = 255U;  // every defined bit
 
 inline std::atomic<unsigned> toggles{};
 inline bool on(Toggle t) noexcept { return (toggles.load(std::memory_order_relaxed) & t) != 0; }

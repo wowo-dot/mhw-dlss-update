@@ -372,6 +372,7 @@ void host_frame() noexcept {
     LARGE_INTEGER now{}, frequency{};
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     mhw::perf::host_frames.present(now.QuadPart, frequency.QuadPart);
+    mhw::perf::present_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
 }
 template<class Routed, class Forward>
 auto route(IUnknown* self, OwnershipCall diagnostic, Routed&& routed, Forward&& forward) {

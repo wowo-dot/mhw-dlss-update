@@ -276,6 +276,12 @@ if(BUILD_TESTING)
     target_compile_options(perf_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     set_target_properties(perf_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME perf_tests COMMAND perf_tests)
+    add_executable(sampler_tests tests/sampler_tests.cpp src/perf/sampler.cpp)
+    target_compile_features(sampler_tests PRIVATE cxx_std_20)
+    target_compile_definitions(sampler_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    target_compile_options(sampler_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    set_target_properties(sampler_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME sampler_tests COMMAND sampler_tests)
     add_executable(render_resolution_tests tests/render_resolution_tests.cpp src/render_resolution/resolution_entry.asm ${binding_common})
     target_compile_features(render_resolution_tests PRIVATE cxx_std_20)
     target_include_directories(render_resolution_tests PRIVATE src/projection_binding src/bridge_probe "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
@@ -772,7 +778,7 @@ if(TARGET mhw_dlss_sdk_live)
         # In-game ordinary frame generation (v0.7.x): DLSS/Reflex sources plus the
         # FG session; default targets keep the Reflex-only synchronous contract.
         add_library(mhw_fg_game_probe SHARED ${fg_ownership_sources} src/frame_generation/game_session.cpp src/frame_generation/hudless_pass.cpp
-            src/frame_generation/crash_log.cpp)
+            src/frame_generation/crash_log.cpp src/perf/sampler.cpp)
         target_compile_features(mhw_fg_game_probe PRIVATE cxx_std_20)
         target_include_directories(mhw_fg_game_probe PRIVATE src/projection_binding src/bridge_probe
             "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
@@ -781,7 +787,8 @@ if(TARGET mhw_dlss_sdk_live)
         target_link_libraries(mhw_fg_game_probe PRIVATE minhook bcrypt d3d12 dxgi dxguid
             mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
         target_compile_options(mhw_fg_game_probe PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
-        target_link_options(mhw_fg_game_probe PRIVATE /guard:cf /OPT:NOICF)
+        # The map file names this DLL's functions in stack-sampler profiles (tools/profile_report.py).
+        target_link_options(mhw_fg_game_probe PRIVATE /guard:cf /OPT:NOICF /MAP)
         set_target_properties(mhw_fg_game_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # Opt-in metadata variant; default observer targets retain their behavior.

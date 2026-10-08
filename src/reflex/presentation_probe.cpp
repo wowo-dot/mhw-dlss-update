@@ -20,6 +20,7 @@
 #include "frame_generation_policy.hpp"
 #include "../perf/frame_stats.hpp"
 #include "../perf/toggles.hpp"
+#include "../perf/sampler.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -557,7 +558,7 @@ void poll_perf(std::ostream& out, const std::filesystem::path& folder, const std
     const auto marker = folder / (stem + ".perf-" + std::to_string(requests + 1));
     if (!std::filesystem::exists(marker) || std::filesystem::file_size(marker) > 64) return;
     std::ifstream input(marker); std::uint64_t generation{}; unsigned mask{}; input >> generation >> mask;
-    const bool accepted = bool(input) && generation == creation && mask <= mhw::perf::all_toggles;
+    const bool accepted = bool(input) && generation == creation && mask <= mhw::perf::toggle_mask;
     const auto previous = mhw::perf::toggles.load();
     ++requests;
     if (accepted) { log_frames(out, "switch"); mhw::perf::toggles.store(mask); }
@@ -588,7 +589,7 @@ DWORD WINAPI worker(void*) noexcept {
             // "<dll>.perf": initial perf-switch mask (v0.12; 0 = original paths).
             auto perf_file = dll; perf_file += L".perf";
             std::ifstream perf_in(perf_file); unsigned mask{};
-            if (perf_in >> mask && mask <= mhw::perf::all_toggles) mhw::perf::toggles.store(mask);
+            if (perf_in >> mask && mask <= mhw::perf::toggle_mask) mhw::perf::toggles.store(mask);
         }
 #endif
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
@@ -624,7 +625,7 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.1\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.2\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_FG_SCENE_PROBE)
         log << "{\"event\":\"start\",\"schema\":7,\"version\":\"0.6.5\",\"experiment\":\"frame-generation-scene-boundary\",\"target_mode\":1,\"fg_plugin_loaded\":false,\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId()
 #elif defined(MHW_REFLEX_OWNERSHIP_PROBE)
@@ -707,13 +708,14 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_FG_GAME
             log << "{\"event\":\"perf_toggles\",\"request\":0,\"mask\":" << mhw::perf::toggles.load() << ",\"previous\":0,\"accepted\":true}\n" << std::flush;
             mhw::perf::host_frames.take();auto window_start=wait_start;
+            mhw::perf::sampler::start();
 #endif
             while(!std::filesystem::exists(arm_file) && !std::filesystem::exists(stop_file) && GetTickCount64()-wait_start<600000) {
                 const auto stats=presentation->snapshot();if(!stats.routing || stats.faults)break;
 #ifdef MHW_FG_GAME
                 log_lifecycle(log);
                 poll_perf(log,output,name,creation,perf_requests);
-                if(GetTickCount64()-window_start>=5000){log_frames(log,"unarmed");window_start=GetTickCount64();}
+                if(GetTickCount64()-window_start>=5000){log_frames(log,"unarmed");mhw::perf::sampler::write(log);window_start=GetTickCount64();}
 #endif
                 Sleep(100);
             }
@@ -838,7 +840,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_FG_GAME
                         log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
                         log_fg_buffers(log, "status");
-                        log_frames(log, "armed");log_latency(log);
+                        log_frames(log, "armed");log_latency(log);mhw::perf::sampler::write(log);
 #endif
 #endif
                         if(last==started)require(driver_mode("running_on",true),"driver-On-not-enabled");
@@ -899,7 +901,7 @@ DWORD WINAPI worker(void*) noexcept {
             while(presentation&&GetTickCount64()-observed_from<1800000ULL){
                 log_lifecycle(log);
                 poll_perf(log,output,name,creation,perf_requests);
-                if(GetTickCount64()-window_start>=5000){log_frames(log,"fg_off");log_latency(log);window_start=GetTickCount64();}
+                if(GetTickCount64()-window_start>=5000){log_frames(log,"fg_off");log_latency(log);mhw::perf::sampler::write(log);window_start=GetTickCount64();}
                 const auto stats=presentation->snapshot();
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes

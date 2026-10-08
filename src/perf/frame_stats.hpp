@@ -67,4 +67,6 @@ private:
 
 // One instance per DLL: the routed host Present feeds it, the probe worker logs it.
 inline FrameStats host_frames;
+// Thread of the latest host Present (the game's render-submission thread).
+inline std::atomic<unsigned long> present_thread{};
 }  // namespace mhw::perf
