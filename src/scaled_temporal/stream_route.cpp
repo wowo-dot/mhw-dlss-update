@@ -31,6 +31,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <intrin.h>
 #include <ostream>
@@ -216,7 +217,8 @@ StreamLifetime lifetime;
 std::array<ComputeDepthPixels,2> compute_depth_pixels;
 ReadinessTrace readiness;
 OutputDiagnostics diagnostics;
-OutputDependencies dependencies,intermediate_dependencies;
+OutputDependencies dependencies,intermediate_dependencies,inserted_dependencies;
+bool inserted_saved{};
 OutputDependencies compute_dependencies{true};
 DrawStateTrace draw_state_trace;
 using StateJournal=RecordingStates<128,32,ComPtr<ID3D12Resource>>;
@@ -741,6 +743,8 @@ bool build_plan(Plan &p,std::uintptr_t unit){
  // Diagnostic selector from the captured color-chain break. It never admits a pass.
  if(!accepted)intermediate_dependencies.observe_intermediate(observation,[](std::uint64_t at,void *out,std::size_t bytes){
   return pb::copy_memory(static_cast<std::uintptr_t>(at),out,static_cast<unsigned>(bytes));},[&]{return same_stamp(s);},cfg.image+0x3526650);
+ if(!accepted)inserted_dependencies.observe_inserted(observation,[](std::uint64_t at,void *out,std::size_t bytes){
+  return pb::copy_memory(static_cast<std::uintptr_t>(at),out,static_cast<unsigned>(bytes));},[&]{return same_stamp(s);});
  if(!accepted)compute_dependencies.observe_compute_bundle(observation,[](std::uint64_t at,void *out,std::size_t bytes){
   return pb::copy_memory(static_cast<std::uintptr_t>(at),out,static_cast<unsigned>(bytes));},[&]{return same_stamp(s);},cfg.image+0x3526650);
  compute_gpu_capture();
@@ -1352,6 +1356,12 @@ void save_compute_depth(const std::filesystem::path &prefix) noexcept{
  try{Lock lock;if(fault.load())return;for(unsigned i=0;i<compute_depth_pixels.size();++i)
   compute_depth_pixels[i].save(prefix.wstring()+L"-gallery-depth-"+std::to_wstring(i)+L".r32f");}catch(...){/* No renderer changes for artifact failure. */}
 }
+void save_inserted_effect(const std::filesystem::path &prefix) noexcept{
+ // Once per session, a few hundred KB (shader bytes), when first captured.
+ try{Lock lock;if(inserted_saved||!inserted_dependencies.size())return;
+  std::ofstream out(prefix.wstring()+L".inserted-effect.json",std::ios::binary|std::ios::trunc);
+  inserted_dependencies.write(out);out<<'\n';inserted_saved=bool(out);}catch(...){/* No renderer changes for artifact failure. */}
+}
 bool healthy() noexcept{return !fault.load();}
 #ifdef MHW_FG_SCENE_PROBE
 // Status writers copy the bounded CPU map under the route lock, then
@@ -1364,7 +1374,9 @@ void write_summary(std::ostream &o){
  Lock lock;const auto a=[&](const auto &v){o<<'[';for(unsigned i=0;i<v.size();++i){if(i)o<<',';o<<v[i];}o<<']';};
  o<<"{\"fault\":"<<fault.load()<<",\"published\":"<<published<<",\"built\":"<<built<<",\"claimed\":"<<claimed
   <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"plan_rejections\":";a(rejection_counts);
- o<<",\"readiness\":";a(readiness.reasons());o<<",\"latest_rejection\":";
+ o<<",\"readiness\":";a(readiness.reasons());
+ o<<",\"inserted_capture\":{\"attempts\":"<<inserted_dependencies.attempts()<<",\"samples\":"<<inserted_dependencies.size()<<",\"saved\":"<<inserted_saved<<",\"errors\":";
+ a(inserted_dependencies.errors());o<<"},\"latest_rejection\":";
  if(diagnostics.rejected_graphs()!=summarized_rejections)diagnostics.write_latest_rejection(o);else o<<"null";
  summarized_rejections=diagnostics.rejected_graphs();o<<'}';
 }
@@ -1408,6 +1420,7 @@ void write(std::ostream &o){
  scene_snapshot=scene_trace; // Serialized below, after the route lock.
 #endif
  o<<",\"intermediate_dependencies\":";intermediate_dependencies.write(o);
+ o<<",\"inserted_dependencies\":";inserted_dependencies.write(o);
  o<<",\"dof_native_sequence\":";dof_write(o);
  o<<",\"compute_dependencies\":";compute_dependencies.write(o);o<<",\"compute_resources\":";compute_gpu_write(o);
  o<<",\"compute_depth_pixels\":{\"schema\":1,\"policy\":\"native-depth-before-reduction-v1\",\"diagnostic_only\":true,\"captures\":[";

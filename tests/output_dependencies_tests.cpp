@@ -91,6 +91,26 @@ int main(){
   m.put(filter,std::array<std::uint64_t,4>{15ULL|(4100ULL<<32),0x9000,0,objects[0]});
   for(unsigned i=0;i<4;++i)m.put(queue+16*i,0x78001004U);
  }
+ {  // A filter between TAA and the motion unit (game-40 rain: order 0x50).
+  auto inserted=g;inserted.reason=6;inserted.detail=3;inserted.command_gate={};inserted.link_reads=1;
+  inserted.links[3]=objects[1];inserted.filters[0][2]=0x50;inserted.filters[0][5]=objects[1];
+  m.put(filter,std::array<std::uint64_t,4>{15ULL|(0x50ULL<<32),0x9000,objects[1],objects[0]});
+  for(unsigned i=0;i<4;++i)m.put(queue+16*i,0x78000050U);
+  auto captured=std::make_unique<Capture>();captured->observe_inserted(inserted,read,[]{return true;});
+  check(captured->size()==1&&captured->sample(0).key==0x78000050U&&captured->sample(0).count==2,"inserted filter draws captured");
+  check(captured->sample(0).connection==std::array<std::uint64_t,3>{filter,objects[1],objects[0]},"inserted connection retained");
+  emit("inserted",*captured);
+  for(unsigned variant=0;variant<6;++variant){auto invalid=inserted;
+   switch(variant){case 0:invalid.detail=4;break;case 1:invalid.reason=17;break;case 2:invalid.links[3]=0;break;
+    case 3:invalid.filters[0][2]=100;break;case 4:invalid.filters[0][5]=objects[0];break;
+    case 5:invalid.count=2;invalid.filters[1]=invalid.filters[0];break;}
+   auto ignored=std::make_unique<Capture>();const auto reads_before=m.reads;
+   ignored->observe_inserted(invalid,read,[]{return true;});
+   check(!ignored->attempts()&&m.reads==reads_before,"other graphs are not inserted filters");
+  }
+  m.put(filter,std::array<std::uint64_t,4>{15ULL|(4100ULL<<32),0x9000,0,objects[0]});
+  for(unsigned i=0;i<4;++i)m.put(queue+16*i,0x78001004U);
+ }
  #include "output_compute_bundle_fixture.inl"
  auto unreadable=std::make_unique<Capture>();m.put(sets[0],UINT64_MAX-2);unreadable->observe(g,read,[]{return true;});check(!unreadable->size(),"unreadable binding range");emit("unreadable-range",*unreadable);
 }

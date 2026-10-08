@@ -17,6 +17,7 @@ bool quiescent() noexcept;
 void finish() noexcept;
 void save_rejected_shader(const std::filesystem::path &) noexcept;
 void save_compute_depth(const std::filesystem::path &prefix) noexcept;
+void save_inserted_effect(const std::filesystem::path &prefix) noexcept;
 void write(std::ostream &);
 // Counters only (frames, DLSS history resets by reason) for the alpha's minute log.
 void write_summary(std::ostream &);

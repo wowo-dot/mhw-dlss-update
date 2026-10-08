@@ -234,6 +234,7 @@ private:
 public:
  explicit OutputDependencies(bool compute_bundle=false):bundle_(compute_bundle){}
  unsigned size()const{return count_;}unsigned attempts()const{return attempts_;}
+ const std::array<unsigned,6> &errors()const{return errors_;}
  const Sample &sample(unsigned i)const{return samples_[i];}
  // Diagnostic groups only. A nonzero mask never authorizes replay.
  static unsigned compute_difference(const Compute &a,const Compute &b){
@@ -278,6 +279,17 @@ public:
   for(unsigned i=0;i<g.count;++i){const auto &f=g.filters[i];
    if(f[1]==15&&f[2]>100&&f[2]<0x7fffff1&&f[3]&&f[4]==target_type&&
       f[5]==g.links[4]&&f[6]==g.links[5]){++matches;key=static_cast<unsigned>((f[1]<<27)|f[2]);}
+  }
+  if(matches==1)observe_key(g,key,read,stamp);
+ }
+ // One filter inserted between TAA (order 2) and the motion unit (order 100),
+ // reading TAA's output: the motion unit then reads the filter's output
+ // (graph detail 3). game-40: uDepthColorFilter at order 0x50 (rain).
+ template<class G,class R,class S>void observe_inserted(const G &g,R read,S stamp){
+  if(g.reason!=6||g.detail!=3||g.count>16||!g.links[3])return;
+  unsigned matches{},key{};
+  for(unsigned i=0;i<g.count;++i){const auto &f=g.filters[i];
+   if(f[1]==15&&f[2]>2&&f[2]<100&&f[3]&&f[5]==g.links[3]&&f[6]&&f[6]!=f[5]){++matches;key=static_cast<unsigned>((f[1]<<27)|f[2]);}
   }
   if(matches==1)observe_key(g,key,read,stamp);
  }

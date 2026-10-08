@@ -55,6 +55,9 @@ bool indexed_draw(ID3D12GraphicsCommandList *,unsigned,unsigned,unsigned,int,uns
 bool reset(ID3D12GraphicsCommandList *,std::uint64_t) noexcept;
 void collect(std::uint64_t) noexcept;
 void save_compute_depth(const std::filesystem::path &prefix) noexcept;
+// Writes <prefix>.inserted-effect.json once, after the first capture of a
+// filter inserted between TAA and the motion unit (shaders and bindings).
+void save_inserted_effect(const std::filesystem::path &prefix) noexcept;
 bool drained() noexcept;
 bool callbacks_idle() noexcept;
 // Opt-in metadata probe. No FG tags, resource ownership or GPU work.

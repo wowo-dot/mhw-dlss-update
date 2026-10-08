@@ -1073,6 +1073,13 @@ void save_compute_depth(const std::filesystem::path &prefix) noexcept {
     (void)prefix;
 #endif
 }
+void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
+#ifdef MHW_CONTINUOUS_SCALED
+    Lock lock;if(!fault.load())sr::save_inserted_effect(prefix);
+#else
+    (void)prefix;
+#endif
+}
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
