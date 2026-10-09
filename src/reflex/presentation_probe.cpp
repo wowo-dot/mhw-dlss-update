@@ -7,6 +7,7 @@
 // Public creation calls preserve arguments/results/Win32 last-error.
 #include "streamline.hpp"
 #include "presentation.hpp"
+#include "../cmfm/cmfm_hooks.hpp"
 #include "native_factory.hpp"
 #ifdef MHW_REFLEX_TEMPORAL
 #include "temporal_coexistence.hpp"
@@ -24,7 +25,13 @@
 #include <algorithm>
 #ifdef MHW_ALPHA
 #include "../alpha/config.hpp"
+#include "../../third_party/cmfm/cmfm_plugin.h"
+#include "../temporal_present/observer.hpp"
+#include "../continuous_dlaa/runtime.hpp"
+#include "../scaled_temporal/stream_route.hpp"
+#include <cstddef>
 #include <iterator>
+#include <vector>
 // Alpha build: mhw_dlss.ini replaces the research sidecars, the session arms
 // itself once the game is ready and runs until exit, with light logging.
 namespace {
@@ -118,6 +125,16 @@ constexpr unsigned capture_seconds = 600;
 bool initialized{}, device_checked{}, success{};
 unsigned owner{}, qualified_factories{}, qualified_devices{};
 std::string failure;
+// CMFM (alpha): cmfm_plugin_init starts the worker and waits for this event,
+// set once the worker accepts the game's device or failed before that. Init
+// never waits for the NGX stage, which follows device creation.
+HANDLE startup_ready{};
+std::string startup_failure;
+void signal_startup() noexcept { if (startup_ready) SetEvent(startup_ready); }
+// CMFM's cmfm.game reported this exe's SHA-256: the worker skips re-hashing it.
+bool exe_hash_verified{};
+// CMFM: the swap-chain chains were missing when the game created its swap chain.
+std::atomic<bool> swapchain_chains_missing{};
 
 void require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
 void api(sl::Result result, const char* reason) {
@@ -242,6 +259,102 @@ HRESULT WINAPI factory_hook(UINT flags, REFIID iid, void** result) {
     SetLastError(error);
     return factory_original(flags, iid, result);
 }
+// The game's main device exists: Streamline, Reflex and presentation. `out`
+// is the game's output pointer from the D3D12CreateDevice detour (it locates
+// the renderer that receives the device); null under CMFM, whose
+// DEVICE_CREATED phase comes from the game's own import call.
+void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created_device, void** out, unsigned caller_rva) {
+    require(!initialized && !device_checked && !qualified_devices, "duplicate-startup-device");
+    ++qualified_devices;
+    require(created_device != nullptr, "native-device-creation");
+    require(SUCCEEDED(created_device->QueryInterface(IID_PPV_ARGS(&device_pin))), "native-device-interface");
+    require(device_pin->GetNodeCount() == 1 && SUCCEEDED(device_pin->GetDeviceRemovedReason()), "native-device-health");
+    owner = GetCurrentThreadId();
+#ifdef MHW_FG_GAME
+    // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
+    sdk.initialize(runtime, output / L"sdk-logs", fg_plugin ? mhw::reflex::StreamlineFeatures::reflex_and_frame_generation
+                                                             : mhw::reflex::StreamlineFeatures::reflex_only);
+#else
+    sdk.initialize(runtime, output / L"sdk-logs");
+#endif
+    initialized = true;
+    log << "{\"event\":\"sdk_initialized\",\"before_factory\":false,\"after_native_device_creation\":true,"
+           "\"before_native_queues_and_swapchain\":true,\"caller_rva\":" << caller_rva
+        << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
+        << ",\"sleep\":false,\"markers\":false}\n" << std::flush;
+    auto luid = device_pin->GetAdapterLuid();
+    sl::AdapterInfo info{}; info.deviceLUID = reinterpret_cast<std::uint8_t*>(&luid);
+    info.deviceLUIDSizeInBytes = sizeof(luid);
+    api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
+    api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
+#ifdef MHW_FG_GAME
+    if (fg_plugin) {
+        const auto fg_support = sdk.supported(sl::kFeatureDLSS_G, info);
+        sl::FeatureRequirements fg_requirements{};
+        const auto fg_requirements_result = sdk.requirements(sl::kFeatureDLSS_G, fg_requirements);
+        log << "{\"event\":\"fg_support\",\"supported\":" << static_cast<int>(fg_support)
+            << ",\"requirements\":" << static_cast<int>(fg_requirements_result)
+            << ",\"flags\":" << static_cast<unsigned>(fg_requirements.flags)
+            << ",\"max_viewports\":" << fg_requirements.maxNumViewports
+            << ",\"required_tags\":" << fg_requirements.numRequiredTags << "}\n" << std::flush;
+        api(fg_support, "DLSS-G-support"); api(fg_requirements_result, "DLSS-G-requirements");
+    }
+#endif
+    api(sdk.attach(device_pin.Get()), "attach-native-device");
+#ifdef MHW_FG_GAME
+    if (fg_plugin) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
+#endif
+    api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
+    sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
+    device_checked = true;
+    log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"cmfm\":" << (out == nullptr)
+        << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
+        << ",\"luid_low\":" << luid.LowPart << ",\"luid_high\":" << luid.HighPart
+        << ",\"feature_level\":" << static_cast<unsigned>(level)
+        << ",\"low_latency_available\":" << state.lowLatencyAvailable
+        << ",\"mode\":0,\"rendering_modified\":false,\"sleep_calls\":0,\"markers\":0}\n" << std::flush;
+    require(state.lowLatencyAvailable, "Reflex-unavailable");
+    auto factory_pin = mhw::reflex::adapter_factory(adapter);
+    std::uintptr_t backend{}, published{};
+    if (out) {
+    // This hash-qualified call writes its device to [rdi+0x18].
+    // The constructor's renderer global is not published until
+    // RVA 0x23a72d3, after queues and the swap chain already exist.
+    const auto device_output = reinterpret_cast<std::uintptr_t>(out);
+    require(device_output >= 0x18, "startup-native-device-output");
+    backend = device_output - 0x18;
+    std::uintptr_t factory{}, selected_adapter{}, stored_device{};
+    require(pb::read(backend, factory) && factory && pb::read(backend + 0x10, selected_adapter) &&
+        selected_adapter == reinterpret_cast<std::uintptr_t>(adapter) &&
+        pb::read(backend + 0x18, stored_device) && stored_device == reinterpret_cast<std::uintptr_t>(*out),
+        "startup-native-output-owner");
+    Microsoft::WRL::ComPtr<IDXGIFactory2> owner_factory;
+    require(SUCCEEDED(reinterpret_cast<IUnknown*>(factory)->QueryInterface(IID_PPV_ARGS(&owner_factory))) &&
+        owner_factory.Get() == factory_pin.Get(), "startup-native-factory-identity");
+    require(pb::read(image + 0x51c7050, published), "startup-native-publication-slot");
+    }
+    log << "{\"event\":\"factory_context\",\"source\":\"" << (out ? "native-adapter-parent" : "cmfm-adapter-parent")
+        << "\",\"output_owner_matches\":" << (out != nullptr) << ","
+           "\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get()) << ",\"backend\":" << backend
+        << ",\"global_backend_published\":" << (out && published == backend) << "}\n" << std::flush;
+    presentation = new mhw::reflex::Presentation(sdk);
+#ifdef MHW_REFLEX_OWNERSHIP_PROBE
+    presentation->ownership(image,0x55d3000);
+#endif
+#ifdef MHW_FG_GAME
+    // Streamline owns pacing, generated presentation and the host-visible buffers.
+    presentation->install(device_pin.Get(), factory_pin.Get(), fg_plugin ? mhw::reflex::PresentationContract::sdk_paced
+                                                                          : mhw::reflex::PresentationContract::synchronous_native);
+    // DLSS-G Off before any host window manipulation (guide 12.0).
+    presentation->lifecycle({presentation, [](void*, unsigned method) noexcept {
+        return mhw::frame_generation::game::lifecycle_guard(method); }});
+#else
+    presentation->install(device_pin.Get(), factory_pin.Get());
+#endif
+    success = true; accepting.store(false); completed.store(true);
+    log << "{\"event\":\"presentation_installed\",\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get())
+        << ",\"device_native\":true,\"returned_interfaces_native\":true,\"creation_routes\":4,\"mode\":0}\n" << std::flush;
+}
 HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID iid, void** out) {
     Call call;
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
@@ -252,93 +365,8 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
         if (accepting.load()) {
             try {
                 require(gate(0x23a4e2e), "native-device-code-gate");
-                require(!initialized && !device_checked && !qualified_devices, "duplicate-startup-device");
-                ++qualified_devices;
                 require(SUCCEEDED(result) && out && *out, "native-device-creation");
-                auto* created_device = static_cast<IUnknown*>(*out);
-                require(SUCCEEDED(created_device->QueryInterface(IID_PPV_ARGS(&device_pin))), "native-device-interface");
-                require(device_pin->GetNodeCount() == 1 && SUCCEEDED(device_pin->GetDeviceRemovedReason()), "native-device-health");
-                owner = GetCurrentThreadId();
-#ifdef MHW_FG_GAME
-                // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
-                sdk.initialize(runtime, output / L"sdk-logs", fg_plugin ? mhw::reflex::StreamlineFeatures::reflex_and_frame_generation
-                                                                         : mhw::reflex::StreamlineFeatures::reflex_only);
-#else
-                sdk.initialize(runtime, output / L"sdk-logs");
-#endif
-                initialized = true;
-                log << "{\"event\":\"sdk_initialized\",\"before_factory\":false,\"after_native_device_creation\":true,"
-                       "\"before_native_queues_and_swapchain\":true,\"caller_rva\":" << 0x23a4e2e
-                    << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
-                    << ",\"sleep\":false,\"markers\":false}\n" << std::flush;
-                auto luid = device_pin->GetAdapterLuid();
-                sl::AdapterInfo info{}; info.deviceLUID = reinterpret_cast<std::uint8_t*>(&luid);
-                info.deviceLUIDSizeInBytes = sizeof(luid);
-                api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
-                api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
-#ifdef MHW_FG_GAME
-                if (fg_plugin) {
-                    const auto fg_support = sdk.supported(sl::kFeatureDLSS_G, info);
-                    sl::FeatureRequirements fg_requirements{};
-                    const auto fg_requirements_result = sdk.requirements(sl::kFeatureDLSS_G, fg_requirements);
-                    log << "{\"event\":\"fg_support\",\"supported\":" << static_cast<int>(fg_support)
-                        << ",\"requirements\":" << static_cast<int>(fg_requirements_result)
-                        << ",\"flags\":" << static_cast<unsigned>(fg_requirements.flags)
-                        << ",\"max_viewports\":" << fg_requirements.maxNumViewports
-                        << ",\"required_tags\":" << fg_requirements.numRequiredTags << "}\n" << std::flush;
-                    api(fg_support, "DLSS-G-support"); api(fg_requirements_result, "DLSS-G-requirements");
-                }
-#endif
-                api(sdk.attach(device_pin.Get()), "attach-native-device");
-#ifdef MHW_FG_GAME
-                if (fg_plugin) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
-#endif
-                api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
-                sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
-                device_checked = true;
-                log << "{\"event\":\"device_checked\",\"caller_rva\":" << 0x23a4e2e
-                    << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
-                    << ",\"luid_low\":" << luid.LowPart << ",\"luid_high\":" << luid.HighPart
-                    << ",\"feature_level\":" << static_cast<unsigned>(level)
-                    << ",\"low_latency_available\":" << state.lowLatencyAvailable
-                    << ",\"mode\":0,\"rendering_modified\":false,\"sleep_calls\":0,\"markers\":0}\n" << std::flush;
-                require(state.lowLatencyAvailable, "Reflex-unavailable");
-                auto factory_pin = mhw::reflex::adapter_factory(adapter);
-                // This hash-qualified call writes its device to [rdi+0x18].
-                // The constructor's renderer global is not published until
-                // RVA 0x23a72d3, after queues and the swap chain already exist.
-                const auto device_output = reinterpret_cast<std::uintptr_t>(out);
-                require(device_output >= 0x18, "startup-native-device-output");
-                const auto backend = device_output - 0x18;
-                std::uintptr_t factory{}, selected_adapter{}, stored_device{}, published{};
-                require(pb::read(backend, factory) && factory && pb::read(backend + 0x10, selected_adapter) &&
-                    selected_adapter == reinterpret_cast<std::uintptr_t>(adapter) &&
-                    pb::read(backend + 0x18, stored_device) && stored_device == reinterpret_cast<std::uintptr_t>(*out),
-                    "startup-native-output-owner");
-                Microsoft::WRL::ComPtr<IDXGIFactory2> owner_factory;
-                require(SUCCEEDED(reinterpret_cast<IUnknown*>(factory)->QueryInterface(IID_PPV_ARGS(&owner_factory))) &&
-                    owner_factory.Get() == factory_pin.Get(), "startup-native-factory-identity");
-                require(pb::read(image + 0x51c7050, published), "startup-native-publication-slot");
-                log << "{\"event\":\"factory_context\",\"source\":\"native-adapter-parent\",\"output_owner_matches\":true,"
-                       "\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get()) << ",\"backend\":" << backend
-                    << ",\"global_backend_published\":" << (published == backend) << "}\n" << std::flush;
-                presentation = new mhw::reflex::Presentation(sdk);
-#ifdef MHW_REFLEX_OWNERSHIP_PROBE
-                presentation->ownership(image,0x55d3000);
-#endif
-#ifdef MHW_FG_GAME
-                // Streamline owns pacing, generated presentation and the host-visible buffers.
-                presentation->install(device_pin.Get(), factory_pin.Get(), fg_plugin ? mhw::reflex::PresentationContract::sdk_paced
-                                                                                      : mhw::reflex::PresentationContract::synchronous_native);
-                // DLSS-G Off before any host window manipulation (guide 12.0).
-                presentation->lifecycle({presentation, [](void*, unsigned method) noexcept {
-                    return mhw::frame_generation::game::lifecycle_guard(method); }});
-#else
-                presentation->install(device_pin.Get(), factory_pin.Get());
-#endif
-                success = true; accepting.store(false); completed.store(true);
-                log << "{\"event\":\"presentation_installed\",\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get())
-                    << ",\"device_native\":true,\"returned_interfaces_native\":true,\"creation_routes\":4,\"mode\":0}\n" << std::flush;
+                attach_device(adapter, level, static_cast<IUnknown*>(*out), out, 0x23a4e2e);
             } catch (const std::exception& e) { failed(e); }
         }
     }
@@ -585,12 +613,14 @@ void poll_perf(std::ostream& out, const std::filesystem::path& folder, const std
 DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-        reinterpret_cast<LPCWSTR>(&worker), &pin)) return 1;
+        reinterpret_cast<LPCWSTR>(&worker), &pin)) { startup_failure = "module-pin"; signal_startup(); return 1; }
     {   // One active copy per process: a second one (e.g. loaded by CMFM and also
         // force-loaded by MO2) stays inert. The handle lives as long as the process.
         const auto name = L"Local\\mhw_dlss.instance." + std::to_wstring(GetCurrentProcessId());
         const HANDLE instance = CreateMutexW(nullptr, FALSE, name.c_str());
-        if (!instance || GetLastError() == ERROR_ALREADY_EXISTS) return 0;
+        if (!instance || GetLastError() == ERROR_ALREADY_EXISTS) {
+            startup_failure = "another mhw_dlss copy is already active in this process"; signal_startup(); return 0;
+        }
     }
     try {
         wchar_t dll_name[32768]{}, host_name[32768]{};
@@ -653,7 +683,7 @@ DWORD WINAPI worker(void*) noexcept {
             require(!under(text, game_root), "configuration-in-game-directory");
         }
         image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)); std::string reason;
-        require(pb::host_identity(image, reason), "retail-host-identity");
+        require(pb::host_identity(image, reason, !exe_hash_verified), "retail-host-identity");
         FILETIME ct{}, et{}, kt{}, ut{}; require(GetProcessTimes(GetCurrentProcess(), &ct, &et, &kt, &ut) != FALSE, "process-identity");
         const auto creation = (static_cast<std::uint64_t>(ct.dwHighDateTime) << 32) | ct.dwLowDateTime;
 #ifdef MHW_FG_GAME
@@ -681,7 +711,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.13.11\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.14.0\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
         log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.14\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
@@ -720,8 +750,11 @@ DWORD WINAPI worker(void*) noexcept {
         // The native constructor loads both modules dynamically. They are not
         // static imports of this probe, so GetModuleHandle alone races startup.
         // Resolve exact system modules before installing either creation hook.
-        load_creation_api(0, L"dxgi.dll", "CreateDXGIFactory2");
-        load_creation_api(1, L"d3d12.dll", "D3D12CreateDevice");
+        // Under CMFM the device arrives through DEVICE_CREATED instead.
+        if (!mhw::cmfm::active()) {
+            load_creation_api(0, L"dxgi.dll", "CreateDXGIFactory2");
+            load_creation_api(1, L"d3d12.dll", "D3D12CreateDevice");
+        }
 #ifdef MHW_REFLEX_FRAME_PROBE
         const bool pool_ready=mhw::reflex::LiveFrames::reserve(image,reason);
         const auto& pool=pb::pool_state();
@@ -734,7 +767,7 @@ DWORD WINAPI worker(void*) noexcept {
 #else
         require(MH_Initialize() == MH_OK, "hook-initialize");
 #endif
-        for (unsigned i = 0; i < targets.size(); ++i) {
+        for (unsigned i = 0; i < targets.size() && !mhw::cmfm::active(); ++i) {
             for (unsigned n = 0; n < original_heads[i].size(); ++n)
                 require(pb::read(reinterpret_cast<std::uintptr_t>(targets[i]) + n*8ULL, original_heads[i][n]), "original-api-head");
             void* original{};
@@ -742,14 +775,18 @@ DWORD WINAPI worker(void*) noexcept {
             created[i] = true;
             if (i == 0) factory_original = reinterpret_cast<FactoryFn>(original); else device_original = reinterpret_cast<DeviceFn>(original);
         }
-        for (unsigned i = 0; i < targets.size(); ++i) require(MH_QueueEnableHook(targets[i]) == MH_OK, "queue-creation-hook");
-        log << "{\"event\":\"prepared\",\"queued_api_hooks\":2,\"sdk_initialized\":false,\"original_heads_rva\":"
+        for (unsigned i = 0; i < targets.size() && !mhw::cmfm::active(); ++i) require(MH_QueueEnableHook(targets[i]) == MH_OK, "queue-creation-hook");
+        log << "{\"event\":\"prepared\",\"cmfm\":" << mhw::cmfm::active() << ",\"queued_api_hooks\":" << (mhw::cmfm::active() ? 0 : 2)
+            << ",\"sdk_initialized\":false,\"original_heads_rva\":"
             << reinterpret_cast<std::uintptr_t>(&original_heads) - reinterpret_cast<std::uintptr_t>(module)
             << ",\"targets\":[" << reinterpret_cast<std::uintptr_t>(targets[0]) << ','
             << reinterpret_cast<std::uintptr_t>(targets[1]) << "]}\n" << std::flush;
         accepting.store(true);
-        enabled.fill(true); // cleanup also covers a partially applied batch
-        require(MH_ApplyQueued() == MH_OK, "enable-creation-hooks");
+        if (mhw::cmfm::active()) signal_startup();
+        else {
+            enabled.fill(true); // cleanup also covers a partially applied batch
+            require(MH_ApplyQueued() == MH_OK, "enable-creation-hooks");
+        }
 #ifdef MHW_REFLEX_TEMPORAL
         // Native API callbacks run on the game thread while this worker admits
         // the later NGX initializer. One early pool, one worker, two SDK owners.
@@ -766,7 +803,7 @@ DWORD WINAPI worker(void*) noexcept {
         const auto began = GetTickCount64();
         while (!completed.load() && GetTickCount64() - began < 180000) Sleep(20);
         const bool hooks_clean = clean_hooks();
-        const bool swap_observed = success && hooks_clean && describe_swap();
+        const bool swap_observed = success && hooks_clean && describe_swap() && !swapchain_chains_missing.load();
         if (swap_observed) {
 #ifdef MHW_REFLEX_FRAME_PROBE
             require(driver_mode("startup_off",false),"driver-startup-Off");
@@ -1089,6 +1126,8 @@ DWORD WINAPI worker(void*) noexcept {
         return success && hooks_clean && routes_clean && sdk_clean && swap_observed && stats.presents && !stats.faults && log ? 0 : 2;
 #endif
     } catch (const std::exception& e) {
+        try { startup_failure = e.what(); } catch (...) {}
+        signal_startup();
 #ifdef MHW_FG_GAME
         // Once Streamline has created the host chain under SDK pacing, the game
         // renders into Streamline's buffers: unhooking or shutting it down here
@@ -1110,7 +1149,7 @@ DWORD WINAPI worker(void*) noexcept {
         // one line next to mhw_dlss.ini so the silent fail-closed is explainable.
         if (!log.is_open() && !alpha_base.empty()) try {
             std::ofstream early(alpha_base / L"startup-error.jsonl", std::ios::binary | std::ios::app);
-            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.13.11\",\"pid\":" << GetCurrentProcessId()
+            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.14.0\",\"pid\":" << GetCurrentProcessId()
                 << ",\"reason\":" << quoted(e.what()) << "}\n" << std::flush;
         } catch (...) {}
 #endif
@@ -1118,11 +1157,111 @@ DWORD WINAPI worker(void*) noexcept {
     }
 }
 }
+#ifdef MHW_ALPHA
+// CMFM plugin entry (plugin API 1.3, "cmfm.d3d12" 1.0). CMFM loads
+// cmfm\plugins\mhw_dlss\mhw_dlss.dll, calls cmfm_plugin_info, then
+// cmfm_plugin_init on its PRE_MAIN thread outside the loader lock. Init claims
+// the presentation role, registers every DXGI/D3D12 detour (CMFM owns the
+// patches), starts the worker and waits until it accepts the device.
+namespace {
+const cmfm_api_t* cmfm_api{};
+cmfm_plugin_t* cmfm_self{};
+const cmfm_d3d12_t* cmfm_d3d12{};
+void cmfm_begin(void* self) { cmfm_d3d12->begin_internal(static_cast<cmfm_plugin_t*>(self)); }
+void cmfm_end(void* self) { cmfm_d3d12->end_internal(static_cast<cmfm_plugin_t*>(self)); }
+void cmfm_log(cmfm_log_level_t level, const std::string& text) noexcept { if (cmfm_api) cmfm_api->log(cmfm_self, level, text.c_str()); }
+void cmfm_status(cmfm_status_t status, const std::string& reason) noexcept {
+    if (cmfm_api) cmfm_api->set_status(cmfm_self, status, reason.empty() ? nullptr : reason.c_str());
+}
+// UNAVAILABLE: CMFM will not call the detours (DirectX 11, a family failed).
+bool cmfm_graphics_running(std::string& why) noexcept {
+    cmfm_d3d12_status_t s{}; s.size = sizeof(s); cmfm_d3d12->status(cmfm_self, &s);
+    if (s.state != CMFM_D3D12_UNAVAILABLE) return true;
+    why = s.reason ? s.reason : "cmfm.d3d12 unavailable"; return false;
+}
+void CMFM_CALL on_phase(cmfm_plugin_t*, cmfm_phase_t phase, const void* data) {
+    try {
+        if (phase == CMFM_PHASE_DEVICE_CREATED) {
+            const auto* d = static_cast<const cmfm_phase_device_t*>(data);
+            std::string why;
+            if (!d || d->size < sizeof(*d) || !d->device) { cmfm_status(CMFM_STATUS_DEGRADED, "device phase without a device"); return; }
+            if (!cmfm_graphics_running(why)) { cmfm_status(CMFM_STATUS_DEGRADED, "graphics hooks unavailable: " + why); return; }
+            {
+                Call call;
+                if (accepting.load()) {
+                    std::lock_guard lock(sdk_mutex);
+                    if (accepting.load()) {
+                        try {
+                            attach_device(static_cast<IUnknown*>(d->adapter), static_cast<D3D_FEATURE_LEVEL>(d->minimum_feature_level),
+                                static_cast<IUnknown*>(d->device), nullptr, 0);
+                        } catch (const std::exception& e) { failed(e); }
+                    }
+                }
+            }
+            if (!success) cmfm_status(CMFM_STATUS_DEGRADED, failure.empty() ? "the game's device was not attached" : failure);
+        } else if (phase == CMFM_PHASE_SWAPCHAIN_CREATED) {
+            std::string why;
+            if (!mhw::reflex::presentation_cmfm_swapchain_chains() || !cmfm_graphics_running(why)) {
+                swapchain_chains_missing.store(true);
+                cmfm_status(CMFM_STATUS_DEGRADED, "swap-chain hooks unavailable; DLSS and frame generation stay off");
+            }
+        }
+    } catch (...) {}
+}
+const char* const supported_exes[]{mhw::projection_binding::host_sha, nullptr};
+const cmfm_plugin_info_t plugin_info{
+    sizeof(cmfm_plugin_info_t), CMFM_API_VERSION, "mhw_dlss", "MHW DLSS / Frame Generation", "0.14.0",
+    CMFM_PHASE_BIT(CMFM_PHASE_DEVICE_CREATED) | CMFM_PHASE_BIT(CMFM_PHASE_SWAPCHAIN_CREATED),
+    0, nullptr, nullptr, supported_exes, on_phase, nullptr};
+cmfm_result_t start(const cmfm_api_t* api, const cmfm_init_t* init) {
+    const auto refuse = [&](const std::string& why) { cmfm_status(CMFM_STATUS_DISABLED, why); cmfm_log(CMFM_LOG_ERROR, why); return CMFM_ERROR; };
+    cmfm_d3d12 = static_cast<const cmfm_d3d12_t*>(api->get_interface(init->self, CMFM_D3D12_INTERFACE, CMFM_D3D12_VERSION));
+    if (!cmfm_d3d12 || cmfm_d3d12->size < sizeof(cmfm_d3d12_t)) return refuse("this CMFM has no cmfm.d3d12 1.0");
+    const auto* game = static_cast<const cmfm_game_t*>(api->get_interface(init->self, CMFM_GAME_INTERFACE, CMFM_GAME_VERSION));
+    if (game && game->size >= sizeof(cmfm_game_t)) {
+        if (game->graphics == CMFM_GRAPHICS_DX11) return refuse("the game is set to DirectX 11; this mod needs DirectX 12");
+        exe_hash_verified = game->exe_sha256 && std::string_view(game->exe_sha256) == mhw::projection_binding::host_sha;
+    }
+    if (cmfm_d3d12->claim_presentation(init->self) != CMFM_OK) return refuse("another plugin holds the presentation role (see the log)");
+    mhw::cmfm::activate(cmfm_begin, cmfm_end, init->self);
+    std::vector<mhw::cmfm::Hook> hooks;
+    mhw::reflex::presentation_cmfm_hooks(hooks);
+    mhw::temporal_present::observer::cmfm_hooks(hooks);
+    mhw::continuous_dlaa::cmfm_hooks(hooks);
+    mhw::scaled_temporal::stream_route::cmfm_hooks(hooks);
+    std::vector<cmfm_d3d12_hook_t> table;
+    for (const auto& h : hooks) table.push_back({h.method, 0, h.detour, h.next});
+    if (cmfm_d3d12->hook(init->self, table.data(), static_cast<std::uint32_t>(table.size())) != CMFM_OK)
+        return refuse("graphics hook registration refused (see the log)");
+    cmfm_log(CMFM_LOG_INFO, std::to_string(table.size()) + " graphics detours registered, presentation role held");
+    startup_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!startup_ready) return refuse("startup event");
+    const auto thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
+    if (!thread) return refuse("worker thread");
+    CloseHandle(thread);
+    // The worker reads its configuration, opens its log and reserves its hook
+    // pool; device creation cannot start before this returns (PRE_MAIN).
+    if (WaitForSingleObject(startup_ready, 30000) != WAIT_OBJECT_0) return refuse("startup timed out");
+    if (!accepting.load()) return refuse(startup_failure.empty() ? "startup failed (see the mod's log)" : startup_failure);
+    cmfm_status(CMFM_STATUS_ACTIVE, {});
+    return CMFM_OK;
+}
+}
+extern "C" __declspec(dllexport) const cmfm_plugin_info_t* CMFM_CALL cmfm_plugin_info(void) { return &plugin_info; }
+extern "C" __declspec(dllexport) cmfm_result_t CMFM_CALL cmfm_plugin_init(const cmfm_api_t* api, const cmfm_init_t* init) {
+    if (!api || !init || !init->self || api->size < offsetof(cmfm_api_t, publish_interface)) return CMFM_ERROR;
+    cmfm_api = api; cmfm_self = init->self;
+    try { return start(api, init); } catch (...) { cmfm_status(CMFM_STATUS_DISABLED, "start-up exception"); return CMFM_ERROR; }
+}
+#endif
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         module = instance; DisableThreadLibraryCalls(instance);
+#ifndef MHW_ALPHA
         const auto thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
+#endif
+        // The alpha is a CMFM plugin: cmfm_plugin_init starts the worker.
     }
     return TRUE;
 }

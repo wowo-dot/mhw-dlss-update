@@ -1,7 +1,9 @@
 #pragma once
 #include "bindings.hpp"
+#include "../cmfm/cmfm_hooks.hpp"
 #include <iosfwd>
 #include <string>
+#include <vector>
 
 namespace mhw::temporal_present::observer {
 inline constexpr unsigned hook_count=18, list_limit=128, sample_limit=9;
@@ -54,5 +56,8 @@ bool settled() noexcept;
 bool healthy() noexcept;
 bool hooks_disabled() noexcept;
 bool finish() noexcept;
+// CMFM: all observer detours (the full raster/predicate/indexed set) with the
+// storage CMFM fills; install() then only checks them and starts them.
+void cmfm_hooks(std::vector<cmfm::Hook>&);
 void write(std::ostream &);
 }

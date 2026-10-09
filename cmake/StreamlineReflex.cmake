@@ -53,7 +53,7 @@ target_link_options(mhw_reflex_startup_probe PRIVATE /guard:cf /OPT:NOICF)
 set_target_properties(mhw_reflex_startup_probe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_library(mhw_reflex_presentation STATIC src/reflex/presentation.cpp)
-target_link_libraries(mhw_reflex_presentation PUBLIC mhw_streamline_reflex minhook d3d12 dxgi dxguid)
+target_link_libraries(mhw_reflex_presentation PUBLIC mhw_streamline_reflex minhook d3d12 dxgi dxguid mhw_cmfm_hooks)
 target_compile_options(mhw_reflex_presentation PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /external:W0 /guard:cf)
 
 add_executable(mhw_reflex_presentation_fixture tools/reflex_presentation_fixture.cpp)

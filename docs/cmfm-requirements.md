@@ -20,10 +20,12 @@ There is no standalone `winmm.dll` mode any more (removed in v0.13.11). The
 mod is a plain `mhw_dlss.dll` in a self-contained plugin folder
 (`mhw_dlss.dll`, `mhw_dlss.ini`, NVIDIA runtime, `logs`).
 
-What CMFM's loader must do for it, before any API exists:
+From v0.14.0 the mod is a `cmfm.d3d12` plugin: CMFM owns the DXGI/D3D12 patches
+and the mod registers its detours at PRE_MAIN ([research/cmfm-migration.md](research/cmfm-migration.md)).
+
+What CMFM's loader must do for it, in any case:
 - Load `mhw_dlss.dll` by full path before the game loads dxgi.dll and creates
-  its device: at injection or at the post-unpack phase. Its DllMain only
-  starts a worker thread.
+  its device. Its DllMain does no work; `cmfm_plugin_init` starts it.
 - Load only that DLL from the folder. The NVIDIA DLLs beside it
   (`sl.*.dll`, `nvngx_*.dll`) are not plugins, and the mod loads them itself
   by full path after hash checks.

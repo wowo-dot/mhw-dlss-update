@@ -1,5 +1,6 @@
 #include "observer.hpp"
 #include "../perf/toggles.hpp"
+#include "../cmfm/cmfm_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -29,6 +30,9 @@ std::array<Sample,sample_limit> samples;
 std::array<std::uintptr_t,max_hooks> targets;
 std::array<void *,max_hooks> originals;
 std::array<bool,max_hooks> created,enabled;
+// CMFM: the detours run from install to finish (as the MinHook patches did);
+// otherwise each call continues straight to CMFM's stored next method.
+std::atomic<bool> chain_live{};
 std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
 std::atomic<unsigned> pending{},fault{};
 std::atomic<bool> accepting{};
@@ -191,6 +195,46 @@ void root_json(std::ostream &o,const RootBindings &r){
     }o<<"]}";
 }
 }
+namespace {
+template<auto Detour,unsigned I> struct Chained;
+template<class... A,void(WINAPI *Detour)(A...),unsigned I> struct Chained<Detour,I> {
+    static void WINAPI call(A... a){
+        if(chain_live.load(std::memory_order_acquire))Detour(a...);
+        else reinterpret_cast<void(WINAPI *)(A...)>(originals[I])(a...);
+    }
+};
+const std::array<void *,max_hooks> chained{
+    reinterpret_cast<void *>(Chained<pointer_call<0>,0>::call),reinterpret_cast<void *>(Chained<pointer_call<1>,1>::call),
+    reinterpret_cast<void *>(Chained<pointer_call<2>,2>::call),reinterpret_cast<void *>(Chained<heaps_call,3>::call),
+    reinterpret_cast<void *>(Chained<pointer_call<4>,4>::call),reinterpret_cast<void *>(Chained<pointer_call<5>,5>::call),
+    reinterpret_cast<void *>(Chained<table_call<6>,6>::call),reinterpret_cast<void *>(Chained<table_call<7>,7>::call),
+    reinterpret_cast<void *>(Chained<constant_call<8>,8>::call),reinterpret_cast<void *>(Chained<constant_call<9>,9>::call),
+    reinterpret_cast<void *>(Chained<constants_call<10>,10>::call),reinterpret_cast<void *>(Chained<constants_call<11>,11>::call),
+    reinterpret_cast<void *>(Chained<address_call<12>,12>::call),reinterpret_cast<void *>(Chained<address_call<13>,13>::call),
+    reinterpret_cast<void *>(Chained<address_call<14>,14>::call),reinterpret_cast<void *>(Chained<address_call<15>,15>::call),
+    reinterpret_cast<void *>(Chained<address_call<16>,16>::call),reinterpret_cast<void *>(Chained<address_call<17>,17>::call),
+    reinterpret_cast<void *>(Chained<topology_call,18>::call),reinterpret_cast<void *>(Chained<raster_call<19,D3D12_VIEWPORT>,19>::call),
+    reinterpret_cast<void *>(Chained<raster_call<20,D3D12_RECT>,20>::call),reinterpret_cast<void *>(Chained<vertices_call,21>::call),
+    reinterpret_cast<void *>(Chained<outputs_call,22>::call),reinterpret_cast<void *>(Chained<predicate_call,23>::call),
+    reinterpret_cast<void *>(Chained<pointer_call<24>,24>::call)};
+}
+void cmfm_hooks(std::vector<cmfm::Hook> &out){
+    for(unsigned i=0;i<max_hooks;++i)out.push_back({cmfm::method(cmfm::command_list,methods[i]),chained[i],&originals[i]});
+}
+namespace {
+bool install_chained(ID3D12GraphicsCommandList *list,Resolver resolve,std::string &reason){
+    // CMFM registered all max_hooks methods at PRE_MAIN and installed them at
+    // DEVICE_CREATED. The targets are still resolved to check them.
+    if(installed_hooks!=max_hooks){reason="bindings-cmfm-hook-set";return false;}
+    for(unsigned i=0;i<installed_hooks;++i){
+        if(!resolve(reinterpret_cast<std::uintptr_t>(list),methods[i],targets[i])){reason="bindings-system-method-"+std::to_string(methods[i]);return false;}
+        for(unsigned j=0;j<i;++j)if(targets[i]==targets[j]){reason="bindings-method-alias";return false;}
+        if(!originals[i]){reason="bindings-cmfm-chain-"+std::to_string(methods[i]);return false;}
+    }
+    enabled.fill(false);for(unsigned i=0;i<installed_hooks;++i)enabled[i]=true;
+    chain_live.store(true,std::memory_order_release);return true;
+}
+}
 bool install(ID3D12Device *device,Resolver resolve,std::string &reason,bool raster,ViewportListener listener,bool predicate,bool indexed){
     if(installed||!device||!resolve||(!raster&&(listener||predicate||indexed))||(indexed&&!predicate)){reason="bindings-install-contract";return false;}installed=true;viewport_listener=listener;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
@@ -198,6 +242,7 @@ bool install(ID3D12Device *device,Resolver resolve,std::string &reason,bool rast
        FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())){
         reason="bindings-discovery-list";return false;}
     installed_hooks=indexed?max_hooks:predicate?predicate_hooks:raster?raster_hooks:hook_count;
+    if(cmfm::active())return install_chained(list.Get(),resolve,reason);
     const std::array<void *,max_hooks> detours{
         reinterpret_cast<void *>(pointer_call<0>),reinterpret_cast<void *>(pointer_call<1>),reinterpret_cast<void *>(pointer_call<2>),reinterpret_cast<void *>(heaps_call),
         reinterpret_cast<void *>(pointer_call<4>),reinterpret_cast<void *>(pointer_call<5>),reinterpret_cast<void *>(table_call<6>),reinterpret_cast<void *>(table_call<7>),
@@ -278,6 +323,7 @@ bool healthy() noexcept {return fault.load(std::memory_order_acquire)==0;}
 bool finish() noexcept {
     if(!installed)return true;
     stop();const auto start=GetTickCount64();while(!settled()&&GetTickCount64()-start<2000)Sleep(1);drained=settled();bool ok=drained;
+    if(cmfm::active()){chain_live.store(false,std::memory_order_release);enabled.fill(false);}
     for(unsigned i=0;i<installed_hooks;++i)if(created[i]){
         const auto status=MH_DisableHook(reinterpret_cast<void *>(targets[i]));
         if(status==MH_OK||status==MH_ERROR_DISABLED)enabled[i]=false;else ok=false;

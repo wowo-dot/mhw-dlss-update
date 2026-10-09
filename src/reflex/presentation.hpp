@@ -1,6 +1,7 @@
 #pragma once
 #include "streamline.hpp"
 #include "present_result.hpp"
+#include "../cmfm/cmfm_hooks.hpp"
 #if defined(MHW_FG_SCENE_PROBE) || defined(MHW_FG_GAME)
 #include "../frame_generation/presentation_buffers.hpp"
 #endif
@@ -9,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <iosfwd>
+#include <vector>
 
 namespace mhw::reflex {
 struct PresentationStats {
@@ -95,4 +97,10 @@ private:
 // lock that never waits for the route mutex. False before construction.
 bool scene_presentation_buffers(frame_generation::PresentationBuffers&) noexcept;
 #endif
+// CMFM: the presentation detours, each with the storage CMFM fills with its
+// continuation; registered at PRE_MAIN with claim_presentation. Factory and
+// device chains exist from DEVICE_CREATED, swap-chain chains once the game's
+// first swap chain is created (checked by presentation_cmfm_swapchain_chains).
+void presentation_cmfm_hooks(std::vector<cmfm::Hook>&);
+bool presentation_cmfm_swapchain_chains() noexcept;
 }

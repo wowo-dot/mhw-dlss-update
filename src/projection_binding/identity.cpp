@@ -52,10 +52,10 @@ std::string file_sha256(const std::wstring &path) {
   return file.eof() ? hash.finish() : std::string{};
 }
 std::string bytes_sha256(const void *data,unsigned size) { Hash h; return h.add(data,size)?h.finish():std::string{}; }
-bool host_identity(std::uintptr_t base, std::string &reason) {
+bool host_identity(std::uintptr_t base, std::string &reason, bool hash_file) {
   wchar_t path[32768]{};
   const auto n = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
-  if (!n || n >= std::size(path) || file_sha256(path) != host_sha) { reason = "host-sha256"; return false; }
+  if (!n || n >= std::size(path) || (hash_file && file_sha256(path) != host_sha)) { reason = "host-sha256"; return false; }
   std::uint16_t magic{}, machine{}; std::uint32_t pe{}, sig{}, stamp{}, size{};
   if (!read(base, magic) || magic != 0x5a4d || !read(base + 0x3c, pe) || pe > 0x1000 ||
       !read(base + pe, sig) || sig != 0x4550 || !read(base + pe + 4, machine) || machine != 0x8664 ||

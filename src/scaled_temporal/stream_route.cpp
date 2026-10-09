@@ -239,6 +239,10 @@ prepared_queue::Recorder prepared_queues;
 struct Active {unsigned slot{};ID3D12GraphicsCommandList *list{};std::uint64_t generation{};std::uintptr_t recording{};
  bool resolved{},copied{};unsigned draws{};std::array<bool,9> known{};std::array<unsigned,9> states{};} active;
 std::array<std::uintptr_t,6> targets{};std::array<void *,6> originals{};std::array<bool,6> enabled{};
+// CMFM: hook 2 (CopyTextureRegion) is a CMFM chain, live while the runtime
+// has the stream hooks applied (chains_live), otherwise continuing straight on.
+constexpr unsigned api_hook=2;
+std::atomic<bool> chain_live{};
 std::atomic<bool> accepting{};std::atomic<unsigned> pending{},fault{};
 std::uint64_t published{},built{},unqualified{},claimed{},copies{},draws{},warmups{},complete{};
 std::uint64_t haze_claimed{},haze_complete{},haze_draws{};
@@ -1093,7 +1097,9 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
     FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||
     !pb::system_method(reinterpret_cast<std::uintptr_t>(list.Get()),16,targets[2])){reason="stream method discovery";return false;}
  const std::array<void *,6> detours{reinterpret_cast<void *>(scaled_postfilter_entry),reinterpret_cast<void *>(scaled_draw_execution_entry),reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry)};
- for(unsigned i=0;i<targets.size();++i){if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK||
+ for(unsigned i=0;i<targets.size();++i){
+  if(cmfm::active()&&i==api_hook){if(!originals[i]){reason="stream CMFM chain";return false;}enabled[i]=true;continue;}
+  if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK||
     MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK){reason="stream hook preparation";return false;}enabled[i]=true;}
  return true;
 }
@@ -1392,8 +1398,9 @@ bool abandon() noexcept{
  active={};abandoned=true;return true;
 }
 void stop() noexcept{accepting=false;}
-bool queue_disable() noexcept{for(unsigned i=0;i<targets.size();++i)if(enabled[i]&&MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)return false;return true;}
-void disabled(bool yes) noexcept{if(yes){Lock lock;enabled.fill(false);recording_states.clear();compute_gpu_states.stop();for(auto &s:compute_gpu_samples)for(auto &r:s.resources)r.hold.Reset();for(auto &c:compute_depth_pixels)c.disable();}}
+bool queue_disable() noexcept{for(unsigned i=0;i<targets.size();++i)if(enabled[i]&&!(cmfm::active()&&i==api_hook)&&MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)return false;return true;}
+void chains_live(bool yes) noexcept{chain_live.store(yes,std::memory_order_release);}
+void disabled(bool yes) noexcept{if(yes){chain_live.store(false,std::memory_order_release);Lock lock;enabled.fill(false);recording_states.clear();compute_gpu_states.stop();for(auto &s:compute_gpu_samples)for(auto &r:s.resources)r.hold.Reset();for(auto &c:compute_depth_pixels)c.disable();}}
 void save_compute_depth(const std::filesystem::path &prefix) noexcept{
  try{Lock lock;if(fault.load())return;for(unsigned i=0;i<compute_depth_pixels.size();++i)
   compute_depth_pixels[i].save(prefix.wstring()+L"-gallery-depth-"+std::to_wstring(i)+L".r32f");}catch(...){/* No renderer changes for artifact failure. */}
@@ -1491,3 +1498,17 @@ extern "C" void mhw_scaled_draw_execution(mhw::projection_binding::Frame *f){mhw
 extern "C" void mhw_scaled_stream_final(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::final_dispatch(f);}
 extern "C" void mhw_scaled_copy_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::copy_dispatch(f);}
 extern "C" void mhw_scaled_indexed_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::indexed_dispatch(f);}
+namespace mhw::scaled_temporal::stream_route {
+namespace {
+template<auto Detour> struct Chained;
+template<class... A,void(WINAPI *Detour)(A...)> struct Chained<Detour> {
+    static void WINAPI call(A... a){
+        if(chain_live.load(std::memory_order_acquire))Detour(a...);
+        else reinterpret_cast<void(WINAPI *)(A...)>(originals[api_hook])(a...);
+    }
+};
+}
+void cmfm_hooks(std::vector<cmfm::Hook> &out){
+    out.push_back({cmfm::method(cmfm::command_list,16),reinterpret_cast<void *>(&Chained<&copy_hook>::call),&originals[api_hook]});
+}
+}

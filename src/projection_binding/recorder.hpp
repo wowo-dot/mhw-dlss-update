@@ -167,7 +167,8 @@ bool reserve_startup(std::uintptr_t base,std::string &reason);
 bool reserve_pool(const std::array<std::uintptr_t,10> &,std::string &reason);
 std::string file_sha256(const std::wstring &);
 std::string bytes_sha256(const void *,unsigned);
-bool host_identity(std::uintptr_t,std::string &);
+// hash_file=false: the caller verified the exe file hash another way (CMFM).
+bool host_identity(std::uintptr_t,std::string &,bool hash_file=true);
 bool verify_code(std::uintptr_t,unsigned,unsigned,const char *);
 bool prepare(std::uintptr_t,std::string &); // Gates code, pins COM discovery; no game data writes.
 bool arm(std::string &);

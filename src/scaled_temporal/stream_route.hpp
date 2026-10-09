@@ -1,4 +1,6 @@
 #pragma once
+#include "../cmfm/cmfm_hooks.hpp"
+#include <vector>
 #include "../temporal_bindings/inputs.hpp"
 #include "../frame_generation/presentation_buffers.hpp"
 #include <d3d12.h>
@@ -71,6 +73,10 @@ bool abandon() noexcept;
 void stop() noexcept;
 bool queue_disable() noexcept;
 void disabled(bool) noexcept;
+// CMFM: the CopyTextureRegion detour with the storage CMFM fills; it runs
+// while chains_live(true) (set where the runtime applies the stream hooks).
+void cmfm_hooks(std::vector<cmfm::Hook>&);
+void chains_live(bool) noexcept;
 bool healthy() noexcept;
 void write(std::ostream &);
 // Counters only for the alpha's minute log: plan rejections by reason,

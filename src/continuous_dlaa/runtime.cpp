@@ -32,6 +32,7 @@
 #ifdef MHW_FG_GAME
 #include "../frame_generation/game_session.hpp"
 #endif
+#include "../cmfm/cmfm_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -80,6 +81,10 @@ void fail(unsigned n) noexcept {unsigned zero{};fault.compare_exchange_strong(ze
 bool read(void *,std::uintptr_t p,std::span<std::byte> out){return pb::copy_memory(p,out.data(),static_cast<unsigned>(out.size()));}
 const tb::Reader reader{nullptr,read};
 std::array<std::uintptr_t,hook_count> targets{};std::array<void *,hook_count> originals{};std::array<bool,hook_count> enabled{};
+// CMFM: hooks 5.. (D3D12) are CMFM chains; their detours run from install to
+// finish, as the MinHook patches did, and otherwise continue straight on.
+constexpr unsigned first_api_hook=5;
+std::atomic<bool> chain_live{};
 // native: producer, consumer, depth producer, depth consumer, jitter;
 // D3D: Reset, Close, ExecuteCommandLists, ResourceBarrier, Dispatch, CopyResource.
 using BarrierFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,const D3D12_RESOURCE_BARRIER *);
@@ -974,6 +979,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!obs::install(device,pb::system_method,reason))return false;
 #endif
         for(unsigned i=0;i<targets.size();++i){
+            if(cmfm::active()&&i>=first_api_hook){if(!originals[i])throw std::runtime_error("continuous CMFM chain");enabled[i]=true;continue;}
             if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK)throw std::runtime_error("continuous hook creation");
             if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)throw std::runtime_error("continuous enable queue");enabled[i]=true;
         }
@@ -982,7 +988,13 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
 #ifdef MHW_CONTINUOUS_SCALED
         sr::begin();
 #endif
-        accepting.store(true);if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");return true;
+        accepting.store(true);if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
+        if(cmfm::active()){chain_live.store(true,std::memory_order_release);
+#ifdef MHW_CONTINUOUS_SCALED
+            sr::chains_live(true);
+#endif
+        }
+        return true;
     }catch(const std::exception &e){reason=e.what();stop();return false;}
 }
 void stop() noexcept {accepting.store(false);activation::stop();
@@ -1017,10 +1029,11 @@ void finish() noexcept {
     if(!activation::queue_disable())fail(25);
     std::array<bool,targets.size()> disable_queued{};
     for(unsigned i=0;i<targets.size();++i)if(enabled[i]){
-        disable_queued[i]=MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
+        disable_queued[i]=(cmfm::active()&&i>=first_api_hook)||MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
         if(!disable_queued[i])fail(25);
     }
     if(MH_ApplyQueued()==MH_OK){
+        if(cmfm::active())chain_live.store(false,std::memory_order_release);
         for(unsigned i=0;i<targets.size();++i)if(disable_queued[i])enabled[i]=false;
         activation::disabled(true);
 #ifdef MHW_CONTINUOUS_SCALED
@@ -1147,3 +1160,31 @@ extern "C" void mhw_temporal_consume(mhw::temporal_bindings::NativeFrame *f){mhw
 extern "C" void mhw_temporal_depth_produce(mhw::temporal_bindings::NativeFrame *f){mhw::continuous_dlaa::native(2,f);}
 extern "C" void mhw_temporal_depth_consume(mhw::temporal_bindings::NativeFrame *f){mhw::continuous_dlaa::native(3,f);}
 extern "C" void mhw_temporal_jitter(mhw::temporal_bindings::NativeFrame *f){mhw::continuous_dlaa::native(4,f);}
+namespace mhw::continuous_dlaa {
+namespace {
+template<auto Detour,unsigned I> struct Chained;
+template<class R,class... A,R(WINAPI *Detour)(A...),unsigned I> struct Chained<Detour,I> {
+    static R WINAPI call(A... a){
+        if(chain_live.load(std::memory_order_acquire))return Detour(a...);
+        return reinterpret_cast<R(WINAPI *)(A...)>(originals[I])(a...);
+    }
+};
+struct ChainedMethod {unsigned index;cmfm::Family family;unsigned slot;void *detour;};
+const ChainedMethod chained_methods[]{
+    {5,cmfm::command_list,10,reinterpret_cast<void *>(&Chained<&reset_hook,5>::call)},
+    {6,cmfm::command_list,9,reinterpret_cast<void *>(&Chained<&close_hook,6>::call)},
+    {7,cmfm::queue,10,reinterpret_cast<void *>(&Chained<&execute_hook,7>::call)},
+    {8,cmfm::command_list,26,reinterpret_cast<void *>(&Chained<&barrier_hook,8>::call)},
+    {9,cmfm::command_list,14,reinterpret_cast<void *>(&Chained<&dispatch_hook,9>::call)},
+    {10,cmfm::command_list,17,reinterpret_cast<void *>(&Chained<&copy_hook,10>::call)},
+#ifdef MHW_CONTINUOUS_SCALED
+    {11,cmfm::command_list,12,reinterpret_cast<void *>(&Chained<&draw_hook,11>::call)},
+    {12,cmfm::command_list,13,reinterpret_cast<void *>(&Chained<&indexed_hook,12>::call)},
+#endif
+};
+static_assert(std::size(chained_methods)==hook_count-first_api_hook,"every D3D12 hook is chained");
+}
+void cmfm_hooks(std::vector<cmfm::Hook> &out){
+    for(const auto &m:chained_methods)out.push_back({cmfm::method(m.family,m.slot),m.detour,&originals[m.index]});
+}
+}

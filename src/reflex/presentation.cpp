@@ -4,6 +4,7 @@
 #include "resize_contract.hpp"
 #include "presentation_route.hpp"
 #include "presentation_ownership.hpp"
+#include "../cmfm/cmfm_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -12,13 +13,22 @@
 #include <cstring>
 #include <intrin.h>
 #include <ostream>
+#include <vector>
 
 namespace mhw::reflex {
 namespace {
 using Microsoft::WRL::ComPtr;
 thread_local unsigned bypass_depth{};
 thread_local bool routed_call{};  // Set when route() sent the call through the SDK proxy.
-struct Bypass { Bypass() { ++bypass_depth; } ~Bypass() { --bypass_depth; } };
+// `internal` also marks the thread's DXGI/D3D12 calls internal for CMFM: the
+// SDK's own creation calls then reach the original methods once, past every
+// plugin. Present routing keeps plain bypass: the SDK's native Present inside
+// the proxy's must still reach present_hook, which counts it (Capture).
+struct Bypass {
+    bool internal{};
+    explicit Bypass(bool marks_internal = false) : internal(marks_internal) { ++bypass_depth; if (internal) cmfm::begin_internal(); }
+    ~Bypass() { if (internal) cmfm::end_internal(); --bypass_depth; }
+};
 struct NativePresent {
     IUnknown* swap{}; unsigned calls{}; HRESULT result{E_FAIL}; NativePresent* previous{};
 };
@@ -33,6 +43,8 @@ HRESULT record_present(IUnknown* swap, HRESULT result) {
     return result;
 }
 std::atomic<Presentation::State*> dispatch{};
+// CMFM: where CMFM stores each detour's continuation (see cmfm_hooks.hpp).
+std::array<void*, Presentation::hook_capacity> chain_next{};
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 void api(sl::Result value, const char* why) { require(value == sl::Result::eOk, why); }
 template<class T> ComPtr<T> native(Streamline& sdk, IUnknown* proxy) {
@@ -148,16 +160,20 @@ struct Presentation::State {
         if (head.created) { require(head.target == reinterpret_cast<std::uintptr_t>(target), "presentation-vtable-changed"); return; }
         for (const auto& prior : heads) require(prior.target != reinterpret_cast<std::uintptr_t>(target), "presentation-aliased-method");
         head.target = reinterpret_cast<std::uintptr_t>(target);
-        std::memcpy(head.original.data(), target, sizeof(head.original));
-        require(MH_CreateHook(target, detour, &original[index]) == MH_OK, "presentation-create-hook");
+        // Under CMFM the method is patched by CMFM, whose chain already holds
+        // this detour; nothing is patched or compared here.
+        if (!cmfm::active()) {
+            std::memcpy(head.original.data(), target, sizeof(head.original));
+            require(MH_CreateHook(target, detour, &original[index]) == MH_OK, "presentation-create-hook");
+        }
         head.created = true;
     }
     void enable() {
         for (auto& head : heads) if (head.created && !head.enabled) {
-            require(MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
+            require(cmfm::active() || MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
             head.enabled = true; // also cover partial application on failure
         }
-        require(MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
+        require(cmfm::active() || MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
     }
     ID3D12CommandQueue* proxy_queue(IUnknown* value) const noexcept {
         for (const auto& q : queues) if (q.native && value == q.native) return q.proxy.Get();
@@ -218,7 +234,9 @@ struct Call {
     explicit Call(Presentation::State& value) : s(value) { s.active.fetch_add(1); }
     ~Call() { s.active.fetch_sub(1); }
 };
-template<class Fn> Fn original(Presentation::State& s, unsigned index) { return reinterpret_cast<Fn>(s.original[index]); }
+template<class Fn> Fn original(Presentation::State& s, unsigned index) {
+    return reinterpret_cast<Fn>(cmfm::active() ? chain_next[index] : s.original[index]);
+}
 // Host lifecycle call: the listener (outside the route mutex), timing, result
 // and the chain description afterwards. The SDK's own recursion passes through.
 template<class Forward, class Chain>
@@ -258,7 +276,7 @@ HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUE
     if (!bypass_depth && s.accepting.load() && self == s.device.Get() && desc && out && iid == __uuidof(ID3D12CommandQueue)) {
         std::lock_guard lock(s.mutex);
         if (s.accepting.load()) {
-            Bypass bypass;
+            Bypass bypass(true);
             try {
                 auto slot = s.queues.begin(); while (slot != s.queues.end() && slot->proxy) ++slot;
                 require(slot != s.queues.end(), "presentation-queue-capacity");
@@ -283,7 +301,7 @@ HRESULT swap_routed(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* d
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
         if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
-            Bypass bypass;
+            Bypass bypass(true);
             try {
                 OwnershipCall v{1,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
                     {reinterpret_cast<std::uintptr_t>(queue),desc->BufferDesc.Width,desc->BufferDesc.Height,
@@ -306,7 +324,7 @@ HRESULT hwnd_routed(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
         if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
-            Bypass bypass;
+            Bypass bypass(true);
             try {
                 OwnershipCall v{2,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
                     {reinterpret_cast<std::uintptr_t>(queue),desc->Width,desc->Height,static_cast<unsigned>(desc->Format),
@@ -328,7 +346,7 @@ HRESULT core_routed(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, cons
     if (!bypass_depth && s.accepting.load() && self == s.factory.Get() && desc && out) {
         std::lock_guard lock(s.mutex);
         if (auto* proxy = s.accepting.load() ? s.proxy_queue(queue) : nullptr) {
-            Bypass bypass;
+            Bypass bypass(true);
             try {
                 OwnershipCall v{3,0,0,0,0,0,caller,reinterpret_cast<std::uintptr_t>(self),0,
                     {reinterpret_cast<std::uintptr_t>(queue),desc->Width,desc->Height,static_cast<unsigned>(desc->Format),
@@ -537,11 +555,52 @@ HRESULT STDMETHODCALLTYPE target_hook(IDXGISwapChain* self, const DXGI_MODE_DESC
         [&] { return static_cast<IUnknown*>(self); });
 }
 }
+// CMFM: each detour behind a gate that continues with CMFM's stored next
+// method until this presentation exists (DEVICE_CREATED). Detours then follow
+// their own accepting/route rules, as with MinHook.
+namespace {
+template<auto Detour, unsigned Index> struct Chained;
+template<class R, class... A, R(STDMETHODCALLTYPE* Detour)(A...), unsigned Index> struct Chained<Detour, Index> {
+    static R STDMETHODCALLTYPE call(A... a) {
+        if (!dispatch.load(std::memory_order_acquire))
+            return reinterpret_cast<R(STDMETHODCALLTYPE*)(A...)>(chain_next[Index])(a...);
+        return Detour(a...);
+    }
+};
+}
+void presentation_cmfm_hooks(std::vector<cmfm::Hook>& out) {
+    using cmfm::method;
+    const auto add = [&](std::uint32_t m, void* detour, unsigned index) { out.push_back({m, detour, &chain_next[index]}); };
+    add(method(cmfm::device, 8), reinterpret_cast<void*>(&Chained<&queue_hook, 0>::call), 0);
+    add(method(cmfm::factory, 10), reinterpret_cast<void*>(&Chained<&swap_hook, 1>::call), 1);
+    add(method(cmfm::factory, 15), reinterpret_cast<void*>(&Chained<&hwnd_hook, 2>::call), 2);
+    add(method(cmfm::factory, 16), reinterpret_cast<void*>(&Chained<&core_hook, 3>::call), 3);
+    add(method(cmfm::swapchain, 8), reinterpret_cast<void*>(&Chained<&present_hook, 4>::call), 4);
+    add(method(cmfm::swapchain, 9), reinterpret_cast<void*>(&Chained<&buffer_hook, 5>::call), 5);
+    add(method(cmfm::swapchain, 10), reinterpret_cast<void*>(&Chained<&full_hook, 6>::call), 6);
+    add(method(cmfm::swapchain, 12), reinterpret_cast<void*>(&Chained<&desc_hook, 7>::call), 7);
+    add(method(cmfm::swapchain, 13), reinterpret_cast<void*>(&Chained<&resize_hook, 8>::call), 8);
+    add(method(cmfm::swapchain, 22), reinterpret_cast<void*>(&Chained<&present1_hook, 9>::call), 9);
+    add(method(cmfm::swapchain, 36), reinterpret_cast<void*>(&Chained<&index_hook, 10>::call), 10);
+    add(method(cmfm::swapchain, 39), reinterpret_cast<void*>(&Chained<&resize1_hook, 11>::call), 11);
+#ifdef MHW_FG_SCENE_PROBE
+    add(method(cmfm::swapchain, 14), reinterpret_cast<void*>(&Chained<&target_hook, 12>::call), 12);
+#endif
+}
+bool presentation_cmfm_swapchain_chains() noexcept {
+#ifdef MHW_FG_SCENE_PROBE
+    constexpr unsigned last = 12;
+#else
+    constexpr unsigned last = 11;
+#endif
+    for (unsigned i = 4; i <= last; ++i) if (!chain_next[i]) return false;
+    return true;
+}
 Presentation::Presentation(Streamline& sdk) : state_(new State(sdk)) {
     State* expected{}; require(dispatch.compare_exchange_strong(expected, state_), "one-presentation-dispatch-per-process");
 }
 void Presentation::install(ID3D12Device* device, IDXGIFactory2* factory, PresentationContract contract) {
-    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass;
+    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass(true);
     require(device && factory && !s.device && !s.stopped &&
         (contract == PresentationContract::synchronous_native || contract == PresentationContract::sdk_paced),
         "presentation-install-arguments");
@@ -553,8 +612,13 @@ void Presentation::install(ID3D12Device* device, IDXGIFactory2* factory, Present
     api(upgrade_owned(s.proxy_factory, [&](void** out) { return s.sdk.upgrade(out); }), "presentation-upgrade-factory");
     require(native<ID3D12Device>(s.sdk, s.proxy_device.Get()).Get() == device, "presentation-device-identity");
     require(native<IDXGIFactory2>(s.sdk, s.proxy_factory.Get()).Get() == factory, "presentation-factory-identity");
-    const auto initialized = MH_Initialize();
-    require(initialized == MH_OK || initialized == MH_ERROR_ALREADY_INITIALIZED, "presentation-hook-initialize");
+    if (cmfm::active()) {
+        // CMFM installs the device and factory chains before DEVICE_CREATED.
+        for (unsigned i = 0; i < 4; ++i) require(chain_next[i] != nullptr, "presentation-cmfm-device-factory-chains");
+    } else {
+        const auto initialized = MH_Initialize();
+        require(initialized == MH_OK || initialized == MH_ERROR_ALREADY_INITIALIZED, "presentation-hook-initialize");
+    }
     s.add(0, device, 8, reinterpret_cast<void*>(&queue_hook));
     s.add(1, factory, 10, reinterpret_cast<void*>(&swap_hook));
     s.add(2, factory, 15, reinterpret_cast<void*>(&hwnd_hook));
@@ -610,14 +674,16 @@ bool Presentation::stop() noexcept {
     // First synchronize with dynamic hook installation in a creation callback.
     { std::lock_guard lock(s.mutex); s.accepting.store(false); }
     // No route mutex while MinHook suspends threads or callbacks drain.
+    // Under CMFM the chains stay: with accepting off every detour forwards.
     for (auto& head : s.heads) if (head.enabled) {
-        const auto status = MH_DisableHook(reinterpret_cast<void*>(head.target));
+        const auto status = cmfm::active() ? MH_OK : MH_DisableHook(reinterpret_cast<void*>(head.target));
         if (status == MH_OK || status == MH_ERROR_DISABLED) head.enabled = false; else ok = false;
     }
     const auto began = GetTickCount64();
     while (s.active.load() && GetTickCount64() - began < 30000) Sleep(1);
     if (s.active.load()) return false;
     std::lock_guard lock(s.mutex);
+    if (cmfm::active()) { s.stopped = ok; return ok; }
     for (auto& head : s.heads) if (head.created) {
         head.restored = std::memcmp(reinterpret_cast<void*>(head.target), head.original.data(), sizeof(head.original)) == 0;
         ok = head.restored && ok;
@@ -625,7 +691,7 @@ bool Presentation::stop() noexcept {
     s.stopped = ok; return ok;
 }
 bool Presentation::release_after_shutdown() noexcept {
-    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass;
+    auto& s = *state_; std::lock_guard lock(s.mutex); Bypass bypass(true);
     if (!s.stopped || s.active.load() || s.sdk.initialized()) return false;
     s.swap.Reset(); s.proxy_swap.Reset();
     for (auto& q : s.queues) { q.proxy.Reset(); q.native = nullptr; }
