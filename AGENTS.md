@@ -11,7 +11,7 @@ This repository is for an open-source investigation and implementation of modern
 - Game executable: `D:\SteamLibrary\steamapps\common\Monster Hunter World\MonsterHunterWorld.exe`
 - IDA directory: `C:\Program Files\IDA Professional 9.4` (the Hex-Rays IDA MCP needs 9.4; 9.3 stays installed)
 - IDA executable: `C:\Program Files\IDA Professional 9.4\ida.exe`
-- Private game databases: `local\ida_static\MonsterHunterWorld_C2EBBBD2.i64`, `local\ida-native-dlss-20261008\decrypted.i64`
+- Private game databases: `local\ida-native-dlss-20261008\decrypted.i64` (input: the decoded image below; use it for code). `local\ida_static\MonsterHunterWorld_C2EBBBD2.i64` was built from the exe on disk, so its `.text` is SteamStub ciphertext (no functions at the live-frame RVAs, checked 2026-10-10); use it only for data sections and strings.
 - Decoded game image (read in place): `D:\mh world modding\ai\glavenus\MonsterHunterWorld_decrypted.exe`, SHA-256 `d78611731e4a5f214e306d1d577d4782b59adaf1c75de54d2983caa45074884c`, decoded from the tested exe `c2ebbbd2…90ea`. The exe on disk has SteamStub-encrypted code, so offline gate and signature checks run on this image.
 - Claude Code reversing tools: `C:\Users\akifs\.claude\re-tools\` (Python 3.12: `py -3.12 -B`); x64dbg: `D:\reverse engine jank\x64dbg\release\x96dbg.exe`
 
