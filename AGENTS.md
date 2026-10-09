@@ -9,8 +9,11 @@ This repository is for an open-source investigation and implementation of modern
 - Repository: `D:\mh world modding\dlssupdate`
 - Game directory: `D:\SteamLibrary\steamapps\common\Monster Hunter World`
 - Game executable: `D:\SteamLibrary\steamapps\common\Monster Hunter World\MonsterHunterWorld.exe`
-- IDA directory: `C:\Program Files\IDA Professional 9.3`
-- IDA executable: `C:\Program Files\IDA Professional 9.3\ida.exe`
+- IDA directory: `C:\Program Files\IDA Professional 9.4` (the Hex-Rays IDA MCP needs 9.4; 9.3 stays installed)
+- IDA executable: `C:\Program Files\IDA Professional 9.4\ida.exe`
+- Private game databases: `local\ida_static\MonsterHunterWorld_C2EBBBD2.i64`, `local\ida-native-dlss-20261008\decrypted.i64`
+- Decoded game image (read in place): `D:\mh world modding\ai\glavenus\MonsterHunterWorld_decrypted.exe`, SHA-256 `d78611731e4a5f214e306d1d577d4782b59adaf1c75de54d2983caa45074884c`, decoded from the tested exe `c2ebbbd2…90ea`. The exe on disk has SteamStub-encrypted code, so offline gate and signature checks run on this image.
+- Claude Code reversing tools: `C:\Users\akifs\.claude\re-tools\` (Python 3.12: `py -3.12 -B`); x64dbg: `D:\reverse engine jank\x64dbg\release\x96dbg.exe`
 
 These paths are machine-local configuration. Do not encode them into distributable binaries or assume other contributors use the same paths.
 
@@ -34,6 +37,23 @@ These paths are machine-local configuration. Do not encode them into distributab
 4. For every hook, document the target function, calling convention, ownership/lifetime assumptions, and tested executable hash.
 5. Validate resource formats, dimensions, states, and frame alignment before treating a render target as color, depth, motion vectors, exposure, or UI.
 6. Add modern temporal reconstruction incrementally: diagnostic loading, frame/resource observation, jitter and motion validation, DLAA, then resolution-changing upscaling. Frame generation is a later milestone.
+
+## Reverse-Engineering Tools
+
+Claude Code has an IDA MCP (Hex-Rays), an x64dbg MCP, a Frida MCP and `sigscan.py`; the user-level `reversing` skill describes them. This file's rules come first.
+
+- **IDA:** open only the private game databases listed above (or a new copy under `local\`), never the NVIDIA module databases under `local\` (`nvngx_*`, `_nvngx`) and never anything in `ai\glavenus`. Ask through the MCP's `execute_python` instead of writing one-off headless scripts. Write-back and exports stay under `local\`.
+- **Code gates and heads** (`py -3.12 -B C:\Users\akifs\.claude\re-tools\sigscan.py`, on the decoded image):
+  - `gates <image> src` hashes every `{rva, size, "sha256"}` gate in the source against the image; on 2026-10-10 all 182 matched. Run it before staging a build that adds or changes a gate.
+  - `audit <image> src` checks the spaced-hex heads in `reflex/live_frames.cpp`. They are verified at pinned RVAs, so a head may match elsewhere too (`Render:Publish` matches 20+ times; fine).
+  - `make <image> <VA>` and `scan <image> "<pattern>"` find and check patterns when exploring new sites.
+- **x64dbg and Frida on the running game:**
+  - the user launches the game through MO2 and says OK in the session before each attach; never attach during startup (SteamStub);
+  - offline only, as for any experimental hook;
+  - prefer x64dbg hardware breakpoints and non-stopping logging breakpoints: they change no code bytes, and the game re-checks its code with CRC;
+  - Frida hooks only functions this mod or Astera Loader already hooks. Software breakpoints, memory writes, other hooks and calls into game code each need their own OK;
+  - detach when done (x64dbg `detach`, never `terminate_session`) and note what was attached, when and why in the run folder.
+- Point the tools at the game's code only. NVIDIA binaries stay off limits (Safety and Scope).
 
 ## Implementation Conventions
 
