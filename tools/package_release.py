@@ -4,14 +4,14 @@
       --streamline-sdk <Streamline SDK root> --dlss-sdk <DLSS SDK root> --out <folder>
 
 Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as
-the game folder receives it: one CMFM plugin folder (CMFM is required and loads
-only mhw_dlss.dll from it):
+the game folder receives it: one Astera Loader plugin folder (Astera Loader is
+required and loads only mhw_dlss.dll from it):
 
-  cmfm/plugins/mhw_dlss/mhw_dlss.dll          the mod (a CMFM plugin)
-  cmfm/plugins/mhw_dlss/mhw_dlss.ini          default configuration
-  cmfm/plugins/mhw_dlss/sl.*.dll, nvngx_*     NVIDIA runtime, unmodified, verified by SHA-256
-  cmfm/plugins/mhw_dlss/licenses/             NVIDIA's license files for those DLLs
-  cmfm/plugins/mhw_dlss/README.txt, THIRD-PARTY-NOTICES.txt, manifest.json
+  AsteraLoader/plugins/mhw_dlss/mhw_dlss.dll          the mod (an Astera Loader plugin)
+  AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini          default configuration
+  AsteraLoader/plugins/mhw_dlss/sl.*.dll, nvngx_*     NVIDIA runtime, unmodified, verified by SHA-256
+  AsteraLoader/plugins/mhw_dlss/licenses/             NVIDIA's license files for those DLLs
+  AsteraLoader/plugins/mhw_dlss/README.txt, THIRD-PARTY-NOTICES.txt, manifest.json
 
 NVIDIA files are copied only when they match the pinned hashes of the tested
 runtime (fg_runtime.py), and only into release packages: never into git
@@ -60,23 +60,25 @@ Requirements
   turns itself off and the game runs normally.
 - The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
   plugin setups already have.
-- CMFM, which loads this mod. Start the game through CMFM's launcher.
+- Astera Loader, which loads this mod. Start the game through
+  AsteraLoader.exe.
 
-Install: copy the cmfm folder from this archive into the game folder (next to
-MonsterHunterWorld.exe), or install the archive as a mod in Mod Organizer 2.
-The mod then lives in cmfm/plugins/mhw_dlss.
+Install: copy the AsteraLoader folder from this archive into the game folder
+(next to MonsterHunterWorld.exe), or install the archive as a mod in Mod
+Organizer 2. The mod is an Astera Loader plugin and lives in
+AsteraLoader/plugins/mhw_dlss.
 
-Configuration: cmfm/plugins/mhw_dlss/mhw_dlss.ini (comments in the file). DLSS currently
-runs at Performance quality (half resolution); other modes come with later
-builds.
+Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file). DLSS
+currently runs at Performance quality (half resolution); other modes come with
+later builds.
 
-Logs: cmfm/plugins/mhw_dlss/logs, one file per launch. Please include it when reporting a
-problem.
+Logs: AsteraLoader/plugins/mhw_dlss/logs, one file per launch. Please include it when
+reporting a problem.
 If the mod turns itself off before it can log, the reason is in
-cmfm/plugins/mhw_dlss/startup-error.jsonl (with Mod Organizer 2: in its
-overwrite folder), and CMFM shows it as the plugin's status.
+AsteraLoader/plugins/mhw_dlss/startup-error.jsonl (with Mod Organizer 2: in its
+overwrite folder), and Astera Loader shows it as the plugin's status.
 
-Uninstall: delete the cmfm/plugins/mhw_dlss folder.
+Uninstall: delete the AsteraLoader/plugins/mhw_dlss folder.
 
 Credits and licenses
 This mod uses NVIDIA DLSS, NVIDIA DLSS Frame Generation, NVIDIA Streamline
@@ -130,7 +132,7 @@ def main():
     for src, _ in licenses:
         require(src.is_file(), f'license file {src} is missing')
 
-    data = folder / 'cmfm' / 'plugins' / 'mhw_dlss'
+    data = folder / 'AsteraLoader' / 'plugins' / 'mhw_dlss'
     (data / 'licenses').mkdir(parents=True)
     shutil.copyfile(a.dll, data / 'mhw_dlss.dll')
     (data / 'mhw_dlss.ini').write_text(INI, encoding='utf-8', newline='\r\n')

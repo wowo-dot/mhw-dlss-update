@@ -82,6 +82,10 @@ PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ.
 
 ## CMFM's measurement and decision (2026-10-08)
 
+CMFM, the loader, was renamed **Astera Loader** ("AL") on 2026-10-09; CMFM
+is now its menu plugin. The names below are as they were on 2026-10-08
+(see [astera-loader-migration.md](astera-loader-migration.md)).
+
 CMFM run entry-slot-1 (its `docs/research/entry-slot.md`) timed the same MO2
 setup by load time, in ms after process creation:
 

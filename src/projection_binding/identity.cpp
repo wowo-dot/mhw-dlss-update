@@ -34,9 +34,15 @@ struct Hash {
   }
 };
 bool verify_code(std::uintptr_t base, unsigned rva, unsigned length, const char *expected) {
+  return verify_code_with_head(base, rva, length, expected, nullptr, 0);
+}
+bool verify_code_with_head(std::uintptr_t base, unsigned rva, unsigned length, const char *expected,
+    const std::uint8_t *head, unsigned head_size) {
+  if (head_size > length || (head_size && !head)) return false;
   if (!executable(base + rva, base) || !executable(base + rva + length - 1, base)) return false;
   Hash hash;
-  for (unsigned n = 0; n < length;) {
+  if (head_size && !hash.add(head, head_size)) return false;
+  for (unsigned n = head_size; n < length;) {
     std::uint64_t data{}; const auto count = (std::min)(8U, length - n);
     if (bridge_probe::read_bounded_scalar(nullptr, base + rva + n,
         {reinterpret_cast<std::byte *>(&data), count}) != bridge_probe::ScalarReadResult::success || !hash.add(&data, count)) return false;

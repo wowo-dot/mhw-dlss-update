@@ -1,5 +1,5 @@
 #pragma once
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <vector>
 #include "../temporal_bindings/inputs.hpp"
 #include "../frame_generation/presentation_buffers.hpp"
@@ -73,9 +73,9 @@ bool abandon() noexcept;
 void stop() noexcept;
 bool queue_disable() noexcept;
 void disabled(bool) noexcept;
-// CMFM: the CopyTextureRegion detour with the storage CMFM fills; it runs
+// AL: the CopyTextureRegion detour with the storage AL fills; it runs
 // while chains_live(true) (set where the runtime applies the stream hooks).
-void cmfm_hooks(std::vector<cmfm::Hook>&);
+void astera_hooks(std::vector<astera::Hook>&);
 void chains_live(bool) noexcept;
 bool healthy() noexcept;
 void write(std::ostream &);

@@ -1,7 +1,7 @@
 #pragma once
 #include "streamline.hpp"
 #include "present_result.hpp"
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #if defined(MHW_FG_SCENE_PROBE) || defined(MHW_FG_GAME)
 #include "../frame_generation/presentation_buffers.hpp"
 #endif
@@ -97,10 +97,10 @@ private:
 // lock that never waits for the route mutex. False before construction.
 bool scene_presentation_buffers(frame_generation::PresentationBuffers&) noexcept;
 #endif
-// CMFM: the presentation detours, each with the storage CMFM fills with its
+// AL: the presentation detours, each with the storage AL fills with its
 // continuation; registered at PRE_MAIN with claim_presentation. Factory and
 // device chains exist from DEVICE_CREATED, swap-chain chains once the game's
-// first swap chain is created (checked by presentation_cmfm_swapchain_chains).
-void presentation_cmfm_hooks(std::vector<cmfm::Hook>&);
-bool presentation_cmfm_swapchain_chains() noexcept;
+// first swap chain is created (checked by presentation_astera_swapchain_chains).
+void presentation_astera_hooks(std::vector<astera::Hook>&);
+bool presentation_astera_swapchain_chains() noexcept;
 }

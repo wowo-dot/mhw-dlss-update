@@ -4,6 +4,7 @@
 #include "frame_boundaries.hpp"
 #include "../projection_binding/recorder.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../astera/astera_hooks.hpp"
 #ifdef MHW_FG_SCENE_PROBE
 #include "../scaled_temporal/stream_route.hpp"
 #endif
@@ -13,6 +14,7 @@
 #include <MinHook.h>
 #include <atomic>
 #include <array>
+#include <cstring>
 #include <mutex>
 #include <ostream>
 #include <stdexcept>
@@ -24,12 +26,42 @@ void reflex_boundary_update(); void reflex_boundary_publish(); void reflex_bound
 namespace mhw::reflex {
 namespace {
 namespace pb = mhw::projection_binding;
-struct Gate { unsigned rva, bytes; const char* sha; unsigned kind; void(*entry)(); };
+// Under Astera Loader the three functions join AL's shared chains (al.hooks):
+// Main:Update is also hooked by AL's own frame tick and by other plugins. The
+// pattern is each function's first head_size original bytes (read from the
+// decoded image; the full-function SHA-256 covers them). AL checks them, even
+// after another plugin's patch, and the gate hashes them with the live rest.
+// Main:Update's order -1000 puts the Reflex simulation markers outside the
+// other per-frame detours.
+struct Gate { unsigned rva, bytes; const char* sha; unsigned kind; void(*entry)(); const char* name; const char* pattern; int order; };
 constexpr std::array gates{
-    Gate{0x1af2b60,4864,"9f6f5b3ac1a521ddd59351e41cc66c17dfc453ccd1b969afd4d59787bfef795d",0,reflex_boundary_update},
-    Gate{0x229a080,1428,"961cf9969c28abc6b5b63ba9fb476978555eb188fdc173940d7ed81fc566a4e0",2,reflex_boundary_publish},
-    Gate{0x23a7f50,69,"1183e1807b99ec2ada753fa147af8c59b1f99f29bbbf6176ed7479fd48e09a46",11,reflex_boundary_submit}
+    Gate{0x1af2b60,4864,"9f6f5b3ac1a521ddd59351e41cc66c17dfc453ccd1b969afd4d59787bfef795d",0,reflex_boundary_update,
+        "mhw_dlss Main:Update","40 53 48 81 EC 80 00 00 00 48 8B D9 E8 5F C6 76",-1000},
+    Gate{0x229a080,1428,"961cf9969c28abc6b5b63ba9fb476978555eb188fdc173940d7ed81fc566a4e0",2,reflex_boundary_publish,
+        "mhw_dlss Render:Publish","48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83",0},
+    Gate{0x23a7f50,69,"1183e1807b99ec2ada753fa147af8c59b1f99f29bbbf6176ed7479fd48e09a46",11,reflex_boundary_submit,
+        "mhw_dlss Render:Submit","40 53 48 83 EC 20 48 8B D9 E8 D2 16 14 00 84 C0",0}
 };
+constexpr unsigned head_size=16;
+using Head=std::array<std::uint8_t,head_size>;
+constexpr int nibble(char c) noexcept { return c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:c>='a'&&c<='f'?c-'a'+10:-1; }
+// "40 53 ...": exactly head_size bytes and no wildcards; they are original code.
+constexpr bool parse_head(const char* p, Head& out) noexcept {
+    unsigned n{};
+    while(*p) {
+        if(*p==' ') { ++p;continue; }
+        const int hi=nibble(p[0]);if(hi<0)return false;
+        const int lo=nibble(p[1]);if(lo<0 || n==head_size)return false;
+        out[n++]=static_cast<std::uint8_t>(hi*16+lo);p+=2;
+    }
+    return n==head_size;
+}
+constexpr bool heads_valid() noexcept { for(const auto& g:gates) { Head h{};if(!parse_head(g.pattern,h))return false; } return true; }
+static_assert(heads_valid(),"each al.hooks pattern is the function's first 16 bytes");
+// Under AL the chain owns the entry: verify the original head with the live rest.
+bool verify_chained(std::uintptr_t image, const Gate& g) noexcept {
+    Head head{};return parse_head(g.pattern,head) && pb::verify_code_with_head(image,g.rva,g.bytes,g.sha,head.data(),head_size);
+}
 std::atomic<LiveFrames::State*> dispatch{};
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 }
@@ -42,6 +74,9 @@ struct LiveFrames::State {
     std::uintptr_t image{}, engine{}, renderer{}, backend{}, device{};
     std::array<void*,13> originals{};
     std::array<PresentationHook,3> heads{};
+    // AL: the hooks are in AL's al.hooks chains (handles), not MinHook patches.
+    bool chained{};
+    std::array<std::uint32_t,3> handles{};
     LiveFrameStats stats;
     struct Sample {
         unsigned id{}, stage{}, thread{}, result{};
@@ -203,6 +238,29 @@ void LiveFrames::install(std::uintptr_t image,std::uintptr_t sdk_device,std::ost
        <<first.value.bank<<','<<first.epoch_after<<','<<first.bank_after<<"],\"last\":["<<last.value.epoch<<','<<last.value.temporal<<','
        <<last.value.bank<<','<<last.epoch_after<<','<<last.bank_after<<"],\"hooks_created\":false,\"reason\":\""<<rejection<<"\"}\n"<<std::flush;
     require(!*rejection,rejection);require(bool(log),"live-frame-anchor-log");
+    s.chained=mhw::astera::active();
+    if(s.chained) {
+        require(mhw::astera::game_hooks_available(),"live-frame-al-hooks-missing");
+        for(unsigned i=0;i<gates.size();++i) {
+            const auto& g=gates[i];require(verify_chained(image,g),"live-frame-full-gate");
+            auto& h=s.heads[i];h.target=image+g.rva;
+            // The original head: the pattern's 16 bytes, then live code (verified).
+            Head head{};parse_head(g.pattern,head);std::memcpy(h.original.data(),head.data(),head_size);
+            for(unsigned n=head_size/8;n<h.original.size();++n)require(pb::read(h.target+n*8ULL,h.original[n]),"live-frame-original-head");
+        }
+        // Each hook is live as soon as AL accepts it. Entries wait on this
+        // lock until all three are in; Main:Update joins last.
+        s.stats.running=true;
+        for(auto i=static_cast<unsigned>(gates.size());i-->0;) {
+            const auto& g=gates[i];auto& h=s.heads[i];
+            s.handles[i]=mhw::astera::game_hook({g.order,g.name,g.pattern,reinterpret_cast<void*>(h.target),
+                reinterpret_cast<void*>(g.entry),&s.originals[g.kind]});
+            require(s.handles[i]!=0,"live-frame-al-hook-refused");h.created=true;
+            require(mhw::astera::game_hook_state(s.handles[i])==mhw::astera::GameHookState::active && s.originals[g.kind],"live-frame-al-hook-inactive");
+            h.enabled=true;
+        }
+        return;
+    }
     for(unsigned i=0;i<gates.size();++i) {
         const auto& g=gates[i];require(pb::verify_code(image,g.rva,g.bytes,g.sha),"live-frame-full-gate");
         auto& h=s.heads[i];h.target=image+g.rva;
@@ -228,6 +286,24 @@ bool LiveFrames::stop() noexcept {
     while(GetTickCount64()-began<5000) { if(!snapshot().running)break;Sleep(1); }
     { std::lock_guard lock(s.mutex);if(s.stats.running) { s.stats.running=false;s.frames.stop(); } }
     bool ok=true;
+    if(s.chained) {
+        // AL keeps the entry patched for its chain; taking the detours out
+        // relinks it. Calls already inside a detour finish, then drain.
+        for(unsigned i=0;i<s.heads.size();++i) { auto& h=s.heads[i];if(!h.created)continue;
+            if(mhw::astera::set_game_hook_enabled(s.handles[i],false))h.enabled=false;else if(h.enabled)ok=false;
+        }
+        const auto drain=GetTickCount64();while(s.calls.load() && GetTickCount64()-drain<30000)Sleep(1);
+        if(s.calls.load())return false;
+        std::lock_guard lock(s.mutex);
+        // "restored" under AL: out of the chain and the function's code intact.
+        for(unsigned i=0;i<s.heads.size();++i) { auto& h=s.heads[i];if(!h.created)continue;
+            const auto state=mhw::astera::game_hook_state(s.handles[i]);
+            h.restored=!h.enabled && (state==mhw::astera::GameHookState::disabled || state==mhw::astera::GameHookState::failed) &&
+                verify_chained(s.image,gates[i]);
+            ok=h.restored && ok;
+        }
+        s.stats.restored=ok;return ok;
+    }
     // DisableHook leaves the queued state unchanged when a target is already
     // disabled. Cancel every created target first, including a setup that
     // queued only some entries, so another route's ApplyQueued cannot revive it.
@@ -261,7 +337,9 @@ void LiveFrames::describe(std::ostream& log, unsigned requested_mode) const {
     for(unsigned i=0;i<gates.size();++i) {
         const auto& g=gates[i];const auto& h=s.heads[i];if(i)log<<',';
         log<<"{\"kind\":"<<g.kind<<",\"target\":"<<h.target<<",\"rva\":"<<g.rva<<",\"bytes\":"<<g.bytes
-           <<",\"sha256\":\""<<g.sha<<"\",\"original_head_sha256\":\""<<pb::bytes_sha256(h.original.data(),32)<<"\"}";
+           <<",\"sha256\":\""<<g.sha<<"\",\"original_head_sha256\":\""<<pb::bytes_sha256(h.original.data(),32)<<"\",\"chain\":\""
+           <<(s.chained?"al.hooks":"minhook")<<"\",\"order\":"<<(s.chained?g.order:0)<<",\"handle\":"<<s.handles[i]
+           <<",\"state\":"<<(s.chained?static_cast<unsigned>(mhw::astera::game_hook_state(s.handles[i])):1u)<<"}";
     }
     log<<"]}\n"<<std::flush;
 }
@@ -274,7 +352,8 @@ void LiveFrames::write(std::ostream& log) const {
     }
     for(unsigned i=0;i<s.heads.size();++i) { const auto& h=s.heads[i];if(!h.created)continue;
         log<<"{\"event\":\"frame_hook_restoration\",\"kind\":"<<gates[i].kind<<",\"target\":"<<h.target<<",\"restored\":"<<h.restored
-           <<",\"original_head_sha256\":\""<<pb::bytes_sha256(h.original.data(),32)<<"\"}\n";
+           <<",\"original_head_sha256\":\""<<pb::bytes_sha256(h.original.data(),32)<<"\",\"chain\":\""<<(s.chained?"al.hooks":"minhook")
+           <<"\",\"state\":"<<(s.chained?static_cast<unsigned>(mhw::astera::game_hook_state(s.handles[i])):h.enabled?1u:2u)<<"}\n";
     }
     log<<"{\"event\":\"frame_finished\",\"completed\":"<<s.frames.completed()<<",\"tokens\":"<<s.frames.tokens()<<",\"sleeps\":"<<s.frames.sleeps()
        <<",\"markers\":"<<s.frames.markers()<<",\"faults\":"<<s.stats.faults<<",\"owner\":"<<s.stats.owner<<",\"pending_calls\":"<<s.calls.load()

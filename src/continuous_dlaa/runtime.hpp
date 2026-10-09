@@ -1,5 +1,5 @@
 #pragma once
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <vector>
 #include "../temporal_bindings/inputs.hpp"
 #include <filesystem>
@@ -17,8 +17,8 @@ bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;
-// CMFM: the runtime's D3D12 detours with the storage CMFM fills (hooks 5..).
-void cmfm_hooks(std::vector<cmfm::Hook>&);
+// AL: the runtime's D3D12 detours with the storage AL fills (hooks 5..).
+void astera_hooks(std::vector<astera::Hook>&);
 void save_rejected_shader(const std::filesystem::path &) noexcept;
 void save_compute_depth(const std::filesystem::path &prefix) noexcept;
 void save_inserted_effect(const std::filesystem::path &prefix) noexcept;

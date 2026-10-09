@@ -4,7 +4,7 @@
 #include "resize_contract.hpp"
 #include "presentation_route.hpp"
 #include "presentation_ownership.hpp"
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -20,14 +20,14 @@ namespace {
 using Microsoft::WRL::ComPtr;
 thread_local unsigned bypass_depth{};
 thread_local bool routed_call{};  // Set when route() sent the call through the SDK proxy.
-// `internal` also marks the thread's DXGI/D3D12 calls internal for CMFM: the
+// `internal` also marks the thread's DXGI/D3D12 calls internal for AL: the
 // SDK's own creation calls then reach the original methods once, past every
 // plugin. Present routing keeps plain bypass: the SDK's native Present inside
 // the proxy's must still reach present_hook, which counts it (Capture).
 struct Bypass {
     bool internal{};
-    explicit Bypass(bool marks_internal = false) : internal(marks_internal) { ++bypass_depth; if (internal) cmfm::begin_internal(); }
-    ~Bypass() { if (internal) cmfm::end_internal(); --bypass_depth; }
+    explicit Bypass(bool marks_internal = false) : internal(marks_internal) { ++bypass_depth; if (internal) astera::begin_internal(); }
+    ~Bypass() { if (internal) astera::end_internal(); --bypass_depth; }
 };
 struct NativePresent {
     IUnknown* swap{}; unsigned calls{}; HRESULT result{E_FAIL}; NativePresent* previous{};
@@ -43,7 +43,7 @@ HRESULT record_present(IUnknown* swap, HRESULT result) {
     return result;
 }
 std::atomic<Presentation::State*> dispatch{};
-// CMFM: where CMFM stores each detour's continuation (see cmfm_hooks.hpp).
+// AL: where AL stores each detour's continuation (see astera_hooks.hpp).
 std::array<void*, Presentation::hook_capacity> chain_next{};
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 void api(sl::Result value, const char* why) { require(value == sl::Result::eOk, why); }
@@ -160,9 +160,9 @@ struct Presentation::State {
         if (head.created) { require(head.target == reinterpret_cast<std::uintptr_t>(target), "presentation-vtable-changed"); return; }
         for (const auto& prior : heads) require(prior.target != reinterpret_cast<std::uintptr_t>(target), "presentation-aliased-method");
         head.target = reinterpret_cast<std::uintptr_t>(target);
-        // Under CMFM the method is patched by CMFM, whose chain already holds
+        // Under AL the method is patched by AL, whose chain already holds
         // this detour; nothing is patched or compared here.
-        if (!cmfm::active()) {
+        if (!astera::active()) {
             std::memcpy(head.original.data(), target, sizeof(head.original));
             require(MH_CreateHook(target, detour, &original[index]) == MH_OK, "presentation-create-hook");
         }
@@ -170,10 +170,10 @@ struct Presentation::State {
     }
     void enable() {
         for (auto& head : heads) if (head.created && !head.enabled) {
-            require(cmfm::active() || MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
+            require(astera::active() || MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
             head.enabled = true; // also cover partial application on failure
         }
-        require(cmfm::active() || MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
+        require(astera::active() || MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
     }
     ID3D12CommandQueue* proxy_queue(IUnknown* value) const noexcept {
         for (const auto& q : queues) if (q.native && value == q.native) return q.proxy.Get();
@@ -235,7 +235,7 @@ struct Call {
     ~Call() { s.active.fetch_sub(1); }
 };
 template<class Fn> Fn original(Presentation::State& s, unsigned index) {
-    return reinterpret_cast<Fn>(cmfm::active() ? chain_next[index] : s.original[index]);
+    return reinterpret_cast<Fn>(astera::active() ? chain_next[index] : s.original[index]);
 }
 // Host lifecycle call: the listener (outside the route mutex), timing, result
 // and the chain description afterwards. The SDK's own recursion passes through.
@@ -555,7 +555,7 @@ HRESULT STDMETHODCALLTYPE target_hook(IDXGISwapChain* self, const DXGI_MODE_DESC
         [&] { return static_cast<IUnknown*>(self); });
 }
 }
-// CMFM: each detour behind a gate that continues with CMFM's stored next
+// AL: each detour behind a gate that continues with AL's stored next
 // method until this presentation exists (DEVICE_CREATED). Detours then follow
 // their own accepting/route rules, as with MinHook.
 namespace {
@@ -568,26 +568,26 @@ template<class R, class... A, R(STDMETHODCALLTYPE* Detour)(A...), unsigned Index
     }
 };
 }
-void presentation_cmfm_hooks(std::vector<cmfm::Hook>& out) {
-    using cmfm::method;
+void presentation_astera_hooks(std::vector<astera::Hook>& out) {
+    using astera::method;
     const auto add = [&](std::uint32_t m, void* detour, unsigned index) { out.push_back({m, detour, &chain_next[index]}); };
-    add(method(cmfm::device, 8), reinterpret_cast<void*>(&Chained<&queue_hook, 0>::call), 0);
-    add(method(cmfm::factory, 10), reinterpret_cast<void*>(&Chained<&swap_hook, 1>::call), 1);
-    add(method(cmfm::factory, 15), reinterpret_cast<void*>(&Chained<&hwnd_hook, 2>::call), 2);
-    add(method(cmfm::factory, 16), reinterpret_cast<void*>(&Chained<&core_hook, 3>::call), 3);
-    add(method(cmfm::swapchain, 8), reinterpret_cast<void*>(&Chained<&present_hook, 4>::call), 4);
-    add(method(cmfm::swapchain, 9), reinterpret_cast<void*>(&Chained<&buffer_hook, 5>::call), 5);
-    add(method(cmfm::swapchain, 10), reinterpret_cast<void*>(&Chained<&full_hook, 6>::call), 6);
-    add(method(cmfm::swapchain, 12), reinterpret_cast<void*>(&Chained<&desc_hook, 7>::call), 7);
-    add(method(cmfm::swapchain, 13), reinterpret_cast<void*>(&Chained<&resize_hook, 8>::call), 8);
-    add(method(cmfm::swapchain, 22), reinterpret_cast<void*>(&Chained<&present1_hook, 9>::call), 9);
-    add(method(cmfm::swapchain, 36), reinterpret_cast<void*>(&Chained<&index_hook, 10>::call), 10);
-    add(method(cmfm::swapchain, 39), reinterpret_cast<void*>(&Chained<&resize1_hook, 11>::call), 11);
+    add(method(astera::device, 8), reinterpret_cast<void*>(&Chained<&queue_hook, 0>::call), 0);
+    add(method(astera::factory, 10), reinterpret_cast<void*>(&Chained<&swap_hook, 1>::call), 1);
+    add(method(astera::factory, 15), reinterpret_cast<void*>(&Chained<&hwnd_hook, 2>::call), 2);
+    add(method(astera::factory, 16), reinterpret_cast<void*>(&Chained<&core_hook, 3>::call), 3);
+    add(method(astera::swapchain, 8), reinterpret_cast<void*>(&Chained<&present_hook, 4>::call), 4);
+    add(method(astera::swapchain, 9), reinterpret_cast<void*>(&Chained<&buffer_hook, 5>::call), 5);
+    add(method(astera::swapchain, 10), reinterpret_cast<void*>(&Chained<&full_hook, 6>::call), 6);
+    add(method(astera::swapchain, 12), reinterpret_cast<void*>(&Chained<&desc_hook, 7>::call), 7);
+    add(method(astera::swapchain, 13), reinterpret_cast<void*>(&Chained<&resize_hook, 8>::call), 8);
+    add(method(astera::swapchain, 22), reinterpret_cast<void*>(&Chained<&present1_hook, 9>::call), 9);
+    add(method(astera::swapchain, 36), reinterpret_cast<void*>(&Chained<&index_hook, 10>::call), 10);
+    add(method(astera::swapchain, 39), reinterpret_cast<void*>(&Chained<&resize1_hook, 11>::call), 11);
 #ifdef MHW_FG_SCENE_PROBE
-    add(method(cmfm::swapchain, 14), reinterpret_cast<void*>(&Chained<&target_hook, 12>::call), 12);
+    add(method(astera::swapchain, 14), reinterpret_cast<void*>(&Chained<&target_hook, 12>::call), 12);
 #endif
 }
-bool presentation_cmfm_swapchain_chains() noexcept {
+bool presentation_astera_swapchain_chains() noexcept {
 #ifdef MHW_FG_SCENE_PROBE
     constexpr unsigned last = 12;
 #else
@@ -612,9 +612,9 @@ void Presentation::install(ID3D12Device* device, IDXGIFactory2* factory, Present
     api(upgrade_owned(s.proxy_factory, [&](void** out) { return s.sdk.upgrade(out); }), "presentation-upgrade-factory");
     require(native<ID3D12Device>(s.sdk, s.proxy_device.Get()).Get() == device, "presentation-device-identity");
     require(native<IDXGIFactory2>(s.sdk, s.proxy_factory.Get()).Get() == factory, "presentation-factory-identity");
-    if (cmfm::active()) {
-        // CMFM installs the device and factory chains before DEVICE_CREATED.
-        for (unsigned i = 0; i < 4; ++i) require(chain_next[i] != nullptr, "presentation-cmfm-device-factory-chains");
+    if (astera::active()) {
+        // AL installs the device and factory chains before DEVICE_CREATED.
+        for (unsigned i = 0; i < 4; ++i) require(chain_next[i] != nullptr, "presentation-al-device-factory-chains");
     } else {
         const auto initialized = MH_Initialize();
         require(initialized == MH_OK || initialized == MH_ERROR_ALREADY_INITIALIZED, "presentation-hook-initialize");
@@ -674,16 +674,16 @@ bool Presentation::stop() noexcept {
     // First synchronize with dynamic hook installation in a creation callback.
     { std::lock_guard lock(s.mutex); s.accepting.store(false); }
     // No route mutex while MinHook suspends threads or callbacks drain.
-    // Under CMFM the chains stay: with accepting off every detour forwards.
+    // Under AL the chains stay: with accepting off every detour forwards.
     for (auto& head : s.heads) if (head.enabled) {
-        const auto status = cmfm::active() ? MH_OK : MH_DisableHook(reinterpret_cast<void*>(head.target));
+        const auto status = astera::active() ? MH_OK : MH_DisableHook(reinterpret_cast<void*>(head.target));
         if (status == MH_OK || status == MH_ERROR_DISABLED) head.enabled = false; else ok = false;
     }
     const auto began = GetTickCount64();
     while (s.active.load() && GetTickCount64() - began < 30000) Sleep(1);
     if (s.active.load()) return false;
     std::lock_guard lock(s.mutex);
-    if (cmfm::active()) { s.stopped = ok; return ok; }
+    if (astera::active()) { s.stopped = ok; return ok; }
     for (auto& head : s.heads) if (head.created) {
         head.restored = std::memcmp(reinterpret_cast<void*>(head.target), head.original.data(), sizeof(head.original)) == 0;
         ok = head.restored && ok;

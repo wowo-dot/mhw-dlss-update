@@ -167,9 +167,12 @@ bool reserve_startup(std::uintptr_t base,std::string &reason);
 bool reserve_pool(const std::array<std::uintptr_t,10> &,std::string &reason);
 std::string file_sha256(const std::wstring &);
 std::string bytes_sha256(const void *,unsigned);
-// hash_file=false: the caller verified the exe file hash another way (CMFM).
+// hash_file=false: the caller verified the exe file hash another way (AL).
 bool host_identity(std::uintptr_t,std::string &,bool hash_file=true);
 bool verify_code(std::uintptr_t,unsigned,unsigned,const char *);
+// The same hash with the first head_size bytes taken from `head` (their original
+// values, where a shared hook chain owns the function's entry) and the rest live.
+bool verify_code_with_head(std::uintptr_t,unsigned,unsigned,const char *,const std::uint8_t *head,unsigned head_size);
 bool prepare(std::uintptr_t,std::string &); // Gates code, pins COM discovery; no game data writes.
 bool arm(std::string &);
 void poll() noexcept;

@@ -7,7 +7,7 @@
 // Public creation calls preserve arguments/results/Win32 last-error.
 #include "streamline.hpp"
 #include "presentation.hpp"
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include "native_factory.hpp"
 #ifdef MHW_REFLEX_TEMPORAL
 #include "temporal_coexistence.hpp"
@@ -25,7 +25,7 @@
 #include <algorithm>
 #ifdef MHW_ALPHA
 #include "../alpha/config.hpp"
-#include "../../third_party/cmfm/cmfm_plugin.h"
+#include "../../third_party/al/al_plugin.h"
 #include "../temporal_present/observer.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../scaled_temporal/stream_route.hpp"
@@ -125,15 +125,15 @@ constexpr unsigned capture_seconds = 600;
 bool initialized{}, device_checked{}, success{};
 unsigned owner{}, qualified_factories{}, qualified_devices{};
 std::string failure;
-// CMFM (alpha): cmfm_plugin_init starts the worker and waits for this event,
+// AL (alpha): al_plugin_init starts the worker and waits for this event,
 // set once the worker accepts the game's device or failed before that. Init
 // never waits for the NGX stage, which follows device creation.
 HANDLE startup_ready{};
 std::string startup_failure;
 void signal_startup() noexcept { if (startup_ready) SetEvent(startup_ready); }
-// CMFM's cmfm.game reported this exe's SHA-256: the worker skips re-hashing it.
+// AL's al.game reported this exe's SHA-256: the worker skips re-hashing it.
 bool exe_hash_verified{};
-// CMFM: the swap-chain chains were missing when the game created its swap chain.
+// AL: the swap-chain chains were missing when the game created its swap chain.
 std::atomic<bool> swapchain_chains_missing{};
 
 void require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
@@ -261,7 +261,7 @@ HRESULT WINAPI factory_hook(UINT flags, REFIID iid, void** result) {
 }
 // The game's main device exists: Streamline, Reflex and presentation. `out`
 // is the game's output pointer from the D3D12CreateDevice detour (it locates
-// the renderer that receives the device); null under CMFM, whose
+// the renderer that receives the device); null under AL, whose
 // DEVICE_CREATED phase comes from the game's own import call.
 void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created_device, void** out, unsigned caller_rva) {
     require(!initialized && !device_checked && !qualified_devices, "duplicate-startup-device");
@@ -307,7 +307,7 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
     sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
     device_checked = true;
-    log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"cmfm\":" << (out == nullptr)
+    log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"loader\":" << (out == nullptr)
         << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
         << ",\"luid_low\":" << luid.LowPart << ",\"luid_high\":" << luid.HighPart
         << ",\"feature_level\":" << static_cast<unsigned>(level)
@@ -333,7 +333,7 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
         owner_factory.Get() == factory_pin.Get(), "startup-native-factory-identity");
     require(pb::read(image + 0x51c7050, published), "startup-native-publication-slot");
     }
-    log << "{\"event\":\"factory_context\",\"source\":\"" << (out ? "native-adapter-parent" : "cmfm-adapter-parent")
+    log << "{\"event\":\"factory_context\",\"source\":\"" << (out ? "native-adapter-parent" : "loader-adapter-parent")
         << "\",\"output_owner_matches\":" << (out != nullptr) << ","
            "\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get()) << ",\"backend\":" << backend
         << ",\"global_backend_published\":" << (out && published == backend) << "}\n" << std::flush;
@@ -614,7 +614,7 @@ DWORD WINAPI worker(void*) noexcept {
     HMODULE pin{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
         reinterpret_cast<LPCWSTR>(&worker), &pin)) { startup_failure = "module-pin"; signal_startup(); return 1; }
-    {   // One active copy per process: a second one (e.g. loaded by CMFM and also
+    {   // One active copy per process: a second one (e.g. loaded by AL and also
         // force-loaded by MO2) stays inert. The handle lives as long as the process.
         const auto name = L"Local\\mhw_dlss.instance." + std::to_wstring(GetCurrentProcessId());
         const HANDLE instance = CreateMutexW(nullptr, FALSE, name.c_str());
@@ -632,7 +632,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_ALPHA
         {
             // Plugin layout: mhw_dlss.dll, mhw_dlss.ini, the NVIDIA runtime and
-            // logs in one folder, injected by CMFM (MO2 force-load in development).
+            // logs in one folder, injected by AL (MO2 force-load in development).
             // With the ini beside the DLL in a folder of its own (not the game
             // folder itself), that folder is the one place inside the game
             // folder the alpha may read its runtime from and log to.
@@ -676,7 +676,7 @@ DWORD WINAPI worker(void*) noexcept {
         for (const auto& path : {output, runtime}) {
             const auto text = path.wstring();
 #ifdef MHW_ALPHA
-            // The plugin folder may sit inside the game folder (CMFM, MO2 virtual
+            // The plugin folder may sit inside the game folder (AL, MO2 virtual
             // paths); nothing else there is used.
             if (!alpha_home.empty() && under(path.lexically_normal().wstring(), alpha_home)) continue;
 #endif
@@ -711,7 +711,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
 #if defined(MHW_FG_GAME)
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.14.0\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
+        log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.15.0\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #else
         log << "{\"event\":\"start\",\"schema\":1,\"version\":\"0.12.14\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":" << fg_plugin
 #endif
@@ -750,8 +750,8 @@ DWORD WINAPI worker(void*) noexcept {
         // The native constructor loads both modules dynamically. They are not
         // static imports of this probe, so GetModuleHandle alone races startup.
         // Resolve exact system modules before installing either creation hook.
-        // Under CMFM the device arrives through DEVICE_CREATED instead.
-        if (!mhw::cmfm::active()) {
+        // Under AL the device arrives through DEVICE_CREATED instead.
+        if (!mhw::astera::active()) {
             load_creation_api(0, L"dxgi.dll", "CreateDXGIFactory2");
             load_creation_api(1, L"d3d12.dll", "D3D12CreateDevice");
         }
@@ -767,7 +767,7 @@ DWORD WINAPI worker(void*) noexcept {
 #else
         require(MH_Initialize() == MH_OK, "hook-initialize");
 #endif
-        for (unsigned i = 0; i < targets.size() && !mhw::cmfm::active(); ++i) {
+        for (unsigned i = 0; i < targets.size() && !mhw::astera::active(); ++i) {
             for (unsigned n = 0; n < original_heads[i].size(); ++n)
                 require(pb::read(reinterpret_cast<std::uintptr_t>(targets[i]) + n*8ULL, original_heads[i][n]), "original-api-head");
             void* original{};
@@ -775,14 +775,14 @@ DWORD WINAPI worker(void*) noexcept {
             created[i] = true;
             if (i == 0) factory_original = reinterpret_cast<FactoryFn>(original); else device_original = reinterpret_cast<DeviceFn>(original);
         }
-        for (unsigned i = 0; i < targets.size() && !mhw::cmfm::active(); ++i) require(MH_QueueEnableHook(targets[i]) == MH_OK, "queue-creation-hook");
-        log << "{\"event\":\"prepared\",\"cmfm\":" << mhw::cmfm::active() << ",\"queued_api_hooks\":" << (mhw::cmfm::active() ? 0 : 2)
+        for (unsigned i = 0; i < targets.size() && !mhw::astera::active(); ++i) require(MH_QueueEnableHook(targets[i]) == MH_OK, "queue-creation-hook");
+        log << "{\"event\":\"prepared\",\"loader\":" << mhw::astera::active() << ",\"queued_api_hooks\":" << (mhw::astera::active() ? 0 : 2)
             << ",\"sdk_initialized\":false,\"original_heads_rva\":"
             << reinterpret_cast<std::uintptr_t>(&original_heads) - reinterpret_cast<std::uintptr_t>(module)
             << ",\"targets\":[" << reinterpret_cast<std::uintptr_t>(targets[0]) << ','
             << reinterpret_cast<std::uintptr_t>(targets[1]) << "]}\n" << std::flush;
         accepting.store(true);
-        if (mhw::cmfm::active()) signal_startup();
+        if (mhw::astera::active()) signal_startup();
         else {
             enabled.fill(true); // cleanup also covers a partially applied batch
             require(MH_ApplyQueued() == MH_OK, "enable-creation-hooks");
@@ -1149,7 +1149,7 @@ DWORD WINAPI worker(void*) noexcept {
         // one line next to mhw_dlss.ini so the silent fail-closed is explainable.
         if (!log.is_open() && !alpha_base.empty()) try {
             std::ofstream early(alpha_base / L"startup-error.jsonl", std::ios::binary | std::ios::app);
-            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.14.0\",\"pid\":" << GetCurrentProcessId()
+            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"0.15.0\",\"pid\":" << GetCurrentProcessId()
                 << ",\"reason\":" << quoted(e.what()) << "}\n" << std::flush;
         } catch (...) {}
 #endif
@@ -1158,34 +1158,35 @@ DWORD WINAPI worker(void*) noexcept {
 }
 }
 #ifdef MHW_ALPHA
-// CMFM plugin entry (plugin API 1.3, "cmfm.d3d12" 1.0). CMFM loads
-// cmfm\plugins\mhw_dlss\mhw_dlss.dll, calls cmfm_plugin_info, then
-// cmfm_plugin_init on its PRE_MAIN thread outside the loader lock. Init claims
-// the presentation role, registers every DXGI/D3D12 detour (CMFM owns the
-// patches), starts the worker and waits until it accepts the device.
+// Astera Loader plugin entry (plugin API 1.4: "al.d3d12" 1.0, "al.hooks" 1.0).
+// AL loads AsteraLoader\plugins\mhw_dlss\mhw_dlss.dll, calls al_plugin_info,
+// then al_plugin_init on its PRE_MAIN thread outside the loader lock. Init
+// claims the presentation role, registers every DXGI/D3D12 detour (AL owns the
+// patches), hands al.hooks to the live frame hooks, starts the worker and
+// waits until it accepts the device.
 namespace {
-const cmfm_api_t* cmfm_api{};
-cmfm_plugin_t* cmfm_self{};
-const cmfm_d3d12_t* cmfm_d3d12{};
-void cmfm_begin(void* self) { cmfm_d3d12->begin_internal(static_cast<cmfm_plugin_t*>(self)); }
-void cmfm_end(void* self) { cmfm_d3d12->end_internal(static_cast<cmfm_plugin_t*>(self)); }
-void cmfm_log(cmfm_log_level_t level, const std::string& text) noexcept { if (cmfm_api) cmfm_api->log(cmfm_self, level, text.c_str()); }
-void cmfm_status(cmfm_status_t status, const std::string& reason) noexcept {
-    if (cmfm_api) cmfm_api->set_status(cmfm_self, status, reason.empty() ? nullptr : reason.c_str());
+const al_api_t* loader_api{};
+al_plugin_t* loader_self{};
+const al_d3d12_t* loader_d3d12{};
+void loader_begin(void* self) { loader_d3d12->begin_internal(static_cast<al_plugin_t*>(self)); }
+void loader_end(void* self) { loader_d3d12->end_internal(static_cast<al_plugin_t*>(self)); }
+void loader_log(al_log_level_t level, const std::string& text) noexcept { if (loader_api) loader_api->log(loader_self, level, text.c_str()); }
+void loader_status(al_status_t status, const std::string& reason) noexcept {
+    if (loader_api) loader_api->set_status(loader_self, status, reason.empty() ? nullptr : reason.c_str());
 }
-// UNAVAILABLE: CMFM will not call the detours (DirectX 11, a family failed).
-bool cmfm_graphics_running(std::string& why) noexcept {
-    cmfm_d3d12_status_t s{}; s.size = sizeof(s); cmfm_d3d12->status(cmfm_self, &s);
-    if (s.state != CMFM_D3D12_UNAVAILABLE) return true;
-    why = s.reason ? s.reason : "cmfm.d3d12 unavailable"; return false;
+// UNAVAILABLE: AL will not call the detours (DirectX 11, a family failed).
+bool loader_graphics_running(std::string& why) noexcept {
+    al_d3d12_status_t s{}; s.size = sizeof(s); loader_d3d12->status(loader_self, &s);
+    if (s.state != AL_D3D12_UNAVAILABLE) return true;
+    why = s.reason ? s.reason : "al.d3d12 unavailable"; return false;
 }
-void CMFM_CALL on_phase(cmfm_plugin_t*, cmfm_phase_t phase, const void* data) {
+void AL_CALL on_phase(al_plugin_t*, al_phase_t phase, const void* data) {
     try {
-        if (phase == CMFM_PHASE_DEVICE_CREATED) {
-            const auto* d = static_cast<const cmfm_phase_device_t*>(data);
+        if (phase == AL_PHASE_DEVICE_CREATED) {
+            const auto* d = static_cast<const al_phase_device_t*>(data);
             std::string why;
-            if (!d || d->size < sizeof(*d) || !d->device) { cmfm_status(CMFM_STATUS_DEGRADED, "device phase without a device"); return; }
-            if (!cmfm_graphics_running(why)) { cmfm_status(CMFM_STATUS_DEGRADED, "graphics hooks unavailable: " + why); return; }
+            if (!d || d->size < sizeof(*d) || !d->device) { loader_status(AL_STATUS_DEGRADED, "device phase without a device"); return; }
+            if (!loader_graphics_running(why)) { loader_status(AL_STATUS_DEGRADED, "graphics hooks unavailable: " + why); return; }
             {
                 Call call;
                 if (accepting.load()) {
@@ -1198,42 +1199,48 @@ void CMFM_CALL on_phase(cmfm_plugin_t*, cmfm_phase_t phase, const void* data) {
                     }
                 }
             }
-            if (!success) cmfm_status(CMFM_STATUS_DEGRADED, failure.empty() ? "the game's device was not attached" : failure);
-        } else if (phase == CMFM_PHASE_SWAPCHAIN_CREATED) {
+            if (!success) loader_status(AL_STATUS_DEGRADED, failure.empty() ? "the game's device was not attached" : failure);
+        } else if (phase == AL_PHASE_SWAPCHAIN_CREATED) {
             std::string why;
-            if (!mhw::reflex::presentation_cmfm_swapchain_chains() || !cmfm_graphics_running(why)) {
+            if (!mhw::reflex::presentation_astera_swapchain_chains() || !loader_graphics_running(why)) {
                 swapchain_chains_missing.store(true);
-                cmfm_status(CMFM_STATUS_DEGRADED, "swap-chain hooks unavailable; DLSS and frame generation stay off");
+                loader_status(AL_STATUS_DEGRADED, "swap-chain hooks unavailable; DLSS and frame generation stay off");
             }
         }
     } catch (...) {}
 }
 const char* const supported_exes[]{mhw::projection_binding::host_sha, nullptr};
-const cmfm_plugin_info_t plugin_info{
-    sizeof(cmfm_plugin_info_t), CMFM_API_VERSION, "mhw_dlss", "MHW DLSS / Frame Generation", "0.14.0",
-    CMFM_PHASE_BIT(CMFM_PHASE_DEVICE_CREATED) | CMFM_PHASE_BIT(CMFM_PHASE_SWAPCHAIN_CREATED),
+const al_plugin_info_t plugin_info{
+    sizeof(al_plugin_info_t), AL_API_VERSION, "mhw_dlss", "MHW DLSS / Frame Generation", "0.15.0",
+    AL_PHASE_BIT(AL_PHASE_DEVICE_CREATED) | AL_PHASE_BIT(AL_PHASE_SWAPCHAIN_CREATED),
     0, nullptr, nullptr, supported_exes, on_phase, nullptr};
-cmfm_result_t start(const cmfm_api_t* api, const cmfm_init_t* init) {
-    const auto refuse = [&](const std::string& why) { cmfm_status(CMFM_STATUS_DISABLED, why); cmfm_log(CMFM_LOG_ERROR, why); return CMFM_ERROR; };
-    cmfm_d3d12 = static_cast<const cmfm_d3d12_t*>(api->get_interface(init->self, CMFM_D3D12_INTERFACE, CMFM_D3D12_VERSION));
-    if (!cmfm_d3d12 || cmfm_d3d12->size < sizeof(cmfm_d3d12_t)) return refuse("this CMFM has no cmfm.d3d12 1.0");
-    const auto* game = static_cast<const cmfm_game_t*>(api->get_interface(init->self, CMFM_GAME_INTERFACE, CMFM_GAME_VERSION));
-    if (game && game->size >= sizeof(cmfm_game_t)) {
-        if (game->graphics == CMFM_GRAPHICS_DX11) return refuse("the game is set to DirectX 11; this mod needs DirectX 12");
+al_result_t start(const al_api_t* api, const al_init_t* init) {
+    const auto refuse = [&](const std::string& why) { loader_status(AL_STATUS_DISABLED, why); loader_log(AL_LOG_ERROR, why); return AL_ERROR; };
+    loader_d3d12 = static_cast<const al_d3d12_t*>(api->get_interface(init->self, AL_D3D12_INTERFACE, AL_D3D12_VERSION));
+    if (!loader_d3d12 || loader_d3d12->size < sizeof(al_d3d12_t)) return refuse("this Astera Loader has no al.d3d12 1.0");
+    const auto* game = static_cast<const al_game_t*>(api->get_interface(init->self, AL_GAME_INTERFACE, AL_GAME_VERSION));
+    if (game && game->size >= sizeof(al_game_t)) {
+        if (game->graphics == AL_GRAPHICS_DX11) return refuse("the game is set to DirectX 11; this mod needs DirectX 12");
         exe_hash_verified = game->exe_sha256 && std::string_view(game->exe_sha256) == mhw::projection_binding::host_sha;
     }
-    if (cmfm_d3d12->claim_presentation(init->self) != CMFM_OK) return refuse("another plugin holds the presentation role (see the log)");
-    mhw::cmfm::activate(cmfm_begin, cmfm_end, init->self);
-    std::vector<mhw::cmfm::Hook> hooks;
-    mhw::reflex::presentation_cmfm_hooks(hooks);
-    mhw::temporal_present::observer::cmfm_hooks(hooks);
-    mhw::continuous_dlaa::cmfm_hooks(hooks);
-    mhw::scaled_temporal::stream_route::cmfm_hooks(hooks);
-    std::vector<cmfm_d3d12_hook_t> table;
+    if (loader_d3d12->claim_presentation(init->self) != AL_OK) return refuse("another plugin holds the presentation role (see the log)");
+    mhw::astera::activate(loader_begin, loader_end, init->self);
+    // Game functions other plugins share (the live frame hooks). Without
+    // al.hooks the worker's frame stage fails closed: no Reflex or frame
+    // generation, as with any other missing frame gate.
+    const auto* game_hooks = static_cast<const al_hooks_t*>(api->get_interface(init->self, AL_HOOKS_INTERFACE, AL_HOOKS_VERSION));
+    if (game_hooks && game_hooks->size >= sizeof(al_hooks_t)) mhw::astera::provide_game_hooks(game_hooks, init->self);
+    else loader_log(AL_LOG_WARNING, "this Astera Loader has no al.hooks 1.0; Reflex and frame generation stay off");
+    std::vector<mhw::astera::Hook> hooks;
+    mhw::reflex::presentation_astera_hooks(hooks);
+    mhw::temporal_present::observer::astera_hooks(hooks);
+    mhw::continuous_dlaa::astera_hooks(hooks);
+    mhw::scaled_temporal::stream_route::astera_hooks(hooks);
+    std::vector<al_d3d12_hook_t> table;
     for (const auto& h : hooks) table.push_back({h.method, 0, h.detour, h.next});
-    if (cmfm_d3d12->hook(init->self, table.data(), static_cast<std::uint32_t>(table.size())) != CMFM_OK)
+    if (loader_d3d12->hook(init->self, table.data(), static_cast<std::uint32_t>(table.size())) != AL_OK)
         return refuse("graphics hook registration refused (see the log)");
-    cmfm_log(CMFM_LOG_INFO, std::to_string(table.size()) + " graphics detours registered, presentation role held");
+    loader_log(AL_LOG_INFO, std::to_string(table.size()) + " graphics detours registered, presentation role held");
     startup_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!startup_ready) return refuse("startup event");
     const auto thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
@@ -1243,15 +1250,15 @@ cmfm_result_t start(const cmfm_api_t* api, const cmfm_init_t* init) {
     // pool; device creation cannot start before this returns (PRE_MAIN).
     if (WaitForSingleObject(startup_ready, 30000) != WAIT_OBJECT_0) return refuse("startup timed out");
     if (!accepting.load()) return refuse(startup_failure.empty() ? "startup failed (see the mod's log)" : startup_failure);
-    cmfm_status(CMFM_STATUS_ACTIVE, {});
-    return CMFM_OK;
+    loader_status(AL_STATUS_ACTIVE, {});
+    return AL_OK;
 }
 }
-extern "C" __declspec(dllexport) const cmfm_plugin_info_t* CMFM_CALL cmfm_plugin_info(void) { return &plugin_info; }
-extern "C" __declspec(dllexport) cmfm_result_t CMFM_CALL cmfm_plugin_init(const cmfm_api_t* api, const cmfm_init_t* init) {
-    if (!api || !init || !init->self || api->size < offsetof(cmfm_api_t, publish_interface)) return CMFM_ERROR;
-    cmfm_api = api; cmfm_self = init->self;
-    try { return start(api, init); } catch (...) { cmfm_status(CMFM_STATUS_DISABLED, "start-up exception"); return CMFM_ERROR; }
+extern "C" __declspec(dllexport) const al_plugin_info_t* AL_CALL al_plugin_info(void) { return &plugin_info; }
+extern "C" __declspec(dllexport) al_result_t AL_CALL al_plugin_init(const al_api_t* api, const al_init_t* init) {
+    if (!api || !init || !init->self || api->size < offsetof(al_api_t, publish_interface)) return AL_ERROR;
+    loader_api = api; loader_self = init->self;
+    try { return start(api, init); } catch (...) { loader_status(AL_STATUS_DISABLED, "start-up exception"); return AL_ERROR; }
 }
 #endif
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
@@ -1261,7 +1268,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
         const auto thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);
         if (thread) CloseHandle(thread);
 #endif
-        // The alpha is a CMFM plugin: cmfm_plugin_init starts the worker.
+        // The alpha is an Astera Loader plugin: al_plugin_init starts the worker.
     }
     return TRUE;
 }

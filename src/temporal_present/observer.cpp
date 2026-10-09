@@ -1,6 +1,6 @@
 #include "observer.hpp"
 #include "../perf/toggles.hpp"
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -30,8 +30,8 @@ std::array<Sample,sample_limit> samples;
 std::array<std::uintptr_t,max_hooks> targets;
 std::array<void *,max_hooks> originals;
 std::array<bool,max_hooks> created,enabled;
-// CMFM: the detours run from install to finish (as the MinHook patches did);
-// otherwise each call continues straight to CMFM's stored next method.
+// AL: the detours run from install to finish (as the MinHook patches did);
+// otherwise each call continues straight to AL's stored next method.
 std::atomic<bool> chain_live{};
 std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
 std::atomic<unsigned> pending{},fault{};
@@ -218,18 +218,18 @@ const std::array<void *,max_hooks> chained{
     reinterpret_cast<void *>(Chained<outputs_call,22>::call),reinterpret_cast<void *>(Chained<predicate_call,23>::call),
     reinterpret_cast<void *>(Chained<pointer_call<24>,24>::call)};
 }
-void cmfm_hooks(std::vector<cmfm::Hook> &out){
-    for(unsigned i=0;i<max_hooks;++i)out.push_back({cmfm::method(cmfm::command_list,methods[i]),chained[i],&originals[i]});
+void astera_hooks(std::vector<astera::Hook> &out){
+    for(unsigned i=0;i<max_hooks;++i)out.push_back({astera::method(astera::command_list,methods[i]),chained[i],&originals[i]});
 }
 namespace {
 bool install_chained(ID3D12GraphicsCommandList *list,Resolver resolve,std::string &reason){
-    // CMFM registered all max_hooks methods at PRE_MAIN and installed them at
+    // AL registered all max_hooks methods at PRE_MAIN and installed them at
     // DEVICE_CREATED. The targets are still resolved to check them.
-    if(installed_hooks!=max_hooks){reason="bindings-cmfm-hook-set";return false;}
+    if(installed_hooks!=max_hooks){reason="bindings-al-hook-set";return false;}
     for(unsigned i=0;i<installed_hooks;++i){
         if(!resolve(reinterpret_cast<std::uintptr_t>(list),methods[i],targets[i])){reason="bindings-system-method-"+std::to_string(methods[i]);return false;}
         for(unsigned j=0;j<i;++j)if(targets[i]==targets[j]){reason="bindings-method-alias";return false;}
-        if(!originals[i]){reason="bindings-cmfm-chain-"+std::to_string(methods[i]);return false;}
+        if(!originals[i]){reason="bindings-al-chain-"+std::to_string(methods[i]);return false;}
     }
     enabled.fill(false);for(unsigned i=0;i<installed_hooks;++i)enabled[i]=true;
     chain_live.store(true,std::memory_order_release);return true;
@@ -242,7 +242,7 @@ bool install(ID3D12Device *device,Resolver resolve,std::string &reason,bool rast
        FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())){
         reason="bindings-discovery-list";return false;}
     installed_hooks=indexed?max_hooks:predicate?predicate_hooks:raster?raster_hooks:hook_count;
-    if(cmfm::active())return install_chained(list.Get(),resolve,reason);
+    if(astera::active())return install_chained(list.Get(),resolve,reason);
     const std::array<void *,max_hooks> detours{
         reinterpret_cast<void *>(pointer_call<0>),reinterpret_cast<void *>(pointer_call<1>),reinterpret_cast<void *>(pointer_call<2>),reinterpret_cast<void *>(heaps_call),
         reinterpret_cast<void *>(pointer_call<4>),reinterpret_cast<void *>(pointer_call<5>),reinterpret_cast<void *>(table_call<6>),reinterpret_cast<void *>(table_call<7>),
@@ -323,7 +323,7 @@ bool healthy() noexcept {return fault.load(std::memory_order_acquire)==0;}
 bool finish() noexcept {
     if(!installed)return true;
     stop();const auto start=GetTickCount64();while(!settled()&&GetTickCount64()-start<2000)Sleep(1);drained=settled();bool ok=drained;
-    if(cmfm::active()){chain_live.store(false,std::memory_order_release);enabled.fill(false);}
+    if(astera::active()){chain_live.store(false,std::memory_order_release);enabled.fill(false);}
     for(unsigned i=0;i<installed_hooks;++i)if(created[i]){
         const auto status=MH_DisableHook(reinterpret_cast<void *>(targets[i]));
         if(status==MH_OK||status==MH_ERROR_DISABLED)enabled[i]=false;else ok=false;

@@ -1,6 +1,6 @@
 #pragma once
 #include "bindings.hpp"
-#include "../cmfm/cmfm_hooks.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -56,8 +56,8 @@ bool settled() noexcept;
 bool healthy() noexcept;
 bool hooks_disabled() noexcept;
 bool finish() noexcept;
-// CMFM: all observer detours (the full raster/predicate/indexed set) with the
-// storage CMFM fills; install() then only checks them and starts them.
-void cmfm_hooks(std::vector<cmfm::Hook>&);
+// AL: all observer detours (the full raster/predicate/indexed set) with the
+// storage AL fills; install() then only checks them and starts them.
+void astera_hooks(std::vector<astera::Hook>&);
 void write(std::ostream &);
 }
