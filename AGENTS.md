@@ -11,8 +11,15 @@ This repository is for an open-source investigation and implementation of modern
 - Game executable: `D:\SteamLibrary\steamapps\common\Monster Hunter World\MonsterHunterWorld.exe`
 - IDA directory: `C:\Program Files\IDA Professional 9.4` (the Hex-Rays IDA MCP needs 9.4; 9.3 stays installed)
 - IDA executable: `C:\Program Files\IDA Professional 9.4\ida.exe`
-- Private game databases: `local\ida-native-dlss-20261008\decrypted.i64` (input: the decoded image below; use it for code). `local\ida_static\MonsterHunterWorld_C2EBBBD2.i64` was built from the exe on disk, so its `.text` is SteamStub ciphertext (no functions at the live-frame RVAs, checked 2026-10-10); use it only for data sections and strings.
-- Decoded game image (read in place): `D:\mh world modding\ai\glavenus\MonsterHunterWorld_decrypted.exe`, SHA-256 `d78611731e4a5f214e306d1d577d4782b59adaf1c75de54d2983caa45074884c`, decoded from the tested exe `c2ebbbd2…90ea`. The exe on disk has SteamStub-encrypted code, so offline gate and signature checks run on this image.
+- Private game databases:
+  - `local\ida-clean-20261011\mhw.i64`: input is the clean image below, with Fexty's 15.23 names (a copy of the CMFM session's database). Use it for code.
+  - `local\ida-native-dlss-20261008\decrypted.i64`: built from the old, modded image, so it holds modified bytes at the 29 places (next item). Prefer the clean database.
+  - `local\ida_static\MonsterHunterWorld_C2EBBBD2.i64`: built from the exe on disk, so its `.text` is SteamStub ciphertext (checked 2026-10-10). Use it only for data sections and strings.
+- Clean game image: `local\clean-image-20261011\image.exe`, SHA-256 `a78ea69b0566414a42f16d0f8ff7d729e095041e2ae76a34cc02dbe0939f1d80`.
+  - It is a read-only memory copy of the tested exe `c2ebbbd2…90ea`, taken at the title screen with no mods loaded (CMFM session, 2026-10-11; source `D:\mh world modding\CMFM\local\runs\20261011-clean-dump`).
+  - The exe on disk has SteamStub-encrypted code, so offline gate and signature checks run on this image.
+  - The old image `D:\mh world modding\ai\glavenus\MonsterHunterWorld_decrypted.exe` (`d786117…884c`) was dumped with mods loaded and differs from the original code in 29 places. Don't use it for checks.
+  - Dated research notes still name the old image; none of their results depend on the 29 places (`docs/research/clean-game-image.md`).
 - Claude Code reversing tools: `C:\Users\akifs\.claude\re-tools\` (Python 3.12: `py -3.12 -B`); x64dbg: `D:\reverse engine jank\x64dbg\release\x96dbg.exe`
 
 These paths are machine-local configuration. Do not encode them into distributable binaries or assume other contributors use the same paths.
@@ -42,9 +49,9 @@ These paths are machine-local configuration. Do not encode them into distributab
 
 Claude Code has an IDA MCP (Hex-Rays), an x64dbg MCP, a Frida MCP and `sigscan.py`; the user-level `reversing` skill describes them. This file's rules come first.
 
-- **IDA:** open only the private game databases listed above (or a new copy under `local\`), never the NVIDIA module databases under `local\` (`nvngx_*`, `_nvngx`) and never anything in `ai\glavenus`. Ask through the MCP's `execute_python` instead of writing one-off headless scripts. Write-back and exports stay under `local\`.
-- **Code gates and heads** (`py -3.12 -B C:\Users\akifs\.claude\re-tools\sigscan.py`, on the decoded image):
-  - `gates <image> src` hashes every `{rva, size, "sha256"}` gate in the source against the image; on 2026-10-10 all 182 matched. Run it before staging a build that adds or changes a gate.
+- **IDA:** open only the private game databases listed above (or a new copy under `local\`), never the NVIDIA module databases under `local\` (`nvngx_*`, `_nvngx`) and never anything in `ai\glavenus`, and never create a database in another project's folder. Open a fresh binary with `-Opdb:off`; otherwise IDA asks Microsoft's symbol server for `World300.pdb`. Ask through the MCP's `execute_python` instead of writing one-off headless scripts. Write-back and exports stay under `local\`.
+- **Code gates and heads** (`py -3.12 -B C:\Users\akifs\.claude\re-tools\sigscan.py`, on the clean image):
+  - `gates <image> src` hashes every `{rva, size, "sha256"}` gate in the source against the image; on 2026-10-11 all 182 matched on the clean image, as on the old one. Run it before staging a build that adds or changes a gate.
   - `audit <image> src` checks the spaced-hex heads in `reflex/live_frames.cpp`. They are verified at pinned RVAs, so a head may match elsewhere too (`Render:Publish` matches 20+ times; fine).
   - `make <image> <VA>` and `scan <image> "<pattern>"` find and check patterns when exploring new sites.
 - **x64dbg and Frida on the running game:**
