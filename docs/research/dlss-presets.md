@@ -224,21 +224,18 @@ DLSS skipped those frames, so frame generation paused for the whole DOF shot.
 - Frame generation ran through the DOF windows (`no_ready` flat).
 - The session ended with `game_exit`.
 
-**Open (seen in game-62, game-72 and game-73): render submission of about
-7.5 ms on one low-simulation screen.**
-- That screen has simulation of 0.8–0.9 ms; in game-73 the player sat on it
-  for the first minute.
-- The Reflex submit span (Publish to Submit's return) sat at 7.5–7.6 ms.
-  GPU time was 3.4 ms, the interval 8.6 ms, and the game ran at about
-  110 fps rendered.
-- Elsewhere at the title it is 0.8 ms (DLAA, v0.18) or 2.5 ms (Quality,
-  v0.17); gameplay and cutscenes show 0.4–4 ms.
-- game-62 (v0.17.1) shows the same 7.5 ms, so it is not a v0.19.0
-  regression.
-- Two things are unknown: which screen it is, and whether the time is the
-  game's or ours. The route counters do not differ (one plan per frame, no
-  DOF, no silhouette draws).
-- In the same stretch, DLSS-G presented 422 frames without a generated one.
+**Explained: the ~7.5 ms submit screen is one of the game's title-screen
+variants (game-62, game-72, game-73).**
+- The title screen picks among several backgrounds. The player's
+  observation: most run at about 300 fps, but one is very heavy, and it is
+  just as slow with frame generation off.
+- Its signature in the logs: simulation 0.8–0.9 ms; Reflex submit
+  (Publish to Submit's return) 7.5–7.6 ms; GPU 3.4 ms; about 110 fps
+  rendered.
+- The route counters match the light title (one plan per frame, no DOF).
+- Lighter title variants measured 0.8–2.5 ms in earlier runs.
+- That scene costs the game itself, so it is not a mod regression. DLSS-G
+  presented 422 frames without a generated one there.
 
 ## Not yet proven (hypotheses until the in-game runs)
 
