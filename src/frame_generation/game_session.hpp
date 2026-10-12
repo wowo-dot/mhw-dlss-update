@@ -57,9 +57,12 @@ Status status() noexcept;
 void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
            ID3D12Resource *motion, const SlotCamera &camera) noexcept;
 // Final-scene observer (stream_route::FinalSceneObserver contract): `scene` is
-// the HUD-free final target in RENDER_TARGET; state must match `roots` after.
+// the HUD-free final target in `scene_state` (RENDER_TARGET after the final
+// draw; COPY_DEST after the native final copy at render scale 1.0); state must
+// match `roots` after.
 void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
-            std::uint64_t frame, std::uint64_t epoch) noexcept;
+            std::uint64_t frame, std::uint64_t epoch,
+            D3D12_RESOURCE_STATES scene_state = D3D12_RESOURCE_STATE_RENDER_TARGET) noexcept;
 // Close hook, before the native Close of a DIRECT list (this runtime's hooks
 // bypassed). After a HUD-less record and before the next Present, records the
 // brightness capture from graphics root parameter 5 as the list's last

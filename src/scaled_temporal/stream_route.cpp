@@ -125,6 +125,12 @@ struct Plan {
  };
  std::array<Recording,8> recordings{};
  bool prepared{},resolved{},copied{},completed{};unsigned recorded_draws{};
+ // Render scale 1.0 (DLAA, dlaa-identity-path.md): the frame ends with a native
+ // copy from the grade output to the final attachment, not the System_Copy
+ // quad. No effect is replayed; the plan holds the resolve, the TAA hand-off
+ // copy and that final copy (handoff use 2; resources 2 and 3 its source and
+ // destination).
+ bool identity{},final_copied{};std::uintptr_t final_copy{};std::array<std::byte,64> final_copy_fields{};
  // Late indexed packets are frozen before recording workers start, sorted
  // in native key/insertion order and included in GPU ownership. About 17 per
  // frame in combat; Alatreon's arrival exceeded the former 32 (game-45).
@@ -133,7 +139,7 @@ struct Plan {
  std::array<unsigned,late_capacity> late_keys{};std::array<LatePacket,late_capacity> late{};
  unsigned late_count{},late_recorded{};std::uint64_t late_executed{};
 };
-unsigned effect_count(const Plan &p){return (p.has_haze?4U:3U)+p.overlay_count;}
+unsigned effect_count(const Plan &p){return p.identity?0U:(p.has_haze?4U:3U)+p.overlay_count;}
 bool shared_overlay_key(const Plan &p){
  for(unsigned i=0;i<p.overlay_count;++i)for(unsigned j=0;j<i;++j)if(p.keys[4+i]==p.keys[4+j])return true;
  return false;
@@ -146,8 +152,9 @@ unsigned handoff_draw(const Plan &p,unsigned stage){
 }
 unsigned handoff_indexed(const Plan &p,unsigned position){return 1+effect_count(p)+(p.dof?6:0)+position;}
 unsigned handoff_compute(const Plan &p,unsigned pass){return 2+effect_ordinal(p,p.dof->stage)+pass;}
+unsigned handoff_count(const Plan &p){return 2+effect_count(p)+(p.dof?6:0)+p.late_count+(p.identity?1U:0U);}
 unsigned output_index(const Plan &p,unsigned stage){return stage<4?2+stage:p.targets[stage];}
-unsigned resource_count(const Plan &p){return (p.has_haze?9U:5U)+p.extra_resources;}
+unsigned resource_count(const Plan &p){return p.identity?4U:(p.has_haze?9U:5U)+p.extra_resources;}
 struct Pipeline {std::unique_ptr<Effect> effect;std::string signature;ComPtr<ID3D12RootSignature> root;};
 tb::Config cfg;unsigned width{},height{};
 // The game's render extent inside the output (render_resolution::plan): 2:1
@@ -200,7 +207,7 @@ void watch(unsigned slot,const Plan &p) noexcept {
  for(const auto &d:p.draws)add(d.draw.packet);
  for(unsigned i=0;i<p.late_count&&i<p.late_packets.size();++i)add(p.late_packets[i]);
  if(p.dof)for(const auto &d:p.dof->passes)add(d.packet);
- add(p.copy);add(p.temporal.object);
+ add(p.copy);add(p.final_copy);add(p.temporal.object);
  for(unsigned i=0;i<resource_count(p)&&i<p.resources.size();++i)
   if(auto *x=p.resources[i].Get())w.resources[r++].store(reinterpret_cast<std::uintptr_t>(x),std::memory_order_relaxed);
  w.all.store(overflow,std::memory_order_release);
@@ -248,6 +255,7 @@ std::atomic<bool> accepting{};std::atomic<unsigned> pending{},fault{};
 std::uint64_t published{},built{},unqualified{},claimed{},copies{},draws{},warmups{},complete{};
 std::uint64_t haze_claimed{},haze_complete{},haze_draws{};
 std::uint64_t final_captured{},final_rejected{};
+std::uint64_t identity_plans{},identity_final_copies{},identity_observed{};  // render scale 1.0 (DLAA)
 std::uint64_t spatial_frames{},native_frames{},prepared_frames{},early_draws{},multilist_frames{},submitted_frames{};
 std::array<std::uint64_t,19> rejection_counts{};  // rejected plan builds by graph reason (18: other)
 std::uint64_t summarized_rejections{};
@@ -263,6 +271,7 @@ thread_local std::uintptr_t api_state{};
 thread_local pb::Draw api_draw;
 thread_local pb::AttachmentSnapshot api_before;
 thread_local unsigned copy_slot=UINT_MAX,copy_calls{},resolve_slot=UINT_MAX;
+thread_local bool copy_final{};  // the executing copy is an identity plan's final copy
 thread_local std::uintptr_t copy_recording{};
 void fail(unsigned n){unsigned zero{};fault.compare_exchange_strong(zero,n);accepting=false;}
 template<class T>bool field(std::uintptr_t at,unsigned off,T &v){return at&&at<=UINTPTR_MAX-off-sizeof(T)&&pb::copy_memory(at+off,&v,sizeof(T));}
@@ -520,7 +529,8 @@ Plan::Recording *track_recording(Plan &p,ID3D12GraphicsCommandList *list,std::ui
  return empty;
 }
 void completed(Plan &p){
- if(!p.completed&&p.resolved&&p.copied&&p.recorded_draws==effect_count(p)&&(!p.dof||p.dof->dispatched==63)&&p.handoff.recorded()==p.handoff.count()){
+ if(!p.completed&&p.resolved&&p.copied&&(!p.identity||p.final_copied)&&p.recorded_draws==effect_count(p)&&(!p.dof||p.dof->dispatched==63)&&
+    p.handoff.recorded()==p.handoff.count()){
   p.completed=true;++complete;overlay_completed+=p.overlay_count;if(shared_overlay_key(p))++overlay_shared_completed;if(p.has_haze)++haze_complete;
   unsigned count{};for(const auto &r:p.recordings)if(r.list)++count;if(count>1)++multilist_frames;
  }
@@ -562,7 +572,7 @@ struct PredicateScope {
  ~PredicateScope(){list->SetPredication(nullptr,0,D3D12_PREDICATION_OP_EQUAL_ZERO);}
 };
 bool prepare_frame(Plan &p){
- if(2+effect_count(p)+(p.dof?6:0)+p.late_count>FrameHandoff::capacity||(p.dof&&!dof_warm(p)))return false;
+ if(handoff_count(p)>FrameHandoff::capacity||(p.dof&&!dof_warm(p)))return false;
  for(unsigned ordinal=0;ordinal<effect_count(p);++ordinal){const auto stage=effect_stage(p,ordinal);if(!needs_pipeline(p,stage))continue;
   const auto *cache=draw_pipeline(p,stage);if(!cache||!cache->effect||cache->signature!=p.draws[stage].signature)return false;}
  tb::Packet actual;
@@ -574,8 +584,9 @@ bool prepare_frame(Plan &p){
  for(unsigned ordinal=0;ordinal<effect_count(p);++ordinal){const auto stage=effect_stage(p,ordinal);packets[handoff_draw(p,stage)]=p.draws[stage].draw.packet;}
  if(p.dof)for(unsigned pass=0;pass<6;++pass)packets[handoff_compute(p,pass)]=p.dof->passes[pass].packet;
  for(unsigned i=0;i<p.late_count;++i)packets[handoff_indexed(p,i)]=p.late_packets[i];
+ if(p.identity)packets[2]=p.final_copy;
  if(!prepare_selector(p)||p.handoff.prepare({p.stamp.frame,p.stamp.epoch,p.stamp.context,p.stamp.view},
-     std::span(packets).first(2+effect_count(p)+(p.dof?6:0)+p.late_count))!=FrameHandoff::Result::ok)return false;
+     std::span(packets).first(handoff_count(p)))!=FrameHandoff::Result::ok)return false;
  p.prepared=true;p.claimed=true;overlay_planned+=p.overlay_count;if(shared_overlay_key(p))++overlay_shared_prepared;
  silhouette_planned+=p.late_count;
  ++prepared_frames;++claimed;if(p.has_haze)++haze_claimed;
@@ -589,6 +600,64 @@ bool retain_recording(Plan &p,ID3D12GraphicsCommandList *list,std::uint64_t gen,
  for(auto *value:extra)pins[count++]=value;
  return lifetime.retain(list,gen,std::span(pins).first(count));
 }
+// DLAA (dlaa-identity-path.md): at render scale 1.0 the game ends the frame with
+// a native copy (opcode 13, sub_1423C9250, from 0x23c7ad6) from the colour-
+// grading output to the view's final attachment instead of the System_Copy quad.
+// Every effect then renders at full size and stays native. The plan proves the
+// TAA hand-off copy (where the reconstruction enters, as in the scaled presets)
+// and that final copy (frame generation's HUD-less anchor): one each, with the
+// same owner, packet and extent identities as the scaled route's.
+bool build_identity_plan(Plan &p,OutputDiagnostics::Graph &observation){
+ const auto &s=p.stamp;std::uintptr_t filters{},motion_in{},grade{},grade_out{},attachment{},final_dest{};
+ unsigned count{},taas{},grades{};
+ if(!same_stamp(s)||!field(cfg.image,0x51cc238,filters)||!field(filters,0x3c,count)||!count||count>16){plan_rejection=1;return false;}
+ for(unsigned i=0;i<count;++i){std::uintptr_t e{},u{},type{},input{},output{};unsigned stage{},order{};
+  if(!field(filters,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,u)||!field(e,0x10,input)||!field(e,0x18,output)||(u&&!field(u,0,type))){plan_rejection=2;return false;}
+  observation.filters[observation.count++]={e,stage,order,u,type,input,output};
+  if(e==s.layer+0x140){if(stage!=15||order!=2||u!=s.layer||input!=s.inputs[0].object){plan_rejection=3;return false;}motion_in=output;++taas;}
+  if(type==cfg.image+0x3538400&&stage==15&&order==0){grade=u;++grades;}
+ }
+ observation.links={0,grade,0,motion_in,0,0,0,0};
+ if(taas!=1||grades!=1){plan_rejection=6;plan_detail=1;return false;}
+ if(!field(grade,0x250,grade_out)||!grade_out){plan_rejection=6;plan_detail=4;return false;}
+ observation.links[6]=grade_out;
+ if(!field(s.view,0x460,attachment)||!attachment||!field(attachment,0x58,final_dest)||!final_dest){plan_rejection=6;plan_detail=6;return false;}
+ std::uintptr_t array{};unsigned commands{};
+ if(!field(s.context,0x2b80,commands)||!commands||commands>=65535||!field(s.context,0x2b78,array)||!array||array>UINTPTR_MAX-16ULL*commands){plan_rejection=8;return false;}
+ struct Command {unsigned key{},padding{};std::uintptr_t packet{};};static_assert(sizeof(Command)==16);
+ // Copy packets (sub_1423C9250): +0x20 mode, +0x24/+0x28 subresources,
+ // +0x30 destination x/y, +0x38 source rectangle, +0x48 an optional pointer.
+ const auto copy_shape=[&](std::uintptr_t packet,const std::array<unsigned,4> &expected){
+  unsigned mode{},ds{},ss{};std::array<unsigned,2> xy{};std::array<unsigned,4> rect{};std::uintptr_t optional{};
+  return field(packet,0x20,mode)&&field(packet,0x24,ds)&&field(packet,0x28,ss)&&field(packet,0x30,xy)&&field(packet,0x38,rect)&&
+   field(packet,0x48,optional)&&!mode&&!ds&&!ss&&!xy[0]&&!xy[1]&&!optional&&rect==expected;};
+ std::array<Command,256> block;unsigned handoffs{},finals{};
+ for(unsigned base=0;base<commands;base+=256){const auto n=(std::min)(256U,commands-base);
+  if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Command))){plan_rejection=9;return false;}
+  for(unsigned j=0;j<n;++j){const auto &c=block[j];unsigned raw{};
+   if(c.key!=0x78000002&&(c.key>>27)!=16)continue;
+   if(!field(c.packet,0,raw)){plan_rejection=10;return false;}
+   if((raw&31)!=13)continue;
+   std::uintptr_t src{},dst{};if(!field(c.packet,0x18,src)||!field(c.packet,0x10,dst)){plan_rejection=11;return false;}
+   if(c.key==0x78000002){
+    if(src!=s.inputs[4].object||dst!=motion_in)continue;
+    if(++handoffs!=1||!pb::copy_memory(c.packet+0x10,p.copy_fields.data(),64)){plan_rejection=12;return false;}p.copy=c.packet;
+    if(!copy_shape(c.packet,s.rectangle)){plan_rejection=13;return false;}
+   }else if(src==grade_out&&dst==final_dest){
+    if(++finals!=1||!pb::copy_memory(c.packet+0x10,p.final_copy_fields.data(),64)){plan_rejection=12;return false;}p.final_copy=c.packet;
+    if(!copy_shape(c.packet,{0,0,width,height})){plan_rejection=13;return false;}
+   }
+  }
+ }
+ if(handoffs!=1||finals!=1){plan_rejection=15;return false;}
+ unsigned again{};std::uintptr_t again_array{};
+ if(!field(s.context,0x2b80,again)||again!=commands||!field(s.context,0x2b78,again_array)||again_array!=array||!same_stamp(s)){plan_rejection=16;return false;}
+ tb::Owner transfer,source,destination;
+ if(!owner(motion_in,transfer)||!owner(grade_out,source)||!owner(final_dest,destination)){plan_rejection=7;return false;}
+ if(!pin(s.inputs[4],p.resources[0])||!pin(transfer,p.resources[1])||!pin(source,p.resources[2])||!pin(destination,p.resources[3])){plan_rejection=17;return false;}
+ for(unsigned i=0;i<4;++i)for(unsigned j=0;j<i;++j)if(p.resources[i]==p.resources[j]){plan_rejection=17;return false;}
+ return true;
+}
 // All admitted effects and the exact copy are selected from the completed native
 // post-filter queue. Keys narrow the search; owners, packet fields, geometry and
 // shader recipes prove each identity. No packet is selected by an address alone.
@@ -598,7 +667,10 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
      unsigned index=UINT32_MAX,unsigned raw=0,bool raw_read=false,unsigned seen=0){
   observation.command_gate={branch,key,packet,index,raw,raw_read,seen,p.overlay_count};
   plan_rejection=17;++overlay_rejected;return false;};
- plan_rejection=plan_detail=plan_qualification=0;plan_vertex_gate={};const auto &s=p.stamp;std::uintptr_t filters{},motion_in{},motion_out{},grade{},grade_in{},grade_out{},final_dest{},attachment{},endpoint{};
+ plan_rejection=plan_detail=plan_qualification=0;plan_vertex_gate={};
+ p.identity=render_w==width&&render_h==height;
+ if(p.identity){const bool built_identity=build_identity_plan(p,observation);if(built_identity)++identity_plans;return built_identity;}
+ const auto &s=p.stamp;std::uintptr_t filters{},motion_in{},motion_out{},grade{},grade_in{},grade_out{},final_dest{},attachment{},endpoint{};
  std::array<ColorLink,16> middle_links{};std::array<unsigned,8> middle_path{};unsigned middle_size{},middle_count{};
  unsigned count{},taas{},motions{},grades{},ends{},hazes{};std::uintptr_t haze_unit{},haze_in{},haze_out{};
  unsigned pre_filters{},pre_order{};std::uintptr_t pre_unit{},pre_in{},pre_out{};
@@ -911,7 +983,7 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
   !std::memcmp(&raster.viewport,&after.viewport,sizeof(raster.viewport))&&!std::memcmp(&raster.scissor,&after.scissor,sizeof(raster.scissor));
  if(!replaced||!restored)throw std::runtime_error("stream effect recording or restore");
  if(const auto observer=final_scene_observer.load();stage==2&&observer){
-  injecting=true;observer(b.list,roots,b.output,p.stamp.frame,p.stamp.epoch);injecting=false;
+  injecting=true;observer(b.list,roots,b.output,p.stamp.frame,p.stamp.epoch,D3D12_RESOURCE_STATE_RENDER_TARGET);injecting=false;
   if(!obs::matches_current(b.list,roots))throw std::runtime_error("stream final-scene observer restore");}
  ++p.recorded_draws;++draws;if(stage==3)++haze_draws;if(r.dependency)++dependency_draws[r.dependency-1];if(stage>=4){++overlay_draws;
   if(!r.dependency&&r.vertex_stride!=16&&r.vertex_stride){++overlay_extended_draws;const auto &v=r.overlay_layout;
@@ -928,6 +1000,32 @@ bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCA
  auto &p=plans[copy_slot];if(!p.prepared)return false;
  D3D12_TEXTURE_COPY_LOCATION d{},s{};D3D12_BOX b{};
  if(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(destination),&d,sizeof(d))||!pb::copy_memory(reinterpret_cast<std::uintptr_t>(source),&s,sizeof(s)))return false;
+ if(copy_final){
+  // The native final copy at render scale 1.0 (DLAA): forwarded unchanged on
+  // both branches (it is already full size), then frame generation's HUD-less
+  // capture reads the final scene target, now in COPY_DEST.
+  if(d.pResource!=p.resources[3].Get()||s.pResource!=p.resources[2].Get())return false;
+  temporal_present::Bindings bindings;if(!obs::inspect(list,bindings)||!bindings.known||!bindings.valid){fail(5);return false;}
+  auto *track=track_recording(p,list,bindings.generation,true);
+  std::uintptr_t packet{},command{};std::array<std::byte,64> fields{};
+  if(caller!=cfg.image+0x259caf0||p.final_copied||++copy_calls!=1||!track||x||y||z||
+     // A native copy needs its destination in COPY_DEST, and the copy leaves
+     // it there: the observer's barrier relies on that. An unknown state (its
+     // barrier in an earlier list) is accepted, a contradicting one is not.
+     (track->known[2]&&(track->states[2]&D3D12_RESOURCE_STATE_COPY_SOURCE)==0)||(track->known[3]&&track->states[3]!=D3D12_RESOURCE_STATE_COPY_DEST)||
+     !field(copy_recording,0x158,packet)||packet!=p.final_copy||!field(copy_recording,0x20,command)||command!=reinterpret_cast<std::uintptr_t>(list)||
+     !pb::copy_memory(p.final_copy+0x10,fields.data(),64)||fields!=p.final_copy_fields||
+     d.Type!=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX||s.Type!=d.Type||d.SubresourceIndex||s.SubresourceIndex||
+     (box&&(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||b.left||b.top||b.front||b.back!=1||b.right!=width||b.bottom!=height))){
+   fail(5);return false;}
+  if(!retain_recording(p,list,bindings.generation)||p.handoff.record(2,p.final_copy,{reinterpret_cast<std::uintptr_t>(list),bindings.generation})!=FrameHandoff::Result::ok){fail(5);return false;}
+  reinterpret_cast<CopyFn>(originals[2])(list,destination,0,0,0,source,box);
+  ++identity_final_copies;
+  if(const auto observer=final_scene_observer.load()){
+   injecting=true;observer(list,bindings,p.resources[3].Get(),p.stamp.frame,p.stamp.epoch,D3D12_RESOURCE_STATE_COPY_DEST);injecting=false;
+   if(!obs::matches_current(list,bindings)){fail(5);return true;}++identity_observed;}
+  p.final_copied=true;++copies;completed(p);return true;
+ }
  if(d.pResource!=p.resources[1].Get()||s.pResource!=p.resources[0].Get())return false;
  temporal_present::Bindings bindings;if(!obs::inspect(list,bindings)||!bindings.known||!bindings.valid){fail(5);return false;}
  // A worker may record the copy on a different list from the resolve. Import
@@ -974,7 +1072,7 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
     p.stamp.layer!=taa||!same_stamp(p.stamp)||p.motion_thread!=GetCurrentThreadId())return;
  p.queue_finished=true;
  try{
-  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;if(silhouette_candidates(p))(void)prepare_frame(p);
+  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;if(p.identity||silhouette_candidates(p))(void)prepare_frame(p);
    watch(static_cast<unsigned>(frame%plans.size()),p);}
   else{++unqualified;p.resources={};}
  }catch(const std::exception &e){failure=e.what();fail(1);}
@@ -1024,21 +1122,25 @@ bool indexed_draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,
 }
 unsigned copy_before(const pb::Frame &f){
  Lock lock;if(fault.load()||abandoned)return UINT_MAX;unsigned slot=UINT_MAX;
- for(unsigned i=0;i<plans.size();++i)if(plans[i].prepared&&plans[i].copy==f.gpr[3]&&!plans[i].copied){
-  if(slot!=UINT_MAX){fail(5);return UINT_MAX;}slot=i;}
+ bool final=false;
+ for(unsigned i=0;i<plans.size();++i){const auto &q=plans[i];if(!q.prepared)continue;
+  const bool handoff=q.copy==f.gpr[3]&&!q.copied,closing=q.identity&&q.final_copy==f.gpr[3]&&!q.final_copied;
+  if(!handoff&&!closing)continue;
+  if(slot!=UINT_MAX){fail(5);return UINT_MAX;}slot=i;final=closing;}
  if(slot==UINT_MAX)return slot;
  std::uintptr_t backend{};
  if(!field(f.gpr[2],8,backend)||backend!=cfg.backend||!field(f.gpr[1],8,copy_recording)||!copy_recording){fail(5);return UINT_MAX;}
- copy_calls=0;return slot;
+ copy_calls=0;copy_final=final;return slot;
 }
-void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;if(!returned||copy_calls!=1||!plans[copy_slot].copied)fail(5);}}
+void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;
+ if(!returned||copy_calls!=1||!(copy_final?plans[copy_slot].final_copied:plans[copy_slot].copied))fail(5);}}
 void copy_dispatch(pb::Frame *f){
- ++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;
- copy_slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:copy_before(*f);bool returned=false;
+ ++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;const auto old_final=copy_final;
+ copy_final=false;copy_slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:copy_before(*f);bool returned=false;
  __try{mhw_binding_forward(originals[4],f);returned=true;}
  __finally{
   copy_after(returned);
-  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;--pending;
+  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;--pending;
  }
 }
 void observe_final_scene(FinalSceneObserver observer) noexcept {final_scene_observer.store(observer);}
@@ -1424,6 +1526,7 @@ struct SceneWriteLock {SceneWriteLock(){AcquireSRWLockExclusive(&scene_write_loc
 void write_summary(std::ostream &o){
  Lock lock;const auto a=[&](const auto &v){o<<'[';for(unsigned i=0;i<v.size();++i){if(i)o<<',';o<<v[i];}o<<']';};
  o<<"{\"fault\":"<<fault.load()<<",\"published\":"<<published<<",\"built\":"<<built<<",\"claimed\":"<<claimed
+  <<",\"identity\":{\"plans\":"<<identity_plans<<",\"final_copies\":"<<identity_final_copies<<",\"observed\":"<<identity_observed<<'}'
   <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"failure\":"<<std::quoted(failure)
   <<",\"dependency_draws\":";a(dependency_draws);o<<",\"plan_rejections\":";a(rejection_counts);
  o<<",\"readiness\":";a(readiness.reasons());

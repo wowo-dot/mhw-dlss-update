@@ -715,9 +715,9 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
 // stream_route final-scene observer: our barriers, copies and dispatch must
 // bypass this runtime's own hooks exactly like the DLSS replacement's work.
 void fg_final_scene(ID3D12GraphicsCommandList *list,const temporal_present::Bindings &roots,ID3D12Resource *scene,
-    std::uint64_t frame,std::uint64_t epoch) noexcept {
+    std::uint64_t frame,std::uint64_t epoch,D3D12_RESOURCE_STATES scene_state) noexcept {
     const bool outer=injected;injected=true;
-    frame_generation::game::record(list,roots,scene,frame,epoch);
+    frame_generation::game::record(list,roots,scene,frame,epoch,scene_state);
     injected=outer;
 }
 #endif

@@ -34,10 +34,12 @@ public:
     // Throws on any creation failure; the caller then runs without HUD-less.
     HudlessPass(ID3D12Device *device, unsigned width, unsigned height);
     // Records on `list` with the caller's bindings already saved. Transitions
-    // `scene` RENDER_TARGET -> NON_PIXEL_SHADER_RESOURCE -> RENDER_TARGET and
-    // `target` from/to `target_state`. Changes compute root, PSO and heaps.
+    // `scene` from `scene_state` to NON_PIXEL_SHADER_RESOURCE and back: the
+    // final draw's RENDER_TARGET, or COPY_DEST after the native final copy at
+    // render scale 1.0 (DLAA). `target` goes from/to `target_state`. Changes
+    // compute root, PSO and heaps.
     void record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12Resource *scene, ID3D12Resource *target,
-                D3D12_RESOURCE_STATES target_state);
+                D3D12_RESOURCE_STATES target_state, D3D12_RESOURCE_STATES scene_state = D3D12_RESOURCE_STATE_RENDER_TARGET);
     // Records the capture of a candidate CBSystem address. Changes the compute
     // root and PSO (no heaps), so only as the list's last commands.
     void capture(ID3D12GraphicsCommandList *list, D3D12_GPU_VIRTUAL_ADDRESS system_constants);

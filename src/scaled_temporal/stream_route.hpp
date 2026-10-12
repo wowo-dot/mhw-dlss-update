@@ -9,12 +9,15 @@
 namespace mhw::temporal_present { struct Bindings; }
 namespace mhw::scaled_temporal::stream_route {
 // Optional final-scene observer (frame generation build). Called on the
-// recording thread right after a replaced final-screen draw whose native state
-// was verified restored, before any UI draw: the final scene target is the
-// only RTV and still in RENDER_TARGET. The observer may record work on the list
-// but must leave state equal to the given bindings; that is verified after it.
+// recording thread before any UI draw, right after the frame's final step:
+// - a replaced final-screen draw whose native state was verified restored; the
+//   final scene target is the only RTV and in RENDER_TARGET (scaled presets);
+// - the native final copy at render scale 1.0 (DLAA); the target is in
+//   COPY_DEST (dlaa-identity-path.md).
+// The observer may record work on the list but must leave state equal to the
+// given bindings; that is verified after it.
 using FinalSceneObserver = void (*)(ID3D12GraphicsCommandList *, const temporal_present::Bindings &, ID3D12Resource *scene,
-                                    std::uint64_t frame, std::uint64_t epoch) noexcept;
+                                    std::uint64_t frame, std::uint64_t epoch, D3D12_RESOURCE_STATES scene_state) noexcept;
 void observe_final_scene(FinalSceneObserver) noexcept;
 // Hook creation is queued; the owning continuous runtime applies it only after
 // every participant is prepared. This module never owns Reset/Execute/barriers.

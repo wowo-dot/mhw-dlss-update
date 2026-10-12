@@ -52,7 +52,44 @@ In `sub_1423C3790` (view preparation; it records the final screen step):
   `tBaseMap` in the scaled path). The destination is `view+0x460 → +0x58`, the
   same final attachment as the quad's.
 
-## What true DLAA needs (design, not yet built)
+## Built: v0.18.0 (the in-game test is pending)
+
+**Building the plan.** When render == output, `build_identity_plan` replaces
+the scaled builder. It proves:
+- the TAA filter and the grade unit, one each;
+- the grade output (`grade+0x250`) and the view's final attachment
+  (`view+0x460 → +0x58`);
+- in the completed queue, exactly one TAA hand-off copy (key `0x78000002`,
+  TAA input to the motion-filter input, the render rectangle) and exactly one
+  stage-16 opcode-13 copy from the grade output to the final attachment
+  (rectangle `0,0,width,height`, zero mode, subresources, offsets and
+  optional pointer);
+- unchanged queue and stamp.
+
+It then pins four resources: the TAA input, the hand-off destination, the
+grade output and the final target.
+
+**Plan contents.** Effect count 0, four resources, three handoff uses:
+resolve, TAA copy, final copy. Overlays, DOF and silhouette pieces are not
+planned, so they stay native.
+
+**The copy hook.** `copy_before` also matches an identity plan's final copy
+packet, through a per-thread flag. The final branch:
+1. checks the executor caller, the packet and its fields, the resources and
+   the full box;
+2. checks states: a known contradicting state fails; an unknown one is
+   accepted, because the native copy requires and leaves COPY_DEST;
+3. records handoff use 2 and forwards the copy unchanged;
+4. calls the final-scene observer with the scene in COPY_DEST.
+
+**Frame generation.** `HudlessPass::record`, `game::record` and the observer
+take the scene's state. It is RENDER_TARGET after the scaled final draw, and
+COPY_DEST here.
+
+**Telemetry.** The `route.identity` summary records plans, final copies and
+observed copies.
+
+## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
   at the final stage as the frame's final step. It needs the same proofs as

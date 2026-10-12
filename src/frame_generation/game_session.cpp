@@ -339,7 +339,7 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
 }
 
 void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
-            std::uint64_t frame, std::uint64_t epoch) noexcept {
+            std::uint64_t frame, std::uint64_t epoch, D3D12_RESOURCE_STATES scene_state) noexcept {
     auto &s = session;
     if (!s.armed.load()) return;
     try {
@@ -447,7 +447,7 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             }
             if (restore) {
                 try {
-                    s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state);
+                    s.hudless->record(list, slot, scene, image.hudless.Get(), tag_state, scene_state);
                     s.slot_hudless[slot] = true;
                     ++s.hudless_recorded;
                     s.capture_window.store(true);

@@ -166,7 +166,7 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
 }
 
 void HudlessPass::record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12Resource *scene, ID3D12Resource *target,
-                         D3D12_RESOURCE_STATES target_state) {
+                         D3D12_RESOURCE_STATES target_state, D3D12_RESOURCE_STATES scene_state) {
     require(list && scene && target && slot < slots, "hudless arguments");
     const auto s = scene->GetDesc(), t = target->GetDesc();
     require(s.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && s.Width == width_ && s.Height == height_ &&
@@ -191,7 +191,7 @@ void HudlessPass::record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12R
     gpu.ptr += UINT64(2) * slot * step_;
 
     D3D12_RESOURCE_BARRIER before[4]{
-        transition(scene, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        transition(scene, scene_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
         transition(target, target_state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
         transition(probe_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
         transition(state_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS)};
