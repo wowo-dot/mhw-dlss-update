@@ -290,6 +290,32 @@ void CMFM_CALL on_event(void *, cmfm_event_t event) {
     }
 }
 
+// CMFM refuses a whole page when a text is over its limit (CMFM
+// src/menu/menu.cpp: label 64 bytes, help and page help 200, page title 24).
+// v0.20.0 lost its Settings page to a 230-byte help line, so every literal
+// goes through these checks and an overlong text fails the build instead.
+template <std::size_t N> consteval const char *label_text(const char (&text)[N]) {
+    static_assert(N - 1 <= 64, "CMFM: a label is at most 64 bytes");
+    return text;
+}
+template <std::size_t N> consteval const char *help_text(const char (&text)[N]) {
+    static_assert(N - 1 <= 200, "CMFM: a help line is at most 200 bytes");
+    return text;
+}
+template <std::size_t N> consteval const char *title_text(const char (&text)[N]) {
+    static_assert(N - 1 <= 24, "CMFM: a page title is at most 24 bytes");
+    return text;
+}
+// CHOICE names: at most 32 bytes each.
+constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i)
+        if (!names[i] || std::char_traits<char>::length(names[i]) > 32) return false;
+    return true;
+}
+static_assert(choice_names_fit(mm::mode_names, mm::modes.size()) && choice_names_fit(mm::multiplier_names, mm::multipliers.size()) &&
+                  choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
+              "CMFM: a choice name is at most 32 bytes");
+
 cmfm_setting_t row(std::uint32_t id, cmfm_type_t type, const char *label, const char *help, cmfm_flags_t flags = 0) {
     cmfm_setting_t s{};
     s.size = sizeof s;
@@ -321,23 +347,22 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.fg_loaded = fg_loaded;
         }
         cmfm_setting_t settings[]{
-            row(upscaling_section, CMFM_TYPE_SECTION, "Upscaling", nullptr),
-            row(dlss_mode_row, CMFM_TYPE_CHOICE, "DLSS mode",
-                "DLAA renders at full resolution; Quality, Balanced and Performance render at 67%, 58% and 50% and "
-                "upscale. Lower is faster.",
+            row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
+            row(dlss_mode_row, CMFM_TYPE_CHOICE, label_text("DLSS mode"),
+                help_text("DLAA renders at full resolution; Quality, Balanced and Performance render at 67%, 58% and 50% and "
+                          "upscale. Lower is faster."),
                 CMFM_FLAG_RESTART),
-            row(generation_section, CMFM_TYPE_SECTION, "Frame generation", nullptr),
-            row(frame_generation_row, CMFM_TYPE_BOOL, "Frame generation",
-                "DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics card.",
+            row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
+            row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
+                help_text("DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics card."),
                 CMFM_FLAG_RESTART),
-            row(multiplier_row, CMFM_TYPE_CHOICE, "Multiplier",
-                "Frames shown for each rendered frame; 3x and up need an RTX 50. A change applies at once while frame "
-                "generation runs."),
-            row(latency_section, CMFM_TYPE_SECTION, "Latency", nullptr),
-            row(reflex_setting_row, CMFM_TYPE_CHOICE, "Reflex",
-                "NVIDIA Reflex Low Latency keeps the frame queue short. Boost also keeps the graphics card's clocks up "
-                "when the processor is the limit. Off only while frame generation is off: frame generation needs "
-                "Reflex. A change applies at once."),
+            row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"),
+                help_text("Frames shown for each rendered frame; 3x and up need an RTX 50. A change applies at once while frame "
+                          "generation runs.")),
+            row(latency_section, CMFM_TYPE_SECTION, label_text("Latency"), nullptr),
+            row(reflex_setting_row, CMFM_TYPE_CHOICE, label_text("Reflex"),
+                help_text("NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. "
+                          "Off only while frame generation is off (it needs Reflex). Applies at once.")),
         };
         settings[1].choices = mm::mode_names;
         settings[1].choice_count = static_cast<std::uint32_t>(mm::modes.size());
@@ -350,12 +375,12 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
         settings[6].choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
         settings[6].default_value.i = mm::choice_of(ReflexMode::on);
         const cmfm_setting_t lines[]{
-            row(mod_row, CMFM_TYPE_TEXT, "Mod", "The mod's state, as Astera Loader shows it.", CMFM_FLAG_LIVE),
-            row(dlss_row, CMFM_TYPE_TEXT, "DLSS", "The DLSS mode and the render and output resolutions.", CMFM_FLAG_LIVE),
-            row(reflex_row, CMFM_TYPE_TEXT, "Reflex", "NVIDIA Reflex, as chosen in Settings.", CMFM_FLAG_LIVE),
-            row(generation_row, CMFM_TYPE_TEXT, "Frame generation", "Frames shown for each rendered frame right now.",
+            row(mod_row, CMFM_TYPE_TEXT, label_text("Mod"), help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
+            row(dlss_row, CMFM_TYPE_TEXT, label_text("DLSS"), help_text("The DLSS mode and the render and output resolutions."), CMFM_FLAG_LIVE),
+            row(reflex_row, CMFM_TYPE_TEXT, label_text("Reflex"), help_text("NVIDIA Reflex, as chosen in Settings."), CMFM_FLAG_LIVE),
+            row(generation_row, CMFM_TYPE_TEXT, label_text("Frame generation"), help_text("Frames shown for each rendered frame right now."),
                 CMFM_FLAG_LIVE),
-            row(generated_row, CMFM_TYPE_TEXT, "Generated frames", "Generated frames shown since the game started.",
+            row(generated_row, CMFM_TYPE_TEXT, label_text("Generated frames"), help_text("Generated frames shown since the game started."),
                 CMFM_FLAG_LIVE),
         };
 
@@ -374,8 +399,8 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             else log(AL_LOG_WARNING, std::string("menu: CMFM refused the page ") + title + ": " + why);
         };
 
-        page.title = "Settings";
-        page.help = "DLSS, Reflex and frame generation. The settings are kept in mhw_dlss.ini.";
+        page.title = title_text("Settings");
+        page.help = help_text("DLSS, Reflex and frame generation. The settings are kept in mhw_dlss.ini.");
         page.settings = settings;
         page.setting_count = static_cast<std::uint32_t>(std::size(settings));
         page.get = get;
@@ -384,8 +409,8 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
         page.locked = locked;
         add("Settings");
 
-        page.title = "Status";
-        page.help = "What the mod is doing right now.";
+        page.title = title_text("Status");
+        page.help = help_text("What the mod is doing right now.");
         page.settings = lines;
         page.setting_count = static_cast<std::uint32_t>(std::size(lines));
         page.get = nullptr;
