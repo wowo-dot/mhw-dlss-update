@@ -10,6 +10,7 @@ struct LiveFrameStats {
     std::uint64_t completed{}, tokens{}, sleeps{}, markers{}, faults{}, present_tests{}, untracked_presents{};
     unsigned owner{}, pending_calls{}, frame_id{};
     bool running{}, frame_active{}, restored{};
+    const char *fault_reason{};  // the first fault's reason (a string literal), or null
 };
 // Process-lived storage; one instance. Worker installs/restores. FrameSession
 // is serialized to the qualified native owner thread. Original calls always

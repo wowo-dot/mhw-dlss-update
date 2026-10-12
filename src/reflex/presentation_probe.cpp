@@ -1083,7 +1083,8 @@ DWORD WINAPI worker(void*) noexcept {
             if(stop_reason==std::string_view("duration")&&std::filesystem::exists(stop_file))stop_reason="stop_request";
             log_lifecycle(log);
             log << "{\"event\":\"fg_stopped\",\"reason\":\"" << stop_reason << "\",\"off\":" << !mhw::frame_generation::game::frame_generation_on()
-                << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults << ",\"session\":";
+                << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults
+                << ",\"reflex_fault\":\"" << (frames.fault_reason?frames.fault_reason:"") << "\",\"session\":";
             mhw::frame_generation::game::write(log);log << "}\n";
         }
         log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":true,\"temporal_active\":true}\n" << std::flush;

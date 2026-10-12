@@ -276,7 +276,7 @@ PresentationObserver LiveFrames::observer() noexcept { return {state_,begin_pres
 LiveFrameStats LiveFrames::snapshot() const {
     auto& s=*state_;std::lock_guard lock(s.mutex);auto value=s.stats;
     value.completed=s.frames.completed();value.tokens=s.frames.tokens();value.sleeps=s.frames.sleeps();value.markers=s.frames.markers();
-    value.frame_id=s.frames.id();value.pending_calls=s.calls.load();return value;
+    value.frame_id=s.frames.id();value.pending_calls=s.calls.load();value.fault_reason=s.reason;return value;
 }
 void LiveFrames::request_stop() noexcept { state_->stop_requested.store(true); }
 bool LiveFrames::stop() noexcept {

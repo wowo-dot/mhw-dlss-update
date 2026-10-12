@@ -130,6 +130,25 @@ still end there, and aliasing, split and subresource barriers still reject.
 It is tested in `temporal_inputs_contract`. Only the 100% path uses it; the
 unscaled build keeps the strict check.
 
+**game-68 (v0.18.3): DLAA works (the user: two runs, "works correctly").**
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| DLSS frames | 3,334 | 3,791 |
+| Identity plans and final copies | 4,781 / 4,781 | 3,877 / 3,876 |
+| Generating at the last status | yes, mostly 2 frames per Present | yes |
+| HUD-less records | 4,347 | 3,876 |
+| Frames skipped for missing depth | 1,447, 1,150 of them in the first 20 s (title and loading) | 85 |
+| Exceptions | 0 | 0 |
+
+- No crash in either run.
+- **Open: a Reflex frame fault in DLAA sessions.** Seen in game-64, 65 and 67
+  and in game-68 run 1, not run 2, and never in the scaled runs.
+  - It came after the last heartbeat. The game kept rendering about 9 s
+    afterwards, which suggests a quit or return-to-title path.
+  - Frame generation stops for the session when it happens.
+  - v0.18.4 logs the fault's reason in `fg_stopped` (`reflex_fault`).
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
