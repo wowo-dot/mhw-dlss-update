@@ -123,6 +123,17 @@ struct Session {
     std::atomic<bool> shown_dynamic{};
     std::atomic<unsigned> shown_dynamic_support{}, shown_presented{}, single_streak{};
     std::uint64_t generated_changes{}, generated_limited{}, mode_option_changes{}, dynamic_fallbacks{};
+    // Pacing around count changes (game-81: Dynamic near its 1x/2x boundary
+    // showed ~21 ms host frames). Between consecutive tagged Presents: changes
+    // of numFramesActuallyPresented (both at least 1), intervals over
+    // long_present_us, and those within two Presents of a change.
+    static constexpr std::uint64_t long_present_us = 16000;
+    std::int64_t pacing_qpc{};
+    std::uint64_t pacing_present{};  // `presents` at the last finish_pending
+    unsigned pacing_count{};         // its numFramesActuallyPresented
+    unsigned since_switch{~0U}, since_long{~0U};
+    bool long_matched{};
+    std::uint64_t count_switches{}, long_presents{}, long_near_switch{};
     // Tagged frames with reset: all, and those whose DLSS history was reset
     // (the rest had no consecutive predecessor). DLSS-G presents no generated
     // frame for a reset.
@@ -237,6 +248,41 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     s.shown_dynamic.store(false);
     s.single_streak.store(0);
     ++s.mode_changes;
+}
+
+// Owner thread, under the session lock, after a presented tagged Present's
+// state read: the pacing counters (Session). Untagged Presents in between
+// break the sequence; counting starts again at the next pair.
+void note_pacing(Session &s, unsigned count) {
+    LARGE_INTEGER now{}, frequency{};
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    const bool consecutive =
+        s.pacing_qpc && s.presents == s.pacing_present + 1 && now.QuadPart > s.pacing_qpc && frequency.QuadPart > 0;
+    if (!consecutive) {
+        s.since_switch = s.since_long = ~0U;
+    } else {
+        if (s.since_switch != ~0U) ++s.since_switch;
+        if (s.since_long != ~0U) ++s.since_long;
+        if (count >= 1 && s.pacing_count >= 1 && count != s.pacing_count) {
+            ++s.count_switches;
+            s.since_switch = 0;
+            if (s.since_long <= 2 && !s.long_matched) {  // a long interval just before
+                ++s.long_near_switch;
+                s.long_matched = true;
+            }
+        }
+        const auto ticks = static_cast<std::uint64_t>(now.QuadPart - s.pacing_qpc);
+        if (ticks * 1000000 / static_cast<std::uint64_t>(frequency.QuadPart) > Session::long_present_us) {
+            ++s.long_presents;
+            s.since_long = 0;
+            s.long_matched = s.since_switch <= 2;  // at or just after a change
+            if (s.long_matched) ++s.long_near_switch;
+        }
+    }
+    s.pacing_qpc = now.QuadPart;
+    s.pacing_present = s.presents;
+    s.pacing_count = count;
 }
 
 // The state's Dynamic MFG support for status(): 1 no, 2 yes.
@@ -745,6 +791,7 @@ static void finish_pending(Session &s, bool presented) {
         ++s.presented_frames[std::min<std::uint32_t>(state.numFramesActuallyPresented, 7)];
         if (state.numFramesActuallyPresented > 1) s.presented_generated.fetch_add(state.numFramesActuallyPresented - 1);
         s.shown_presented.store(state.numFramesActuallyPresented);
+        if (presented) note_pacing(s, state.numFramesActuallyPresented);
         if (s.on.load() && state.numFramesActuallyPresented <= 1) s.single_streak.store(s.single_streak.load() + 1);
         else s.single_streak.store(0);
         s.fence = static_cast<ID3D12Fence *>(state.inputsProcessingCompletionFence);
@@ -778,6 +825,8 @@ void write(std::ostream &o) {
       << ",\"applied\":" << static_cast<unsigned>(s.applied_mode) << ",\"applied_target\":" << s.applied_target
       << ",\"changes\":" << s.mode_option_changes << ",\"dynamic_fallbacks\":" << s.dynamic_fallbacks
       << ",\"dynamic_refused\":" << s.dynamic_refused.load() << ",\"single_streak\":" << s.single_streak.load() << '}'
+      << ",\"pacing\":{\"count_switches\":" << s.count_switches << ",\"long\":" << s.long_presents
+      << ",\"long_near_switch\":" << s.long_near_switch << ",\"long_us\":" << Session::long_present_us << '}'
       << ",\"hudless\":{\"available\":" << (s.hudless != nullptr) << ",\"failed\":" << s.hudless_failed
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];

@@ -17,6 +17,7 @@
 #endif
 #ifdef MHW_FG_GAME
 #include "../frame_generation/game_session.hpp"
+#include "../frame_generation/display_refresh.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "frame_generation_policy.hpp"
 #include "../perf/frame_stats.hpp"
@@ -992,7 +993,9 @@ DWORD WINAPI worker(void*) noexcept {
                         << ",\"scene\":[" << scene.x << ',' << scene.y << ',' << scene.width << ',' << scene.height << ']'
                         << ",\"state_result\":" << static_cast<int>(fg_state_result) << ",\"status\":" << static_cast<unsigned>(fg_state.status)
                         << ",\"max_generated\":" << fg_state.numFramesToGenerateMax << ",\"min_width_or_height\":" << fg_state.minWidthOrHeight
-                        << ",\"vsync_support\":" << static_cast<int>(fg_state.bIsVsyncSupportAvailable) << "}\n" << std::flush;
+                        << ",\"vsync_support\":" << static_cast<int>(fg_state.bIsVsyncSupportAvailable)
+                        << ",\"dynamic_supported\":" << static_cast<int>(fg_state.bIsDynamicMFGSupported)
+                        << ",\"display_hz\":" << mhw::frame_generation::display_refresh_hz() << "}\n" << std::flush;
 #ifdef MHW_ALPHA
                     mhw::alpha::status::generation(mhw::alpha::status::Generation::armed);
 #endif
@@ -1100,7 +1103,8 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
                         mhw::reflex::temporal::sample();
 #ifdef MHW_FG_GAME
-                        log << "{\"event\":\"fg_status\",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
+                        log << "{\"event\":\"fg_status\",\"display_hz\":" << mhw::frame_generation::display_refresh_hz()
+                            << ",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
 #ifdef MHW_ALPHA
                         log << "{\"event\":\"dlss_summary\",\"runtime\":";mhw::reflex::temporal::summary(log);log << "}\n" << std::flush;
 #endif

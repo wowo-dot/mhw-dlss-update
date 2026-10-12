@@ -1,6 +1,7 @@
 #include "menu.hpp"
 #include <windows.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -12,6 +13,7 @@
 #include "status.hpp"
 #include "version.hpp"
 #include "../continuous_dlaa/runtime.hpp"
+#include "../frame_generation/display_refresh.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
@@ -347,6 +349,16 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
         v.dynamic_refused = session.dynamic_refused;
         v.presented_now = session.presented_now;
         v.single_streak = session.single_streak;
+        {
+            // The monitor is looked up at most once a second (get_text runs per row).
+            static std::atomic<unsigned> hz{};
+            static std::atomic<std::uint64_t> checked{};
+            if (const auto now = GetTickCount64(); now - checked.load() >= 1000) {
+                checked.store(now);
+                hz.store(frame_generation::display_refresh_hz());
+            }
+            v.display_hz = hz.load();
+        }
         std::string line;
         switch (id) {
         case mod_row: line = status::mod_line(v); break;

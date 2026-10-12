@@ -37,6 +37,7 @@ struct View {
     // supports it (0 not known, 1 no, 2 yes); frames shown for the last
     // rendered frame, and Presents in a row with none generated.
     unsigned generation_mode{}, target{}, dynamic_support{}, presented_now{}, single_streak{};
+    unsigned display_hz{};  // the game's monitor, 0 if unknown (display_refresh.hpp)
     bool dynamic_applied{}, dynamic_refused{};
 };
 // Presents in a row without a generated frame before Auto reads as paused
@@ -136,7 +137,11 @@ inline std::string generation_line(const View &v) {
     const bool dynamic = v.generation_mode == 2, automatic = v.generation_mode == 1;
     if (!v.generating) return (dynamic ? std::string("Dynamic") : std::to_string(v.requested) + "x") + ", paused";
     if (dynamic && v.dynamic_applied) {
-        auto line = "Dynamic (" + (v.target ? std::to_string(v.target) + " fps" : std::string("display refresh")) + ")";
+        auto line = "Dynamic (" +
+                    (v.target       ? std::to_string(v.target) + " fps"
+                     : v.display_hz ? "display refresh, " + std::to_string(v.display_hz) + " Hz"
+                                    : std::string("display refresh")) +
+                    ")";
         return v.presented_now ? line + ", showing " + std::to_string(v.presented_now) + "x" : line + ", generating";
     }
     const auto shown = v.generated + 1;

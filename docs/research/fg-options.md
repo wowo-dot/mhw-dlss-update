@@ -106,11 +106,59 @@ Decided with the user on 2026-10-13: after the release.
   support rule and its reason, target lists with an ini value, and the status
   lines above.
 
-## In game (not yet seen)
+## In game: game-81 (v0.21.0, 2026-10-13)
 
-To confirm on the RTX 50:
-- `fg_armed` `dynamic_supported`;
-- a live 2x → Dynamic → 2x switch (`mode.changes`, applied 3 then 1, status
-  "showing Nx");
-- Dynamic with a 120 fps target, then display refresh;
-- Auto pause on with 2x, to see whether it ever pauses in MHW.
+The run used DLAA at 2560x1440 with Reflex Boost, starting at 2x: 35,954
+Reflex frames, `game_exit`, no faults and an empty crash log. CMFM added the
+Settings page (9 settings). The player went 2x → 3x → 4x → 6x → Dynamic, ran
+every target from 60 fps to Display refresh twice, then went back to 2x and
+Auto pause.
+
+- **Dynamic ran:**
+  - the state reported `bIsDynamicMFGSupported` (`state.dynamic_supported` 1
+    = `sl::eTrue`) and `applied` 3 (`eDynamic`);
+  - 39 mode or target changes, all accepted (`last_sdk_error` 0), no
+    fallback;
+  - our session stayed clean: no on/off toggles in Dynamic windows, the ring
+    never starved.
+- **It follows the target.** Generated count per rendered frame, from the
+  `presented_frames` deltas of each 20 s status window:
+
+  | Window | Target | 1x | 2x | 3x and more | Host p99 | PCL interval max |
+  |---|---|---|---|---|---|---|
+  | #1 | fixed 2x | 19 | 1,601 | 0 | 7.5 ms | 7.0 ms |
+  | #3 | display | 2,152 | 1,175 | 86 | 8.3 ms | 7.6 ms |
+  | #4 | display | 3,339 | 209 | 56 | 21.0 ms | 21.9 ms |
+  | #5 | display | 3,301 | 312 | 75 | 21.8 ms | 21.6 ms |
+  | #7 | 500 fps | 123 | 11 | 2,762 (3x) | 10.3 ms | 7.7 ms |
+
+  With a base of about 175 fps (DLAA), 2x would exceed the display target,
+  so Dynamic mostly shows 1x. At 500 fps it holds 3x steadily.
+- **Long frames near the 1x/2x boundary:**
+  - in the display-target windows where Dynamic sat at 1x and only sometimes
+    generated (#4, #5), host frames reached ~21 ms at p99;
+  - the latency report's interval maximum agrees (about five refresh periods
+    if the display runs at 240 Hz; v0.21.1 logs the rate);
+  - the windows that held one count steadily (fixed 2x, Dynamic 3x at 500)
+    did not show this.
+  - Not yet proven to be the count changes; v0.21.1 measures it (below).
+- **Auto pause:** turned on only seconds before the game closed, so no status
+  window covers it. Still to test.
+- **A missing field:** v0.21.0's `fg_armed` lacked `dynamic_supported` (lost
+  in editing); added in v0.21.1.
+
+## v0.21.1: measuring Dynamic's pacing
+
+- **`fg_status.session.pacing`:** between consecutive tagged Presents:
+  - `count_switches`: changes of `numFramesActuallyPresented`, both values
+    at least 1;
+  - `long`: Present-to-Present intervals over 16 ms;
+  - `long_near_switch`: long intervals within two Presents of a change.
+
+  If the long frames are Dynamic's count changes, `long_near_switch` will be
+  close to `long`.
+- **`display_hz`:** the refresh rate of the game's monitor, the rate Dynamic
+  aims at with a target of 0 (`display_refresh.hpp`). It reads the process's
+  largest visible top-level window, then `MonitorFromWindow` and
+  `EnumDisplaySettingsW`; it is logged in `fg_armed` and `fg_status`.
+- **Status line:** "Dynamic (display refresh, 240 Hz), showing 2x".

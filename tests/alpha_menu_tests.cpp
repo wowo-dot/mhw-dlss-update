@@ -178,6 +178,8 @@ void status_lines() {
         d.dynamic_applied = true;
         d.presented_now = 3;
         check(s::generation_line(d) == "Dynamic (display refresh), showing 3x", "Dynamic to the display");
+        d.display_hz = 240;
+        check(s::generation_line(d) == "Dynamic (display refresh, 240 Hz), showing 3x", "Dynamic to a known display");
         d.target = 240;
         check(s::generation_line(d) == "Dynamic (240 fps), showing 3x", "Dynamic to 240 fps");
         d.presented_now = 0;
