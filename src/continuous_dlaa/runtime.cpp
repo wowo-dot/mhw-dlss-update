@@ -1123,6 +1123,10 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
 #ifdef MHW_CONTINUOUS_SCALED
     // Skip reason 7 is a missing depth lease or a route readiness rejection.
     {DepthTraceLock trace_lock;out<<",\"depth_missing\":"<<scaled_depth_trace.missing_count<<",\"route_not_ready\":"<<scaled_depth_trace.readiness_rejected;}
+    // Why the private depth copy was not admitted (DLAA, game-65: every frame),
+    // and the depth producer/consumer trace by stage and reason.
+    out<<",\"consumer_depth\":";depth_consumer_admission.write(out);
+    out<<",\"depth_capture\":";{DepthTraceLock trace_lock;scaled_depth_trace.write(out);}
     out<<",\"route\":";sr::write_summary(out);
 #endif
     out<<'}';
