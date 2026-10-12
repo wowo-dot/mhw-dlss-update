@@ -93,9 +93,27 @@ while the game runs.
 (`AsteraLoader\logs\plugins\mhw_dlss.log`). The mod's own JSON log belongs to
 the worker thread.
 
+## Results (game-56, 2026-10-12)
+
+**Confirmed:**
+- Both pages were added.
+- 11 Multiplier changes applied at once:
+  - the session's `generated_changes` went 0 → 11, with none limited;
+  - the frames shown per Present reached 3, 4 and 6.
+- On close, the ini was saved as `frame_generation = 6x`.
+  - The comment and alignment stayed.
+  - It was written in the MO2 mod's own folder, with nothing in Overwrite.
+- DLSS ran without faults, and the session had no exceptions.
+
+**Not covered yet:**
+- Frame generation Off (restart marker, lock, Off start).
+- Reset to defaults.
+- Alt-tab with the page open.
+- Whether the Status lines read correctly (CMFM does not log TEXT rows).
+
 ## To check in game (v0.16.0)
 
-These points are open until the in-game test.
+The list as planned before game-56.
 - `cmfm.log` shows both pages added, and Astera Loader's plugin log says
   "menu: 2 of 2 pages added to CMFM".
 - Settings:
