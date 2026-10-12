@@ -73,6 +73,29 @@ int main(){
     run("copy-child-draw-transition",[](F &f){f.direct_copy();f.m.put(F::other_viewport+0x54,1280U);
         f.m.put(F::other_child,0U);f.m.put(F::other_child+8,F::nodes+0x20);f.m.put(F::packets+F::next_index*0x100+8,std::uintptr_t{});},128);
     run("copy-child-draw-invalid-node",[](F &f){f.direct_copy();f.m.put(F::other_viewport+0x54,1280U);f.m.put(F::other_child,0U);},0);
+    // Whole copy (render scale 1.0): the depth is in the next span's read state
+    // at the consumer only if that transition executed between writer and consumer.
+    const auto whole=[](const char *name,auto configure,unsigned expected,bool mode=true){
+        F f;f.whole_copy();configure(f);auto proof=std::make_unique<cd::DepthConsumerAdmission>();
+        const auto state=f.attempt(*proof,{},true,true,mode);check(state==expected,name);
+        std::cout<<std::boolalpha<<"{\"case\":\""<<name<<"\",\"state\":"<<state<<",\"trace\":";proof->write(std::cout);std::cout<<"}\n";
+    };
+    whole("whole-copy-hoisted-read",[](F &){},128);
+    whole("whole-copy-combined-read",[](F &f){f.whole_copy(12);},192);
+    whole("whole-copy-compute-read",[](F &f){f.whole_copy(4);},64);
+    whole("whole-copy-read-at-consumer",[](F &f){f.whole_copy(8,F::consumer_index);},128);
+    whole("whole-copy-writer-transition-on-writer",[](F &f){f.m.put(F::packets+1*0x100+8,std::uintptr_t{});f.m.put(F::writer_object+8,F::nodes);},128);
+    whole("whole-copy-read-after-consumer",[](F &f){f.whole_copy(8,F::next_index);},0);
+    whole("whole-copy-read-at-writer",[](F &f){f.whole_copy(8,F::writer_index);},0);
+    whole("whole-copy-scaled-mode",[](F &){},0,false);
+    whole("whole-copy-subrectangle",[](F &f){f.source.rectangle={0,0,2560,1438};},0);
+    whole("whole-copy-region-path",[](F &f){f.m.put(F::writer_object+0x10,3U);},0);
+    whole("whole-copy-writer-not-copy-destination",[](F &f){f.m.put(F::spans+0x22,std::uint16_t{0x100});f.m.put(F::spans+0x48,std::uint16_t{0x100});f.m.put(F::nodes+0x1a,std::uint16_t{0x100});f.m.put(F::nodes+0x38,std::uint16_t{0x100});},0);
+    whole("whole-copy-next-not-read",[](F &f){f.m.put(F::spans+0x4a,std::uint16_t{0x100});f.m.put(F::nodes+0x3a,std::uint16_t{0x100});},0);
+    whole("whole-copy-extra-transition",[](F &f){f.node(F::nodes+0x40,F::spans+0x28,2048,8);f.m.put(F::packets+40*0x100+8,F::nodes+0x40);},0);
+    whole("whole-copy-foreign-writer-node",[](F &f){f.m.put(F::packets+1*0x100+8,std::uintptr_t{});f.m.put(F::writer_object+8,F::nodes);f.m.put(F::nodes+0x18,std::uint16_t{8});},0);
+    whole("whole-copy-span-on-child",[](F &f){f.m.put(F::spans,F::nested);},0);
+    {F f;auto proof=std::make_unique<cd::DepthConsumerAdmission>();check(f.attempt(*proof,{},true,true,true)==0,"scaled writer rejected in whole-copy mode");}
     {F f;f.m.put(F::nested+8,std::uintptr_t{1});auto proof=std::make_unique<cd::DepthConsumerAdmission>();
         for(unsigned i=0;i<12;++i)check(f.attempt(*proof)==0,"bounded rejected capture");
         std::cout<<std::boolalpha<<"{\"case\":\"bounded-failure-telemetry\",\"state\":0,\"trace\":";proof->write(std::cout);std::cout<<"}\n";}

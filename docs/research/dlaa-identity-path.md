@@ -342,6 +342,69 @@ forwarded requests, and the unscaled rule. The in-game check is game-74
   The result is logged as `identity_depth` in `dlss_summary`. The proof
   will be written from that data.
 
+## game-75 (v0.19.2): the 100% depth schedule
+
+The game skipped 1,585 frames for missing depth in 8,249 identity
+evaluations. All 16 surveys completed (reason 0), and the first 8 match the
+8 missing ones exactly:
+- **Writer:** copy path 1 (whole copy), kind 8.
+- **Depth tracker spans** (role, last use, native before → after), for
+  example:
+
+  | Role | Last use | Before → after |
+  |---|---|---|
+  | other | 199 | 8 → 2048 |
+  | other | 1269 | 2048 → 8 |
+  | other | 1271 | 8 → 2048 |
+  | other | 1333 | 2048 → 12 |
+  | **writer** | **1348** | **12 → 2048** |
+  | other | 1422 | 2048 → 8 |
+
+  The writer's span is the outer writer packet's own, and its last use is
+  the writer's index.
+- **Between the writer (1348) and the TAA dispatch (1417),** exactly one depth
+  node: 2048 → 8 at 1397. That is the next span's transition, hoisted ahead
+  of its start (0x229eb22).
+- **The writer's own 12 → 2048 transition** is hoisted before the writer
+  (outside the interval).
+- **Native 2048 converts to COPY_DEST** (converter 0x259ba50: values from
+  0x101 other than 0x200 and 0x400). So at the TAA dispatch the scene depth
+  is in PIXEL_SHADER_RESOURCE.
+
+## v0.19.3: whole-copy admission at the TAA dispatch
+
+- **`DepthConsumerAdmission` gains a whole-copy mode,** used when render ==
+  output. Its two snapshots must agree, and each requires:
+  - **Entry:** the full rectangle, and the pinned executor's whole-copy branch
+    (kind 8, same size, the full rectangle, no child draw).
+  - **Spans:** the writer's span is the writer's own and ends in 2048; the
+    next span goes from 2048 to a shader-read state.
+  - **Transitions:** exactly that next transition executes between writer and
+    consumer, after the writer's last use and no later than the span start. A
+    writer transition on the writer itself must be the writer span's own.
+    Anything else rejects, including no read transition before the consumer
+    (COPY_DEST at the TAA).
+  - **Everything else** is as in the scaled mode: schedule positions,
+    following spans, interval nodes, rereads, and the TAA list's API
+    barriers.
+- **The runtime:**
+  - the scaled build no longer leases at the native copy at any scale;
+  - depth is copied by `record_consumer_depth` on the TAA's recording, from
+    the proven state;
+  - qualified depth means admitted depth.
+
+  So which list the native copy used no longer matters.
+- **Tests (`depth_consumer`):**
+  - hoisted pixel, combined and compute reads, a read at the consumer, the
+    writer transition on the writer;
+  - negatives, each failing on its intended rule:
+    - read only after the consumer, or at the writer (6);
+    - scaled mode (1), sub-rectangle (1), region path (2);
+    - writer not COPY_DEST, next not a read, or the span on the child (5);
+    - an extra or foreign node (6);
+  - a scaled writer in whole mode (1);
+  - all earlier scaled cases unchanged.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy

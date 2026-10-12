@@ -72,7 +72,25 @@ struct ConsumerFixture {
         m.put(other_child,0xdeadbeefU);m.put(other_child+8,std::uintptr_t{1440});
         m.put(other_child+0x10,other_viewport);m.put(other_viewport+0x4c,std::array<unsigned,4>{0,0,2560,1440});
     }
-    unsigned attempt(cd::DepthConsumerAdmission &proof,std::span<const D3D12_RESOURCE_BARRIER> b={},bool available=true,bool description=true){
-        return proof.attempt(m.reader(),source,depth,writer_object,writer,consumer_object,b,6,0xe00000,7,100,available,description);
+    // Render scale 1.0 (game-75 survey): the writer is a whole copy of the
+    // full rectangle (no child draw executes); its own span ends in COPY_DEST
+    // (2048) with the transition hoisted before it (index 1); the next span's
+    // 2048 -> read transition is hoisted between writer and consumer.
+    static constexpr unsigned whole_read_at=30;
+    void whole_copy(unsigned read=8,unsigned hoisted_at=whole_read_at){
+        source.rectangle={0,0,2560,1440};
+        m.put(writer_object+0x28,std::array<unsigned,6>{0,0,2560,1440,0,0});m.put(viewport+0x4c,source.rectangle);
+        m.put(nested,0xdeadbeefU);m.put(nested+8,std::uintptr_t{1440});  // never inspected on the whole-copy path
+        check(dr::packet(m.reader(),writer_object,writer),"whole-copy writer");
+        m.put(spans,writer_object);m.put(spans+0x20,std::uint16_t{12});m.put(spans+0x22,std::uint16_t{2048});
+        m.put(spans+0x48,std::uint16_t{2048});m.put(spans+0x4a,static_cast<std::uint16_t>(read));m.put(tracker+0x1a,static_cast<std::uint16_t>(read));
+        node(nodes,spans,12,2048);m.put(packets+1*0x100+8,nodes);
+        // One placement only: a repeated call moves the hoisted read transition.
+        for(unsigned i=0;i<61;++i){std::uintptr_t head{};check(Memory::read(&m,packets+i*0x100+8,std::as_writable_bytes(std::span(&head,1))),"packet node head");
+            if(head==nodes+0x20)m.put(packets+i*0x100+8,std::uintptr_t{});}
+        node(nodes+0x20,spans+0x28,2048,read);m.put(packets+hoisted_at*0x100+8,nodes+0x20);
+    }
+    unsigned attempt(cd::DepthConsumerAdmission &proof,std::span<const D3D12_RESOURCE_BARRIER> b={},bool available=true,bool description=true,bool whole=false){
+        return proof.attempt(m.reader(),source,depth,writer_object,writer,consumer_object,b,6,0xe00000,7,100,available,description,whole);
     }
 };

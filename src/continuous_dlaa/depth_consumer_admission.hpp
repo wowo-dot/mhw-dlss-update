@@ -8,7 +8,17 @@
 namespace mhw::continuous_dlaa {
 // Current-callback proof against the pinned native planner/converter contract.
 // No cached pointer, final tracker state, or CPU writer callback grants admission.
+//
+// Two writer shapes. Scaled (render < texture): the kind-8 copy runs its nested
+// draw, whose span transitions 12 -> 0x100 (RENDER_TARGET) at the writer.
+// Whole copy (render scale 1.0, v0.19.3): the opcode-10 executor takes the
+// whole-copy path (a native CopyResource, no child draw). Its span is the outer
+// writer's own; it ends in COPY_DEST (native 2048), its transition may be
+// hoisted before the writer, and the next span's COPY_DEST -> read transition
+// must have executed between the writer and the consumer (game-75 survey:
+// 12 -> 2048 at the writer, one hoisted 2048 -> 8 node before the TAA).
 class DepthConsumerAdmission {
+    static constexpr unsigned native_copy_destination=2048;  // converter 0x259ba50: COPY_DEST
     using Tracker=NativeStateTrace::Tracker;
     using Reader=temporal_bindings::Reader;
     using Owner=temporal_bindings::Owner;
@@ -47,7 +57,7 @@ class DepthConsumerAdmission {
         std::array<Transition,16> transitions{};unsigned applied{};std::array<std::uint64_t,14> detail{};std::array<unsigned,5> copy_paths{};};
     std::array<Receipt,8> initial_{};Receipt latest_;
     std::array<Receipt,8> failures_{};Receipt last_failure_;std::uint64_t failure_count_{};
-    std::uint64_t attempts_{},accepted_{},copies_{},read_states_{};std::array<std::uint64_t,12> reasons_{};
+    std::uint64_t attempts_{},accepted_{},copies_{},read_states_{},whole_attempts_{},whole_accepted_{};std::array<std::uint64_t,12> reasons_{};
     static bool chain(const Reader &r,const Owner &owner,Tracker &t) noexcept {
         if(!NativeStateTrace::tracker(r,owner.backing,t))return false;t.readable=true;
         auto n=t.first;
@@ -78,18 +88,26 @@ class DepthConsumerAdmission {
         }if(n){Node a;a.address=n;return note(28,a);}return true;
     }
     static unsigned capture(const Reader &r,const temporal_bindings::Snapshot &source,const Owner &owner,std::uintptr_t writer,
-        const CopyPacket &expected,std::uintptr_t consumer,Snapshot &s) noexcept {
+        const CopyPacket &expected,std::uintptr_t consumer,Snapshot &s,bool whole) noexcept {
         if(!writer||!consumer||writer==consumer||source.context<0x710||source.epoch==UINT64_MAX||
            !owner.object||!owner.backing||!owner.resource||expected.destination!=owner.object||!expected.nested||
            expected.rectangle!=std::array<unsigned,6>{0,0,source.rectangle[2],source.rectangle[3],0,0}||
-           !source.rectangle[2]||!source.rectangle[3]||source.rectangle[2]>=owner.width||source.rectangle[3]>=owner.height)return 1;
+           !source.rectangle[2]||!source.rectangle[3]||
+           (whole?source.rectangle[2]!=owner.width||source.rectangle[3]!=owner.height:
+                  source.rectangle[2]>=owner.width||source.rectangle[3]>=owner.height))return 1;
         if(!temporal_bindings::read_owner(r,owner.object,s.owner)||s.owner!=owner||
            !temporal_bindings::depth_routes::packet(r,writer,s.writer)||s.writer!=expected)return 2;
         if(!field(r,owner.backing,0xb0,s.backing_width)||s.backing_width!=owner.width||
-           !field(r,owner.backing,0xb4,s.backing_height)||s.backing_height!=owner.height||
-           !field(r,expected.nested,0,s.nested_opcode)||(s.nested_opcode&31)!=0||
-           !field(r,expected.nested,0x10,s.viewport)||!field(r,s.viewport,0x4c,s.rectangle)||
-           s.rectangle!=source.rectangle)return 2;
+           !field(r,owner.backing,0xb4,s.backing_height)||s.backing_height!=owner.height)return 2;
+        if(whole){
+            // The pinned executor's own branch: same-size kind-8 copy of the full rectangle.
+            temporal_bindings::CopyExecution copy;
+            if(!temporal_bindings::read_copy_execution(r,writer,copy)||copy.kind!=8||copy.path!=temporal_bindings::CopyExecutionPath::whole_copy||
+               copy.destination!=owner.object||copy.child!=expected.nested)return 2;
+            s.rectangle=copy.rectangle;s.nested_opcode=UINT_MAX;
+        }else if(!field(r,expected.nested,0,s.nested_opcode)||(s.nested_opcode&31)!=0||
+           !field(r,expected.nested,0x10,s.viewport)||!field(r,s.viewport,0x4c,s.rectangle))return 2;
+        if(s.rectangle!=source.rectangle)return 2;
         s.renderer=source.context-0x710;
         if(!field(r,s.renderer,0x1f208,s.epoch)||s.epoch!=source.epoch+1||!field(r,s.renderer,0x7af18,s.array)||
            !field(r,s.renderer,0x7af28,s.count)||!s.array||!s.count||s.count>32768||s.array>UINTPTR_MAX-16ULL*s.count)return 3;
@@ -100,11 +118,12 @@ class DepthConsumerAdmission {
             if(!a[0]||!a[1]||a[2]>=s.count||a[3]!=(i+1<t.count?t.spans[i+1][0]:0)||a[4]!=(i?t.spans[i-1][0]:0)||
                a[7]||a[5]!=(i?t.spans[i-1][6]:t.initial)||(i&&a[2]<=t.spans[i-1][2]))return 4;
             for(unsigned j=0;j<i;++j)if(a[0]==t.spans[j][0]||a[1]==t.spans[j][1])return 4;
-            if(a[1]==expected.nested){if(s.span_index!=UINT_MAX)return 4;s.span_index=i;}
+            if(a[1]==(whole?writer:expected.nested)){if(s.span_index!=UINT_MAX)return 4;s.span_index=i;}
         }
         if(s.span_index==UINT_MAX||s.span_index+1>=t.count)return 5;
         const auto &use=t.spans[s.span_index];const auto &next=t.spans[s.span_index+1];
-        if(use[5]!=12||use[6]!=0x100||next[5]!=0x100||!depth_shader_read_state(static_cast<unsigned>(next[6])))return 5;
+        if(whole?use[6]!=native_copy_destination||next[5]!=native_copy_destination:use[5]!=12||use[6]!=0x100||next[5]!=0x100)return 5;
+        if(!depth_shader_read_state(static_cast<unsigned>(next[6])))return 5;
         std::array<std::array<std::uint64_t,2>,64> block{};
         for(unsigned begin=0;begin<s.count;){const auto n=std::min(64U,s.count-begin);
             if(!r.read||!r.read(r.user,s.array+16ULL*begin,std::as_writable_bytes(std::span(block).first(n))))return 3;
@@ -150,17 +169,22 @@ class DepthConsumerAdmission {
         }
         s.detail[0]=32;
         if(s.interval[0].object!=writer||s.interval[0].nested!=expected.nested||
-           s.interval[0].copy_execution.path!=temporal_bindings::CopyExecutionPath::child_draw||
+           s.interval[0].copy_execution.path!=(whole?temporal_bindings::CopyExecutionPath::whole_copy:temporal_bindings::CopyExecutionPath::child_draw)||
            s.interval[s.packets-1].object!=consumer)return 6;
-        unsigned writer_nodes{},current_span=s.span_index;s.state=D3D12_RESOURCE_STATE_RENDER_TARGET;
+        // Scaled: exactly one writer transition, on the nested draw. Whole copy:
+        // the writer's transition is usually hoisted before it; if it is on the
+        // writer itself it must be the writer span's own, at most once.
+        unsigned writer_nodes{},current_span=s.span_index;
+        s.state=whole?D3D12_RESOURCE_STATE_COPY_DEST:D3D12_RESOURCE_STATE_RENDER_TARGET;
         for(unsigned i=0;i<s.nodes;++i){const auto &n=s.relevant[i];
             s.detail={40,n.index,0,n.packet,0,n.address,n.next,n.backing,n.resource,n.span,n.before,n.after,i,s.nodes};
-            if(n.index==s.writer_index){
-                if(n.packet!=expected.nested||n.span!=use[0]||n.before!=12||n.after!=0x100||++writer_nodes!=1)return 6;
+            if(n.index==s.writer_index&&(!whole||(n.packet==writer&&n.span==use[0]))){
+                if(n.packet!=(whole?writer:expected.nested)||n.span!=use[0]||n.before!=use[5]||n.after!=use[6]||
+                   (!whole&&(n.before!=12||n.after!=0x100))||++writer_nodes!=1)return 6;
                 s.transitions[s.applied++]={s.writer_index,s.writer_index,n.index,n.before,n.after};
             }else{
                 s.detail[0]=41;
-                if(writer_nodes!=1||current_span+1>=t.count)return 6;
+                if((!whole&&writer_nodes!=1)||current_span+1>=t.count)return 6;
                 const auto &a=t.spans[current_span+1];const auto state=depth_shader_read_state(n.after);
                 s.detail[0]=42;
                 if(!state||n.span!=a[0]||n.before!=a[5]||n.after!=a[6]||n.before!=t.spans[current_span][6]||
@@ -173,7 +197,10 @@ class DepthConsumerAdmission {
         // in the complete interval. Future transitions may be hoisted here,
         // but only after the preceding span's last use and only into reads.
         s.detail[0]=43;
-        if(writer_nodes!=1||(current_span+1<t.count&&s.starts[current_span+1]<=s.consumer_index))return 6;
+        if((!whole&&writer_nodes!=1)||(current_span+1<t.count&&s.starts[current_span+1]<=s.consumer_index))return 6;
+        // Whole copy: the consumer reads the depth, so its COPY_DEST span must
+        // have ended in a read transition before it.
+        if(whole&&current_span==s.span_index)return 6;
         s.detail[0]=50;
         std::uintptr_t array{};unsigned count{};std::uint64_t epoch{};Owner again;CopyPacket packet;
         if(!field(r,s.renderer,0x7af18,array)||array!=s.array||!field(r,s.renderer,0x7af28,count)||count!=s.count||
@@ -184,10 +211,11 @@ class DepthConsumerAdmission {
 public:
     unsigned attempt(const Reader &r,const temporal_bindings::Snapshot &source,const Owner &owner,std::uintptr_t writer,
         const CopyPacket &expected,std::uintptr_t consumer,std::span<const D3D12_RESOURCE_BARRIER> barriers,
-        std::uint64_t sequence,std::uintptr_t list,std::uint64_t generation,std::uint64_t tick,bool available,bool description) noexcept {
+        std::uint64_t sequence,std::uintptr_t list,std::uint64_t generation,std::uint64_t tick,bool available,bool description,bool whole=false) noexcept {
         std::destroy_at(&first_);std::construct_at(&first_);std::destroy_at(&second_);std::construct_at(&second_);
-        unsigned reason=!available?9U:!description?10U:capture(r,source,owner,writer,expected,consumer,first_);bool stable=false;
-        if(!reason){reason=capture(r,source,owner,writer,expected,consumer,second_);stable=!reason&&first_==second_;if(!stable)reason=7;}
+        if(whole)++whole_attempts_;
+        unsigned reason=!available?9U:!description?10U:capture(r,source,owner,writer,expected,consumer,first_,whole);bool stable=false;
+        if(!reason){reason=capture(r,source,owner,writer,expected,consumer,second_,whole);stable=!reason&&first_==second_;if(!stable)reason=7;}
         if(!reason){bool known=false;unsigned state{};
             for(const auto &b:barriers){
                 if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING&&(!b.Aliasing.pResourceBefore||!b.Aliasing.pResourceAfter||
@@ -202,7 +230,7 @@ public:
         Receipt receipt{++attempts_,source.frame,source.epoch,sequence,tick,list,generation,reason,
             first_.writer_index,first_.consumer_index,first_.next_index,first_.state,first_.nodes,stable,first_.transitions,first_.applied,
             second_.detail[0]?second_.detail:first_.detail,first_.copy_paths};
-        ++reasons_[reason];if(!reason){++accepted_;if(first_.applied>1)++read_states_;}
+        ++reasons_[reason];if(!reason){++accepted_;if(first_.applied>1)++read_states_;if(whole)++whole_accepted_;}
         if(reason){++failure_count_;if(failure_count_<=failures_.size())failures_[static_cast<unsigned>(failure_count_-1)]=receipt;last_failure_=receipt;}
         if(attempts_<=initial_.size())initial_[static_cast<unsigned>(attempts_-1)]=receipt;latest_=receipt;
         return reason?0:first_.state;
@@ -210,7 +238,8 @@ public:
     void copied() noexcept {++copies_;}
     void write(std::ostream &o)const {
         o<<"{\"schema\":2,\"policy\":\"scheduled-read-interval-depth-copy-v2\",\"copy_execution_policy\":\"native-opcode10-branches-v1\",\"writer_copy_disabled\":true,\"attempts\":"<<attempts_
-         <<",\"accepted\":"<<accepted_<<",\"rejected\":"<<attempts_-accepted_<<",\"copies\":"<<copies_<<",\"read_state_copies\":"<<read_states_<<",\"reasons\":[";
+         <<",\"accepted\":"<<accepted_<<",\"rejected\":"<<attempts_-accepted_<<",\"copies\":"<<copies_<<",\"read_state_copies\":"<<read_states_
+         <<",\"whole_copy\":["<<whole_attempts_<<','<<whole_accepted_<<"],\"reasons\":[";
         for(unsigned i=0;i<reasons_.size();++i)o<<(i?",":"")<<reasons_[i];o<<"],\"samples\":[";
         const auto emit=[&](const Receipt &s){o<<"{\"ordinal\":"<<s.ordinal<<",\"at\":["<<s.tick<<','<<s.frame<<','<<s.epoch<<','<<s.sequence<<','<<s.list<<','<<s.generation
           <<"],\"reason\":"<<s.reason<<",\"indices\":["<<s.writer<<','<<s.consumer<<','<<s.next<<"],\"state\":"<<s.state<<",\"nodes\":"<<s.nodes<<",\"stable\":"<<s.stable<<",\"transitions\":[";

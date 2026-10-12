@@ -502,18 +502,17 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destinatio
     Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     reinterpret_cast<CopyFn>(originals[10])(list,destination,source);
 #ifdef MHW_CONTINUOUS_SCALED
-    // Scaled copies are owned exclusively by reconstruction; at render scale
-    // 1.0 the native depth copy is leased below, as in the unscaled build.
-    if(!identity_extent())return;
-#endif
+    // The scaled build copies depth at the TAA dispatch, on its own recording,
+    // at every render scale (DepthConsumerAdmission; render scale 1.0 is its
+    // whole-copy mode since v0.19.3). A lease at the native copy needed that
+    // copy on the TAA's command list, which the game does not keep at 1.0
+    // (dlaa-identity-path.md, game-70/74/75).
+    (void)caller;
+#else
     if(injected||current_kind!=2||!accepting.load())return;
     const auto &d=depth_consumer;
     if(++copy_count!=1||caller!=cfg.image+0x259e100||list!=current_list||reinterpret_cast<std::uintptr_t>(destination)!=d.destination.resource||reinterpret_cast<std::uintptr_t>(source)!=d.source.resource||
-#ifdef MHW_CONTINUOUS_SCALED
-        !dr::copy_states_consistent(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)
-#else
         !dr::copy_states(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)
-#endif
         ){
         DEPTH_NOTE(5,8,d,{2,copy_count,caller,reinterpret_cast<std::uintptr_t>(list),reinterpret_cast<std::uintptr_t>(source),reinterpret_cast<std::uintptr_t>(destination)});return;}
     Lock lock;if(!accepting.load())return;if(lease.list){DEPTH_NOTE(5,2,d,{2,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame});++skips;return;}
@@ -525,6 +524,7 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destinatio
     lease={list,l->generation,d.stamp.frame,true,false};l->injected_generation=l->generation;
     copy_input(list,destination,1,D3D12_RESOURCE_STATE_COPY_DEST);++depth_count;
     DEPTH_NOTE(5,0,d,{2,reinterpret_cast<std::uintptr_t>(list),l->generation,selected->sequence});
+#endif
 }
 bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::uintptr_t caller){
     const bool prepared_output=
@@ -615,7 +615,7 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
         depth_copy_description(raw[1]->GetDesc(),runtime.width,runtime.height,false);
     const auto depth_state=depth_consumer_admission.attempt(reader,s,consumer.depth.texture,consumer.depth_object,consumer.depth_packet,
         consumer.packet.object,std::span(barriers).first(barrier_count),consumer.sequence,reinterpret_cast<std::uintptr_t>(list),
-        l->generation,GetTickCount64(),!lease.list&&consumer.depth_sequence!=0,depth_description);
+        l->generation,GetTickCount64(),!lease.list&&consumer.depth_sequence!=0,depth_description,identity_extent());
     if(depth_state){
         // This recording owns all private inputs and their completion signal.
         // The old draw/copy callbacks no longer inject scaled depth work.
@@ -630,7 +630,7 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
     #endif
     const bool qualified_depth=lease.depth
 #ifdef MHW_CONTINUOUS_SCALED
-        &&(depth_state!=0||identity_extent())
+        &&depth_state!=0
 #endif
         ;
     depth_eligibility.lease(depth_at,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame,qualified_depth,lease.evaluated);
