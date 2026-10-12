@@ -9,6 +9,45 @@ hunter. No corrected live pixel readback or matched full-resolution control
 has been captured.**
 The previously mapped `uOutlineFilter` route was not active in this reproduction.
 
+## Pieces left at render resolution: v0.16.1 and v0.16.2 (2026-10-12)
+
+**Report (game-57, v0.16.0).** With the hunter behind a tree, sword and shield
+drawn, most of the see-through hunter matched the output. Some pieces were
+still blocky:
+- a shield-shaped piece;
+- the speckle along the weapon arm.
+
+The counters showed 118,551 of 474,700 late draws left native (25%).
+
+**Diagnostics (v0.16.1, game-58).** The summary now samples every native
+draw with its shader hashes and the failed check's values. The techniques
+are named from the census. Confirmed:
+
+| Rejection | Draws | Techniques | What failed |
+|---|---|---|---|
+| 8, buffers | 25,755 + 25,973 + 141 | `Uber_Mt_General`, `PL_Mt_AlphaTest`, `Uber_Mt_AlphaDither`, all **MeshSkin1Weight** (equipment attached to one bone) | check 15: the index buffer's resource facts. Vertex buffer, R16 indices, triangle list and stride 32 all passed. |
+| 5, state | 6,542, many recipes | skin, hair, face, `PL_Mt`, `Uber_Mt` (Skin4/8Weight) | state unknown: no barrier for the colour target seen in that command list |
+| 2, blend | 52,472 | `PL_Eye_Mt` | colour write mask 0, depth and stencil off: the draw writes nothing |
+| 0, no recipe | 2 × 26,236 | `Simple_Mt_AlphaTest … RenderTransparent` (PS `9c5c0c85…`) | not a hidden-surface shader. It is a full lit transparent material (lights, fog, shadows, light probes), drawn once a frame per program in the same pass. |
+
+**Fix (v0.16.2; the attribution is a hypothesis until a run confirms it).**
+1. **Buffers.** Each engine buffer must now lie inside its D3D12 resource,
+   rather than start at the resource's base address. The exact match was
+   stricter than safety needs:
+   - the pinned resource still holds every byte the draw reads;
+   - the bound views are still checked exactly against the engine range.
+   - If the failure is something else, the sample now records the resource's
+     facts: valid, dimension, width, address minus base, and bytes.
+2. **State.** An unknown state is accepted. The replacement and the native
+   draw are predicated against each other on the same render-target view, so
+   they need the same state as the native draw. A known state other than
+   RENDER_TARGET is still rejected.
+3. **Unchanged.**
+   - The eye draws stay native; they write nothing.
+   - `Simple_Mt_AlphaTest` stays native. Redrawing a lit forward material at
+     output size is a separate adaptation: its tiled lights are indexed in
+     render space. First, find out what it draws.
+
 ## All hidden-surface variants: v0.13.10 (2026-10-08)
 
 **Report (game-33, v0.12.2).** With the hunter partly behind a tree in the

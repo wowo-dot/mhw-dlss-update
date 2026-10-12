@@ -114,8 +114,16 @@ bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std
  return (found&11U)==11U;
 }
 // 0 when the vertex and index buffers qualify, else the first failed check
-// (1-5 raster state, 6-12 vertex buffer, 14-18 index buffer; diagnostics).
-unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers){
+// (1-5 raster state, 6-12 vertex buffer, 14-18 index buffer). `seen` keeps the
+// failed buffer's resource facts for diagnostics: valid, dimension, width,
+// engine address - resource base, engine byte count.
+//
+// The engine's buffer may be a range inside a larger D3D12 buffer (the
+// equipment attached to one bone, MeshSkin1Weight, draws from such ranges,
+// game-58): the resource must contain [address, address + bytes). The bound
+// views are then checked against that range exactly.
+unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers,
+                            std::array<std::uint64_t,5> &seen){
  if(!b.ready())return 1;if(b.vertex_mask!=1)return 2;if(!b.index_known)return 3;
  if(b.topology!=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)return 4;if(b.index_buffer.Format!=DXGI_FORMAT_R16_UINT)return 5;
  for(unsigned i=0;i<2;++i){std::uintptr_t owner{},backend{},resource{},address{};unsigned bytes{},offset{};
@@ -123,7 +131,9 @@ unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std
   if(!field(ia,i?0x38:0,owner)||!field(owner,0x60,backend)||!field(backend,0x20,resource)||!field(backend,0x40,address)||
      !field(backend,0x10,bytes)||!field(ia,i?0x40:0x24,offset)||offset>bytes||address>UINTPTR_MAX-offset)return 6+8*i;
   const auto description=indexed_description(resource);
-  if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||description[3]<bytes||description[13]!=address)return 7+8*i;
+  seen={description[1],description[2],description[3],address-description[13],bytes};
+  if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||address<description[13]||
+     address-description[13]>description[3]||bytes>description[3]-(address-description[13]))return 7+8*i;
   if(i){if(b.index_buffer.BufferLocation!=address+offset)return 16;if(b.index_buffer.SizeInBytes!=bytes-offset)return 17;
       if((UINT64(r.arguments[0])+r.arguments[1])*2>b.index_buffer.SizeInBytes)return 18;}
   else{if(!field(ia,0x20,stride))return 8;if(stride<12||stride>128||stride%4)return 9;if(b.vertex_buffer.BufferLocation!=address+offset)return 10;
@@ -188,7 +198,11 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(v.TopLeftX||v.TopLeftY||v.Width!=render_w||v.Height!=render_h||v.MinDepth||v.MaxDepth!=1||sc.left||sc.top||sc.right!=LONG(render_w)||sc.bottom!=LONG(render_h))
   return native(4,{u(v.TopLeftX),u(v.TopLeftY),u(v.Width),u(v.Height),u(v.MinDepth*1000),u(v.MaxDepth*1000),u(sc.left),u(sc.top),u(sc.right),u(sc.bottom)});
  const auto state=recording_states.get(reinterpret_cast<std::uintptr_t>(list),roots.generation,now.views[0].resource);
- if(!state.known||state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5,{u(state.known),u(state.value)});
+ // The replacement and the native draw are predicated against each other on
+ // the same render-target view, so they need the same state: the native draw's
+ // own requirement. An unknown state (no barrier seen in this list; game-58,
+ // about 1% of draws) is accepted; a known state other than RENDER_TARGET is not.
+ if(state.known&&state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5,{u(state.known),u(state.value)});
  std::array<ComPtr<ID3D12Resource>,2> textures,buffers;std::array<unsigned,28> screen{};std::array<unsigned,5> material{};
  const bool bound=silhouette_bindings(r,screen,material,textures);
  if(!bound||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
@@ -199,8 +213,10 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  for(unsigned i=0;i<2;++i){if(!textures[i])continue;const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
     d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))
    return native(7,{i,u(d.Dimension),u(d.Width),u(d.Height),u(d.DepthOrArraySize),u(d.MipLevels),u(d.SampleDesc.Count),u(d.Format)});}
- if(const auto why=silhouette_buffers(r,raster,buffers))
-  return native(8,{why,raster.vertex_mask,u(raster.index_buffer.Format),u(raster.topology),raster.vertex_buffer.StrideInBytes,u(raster.ready()),u(raster.index_known)});
+ std::array<std::uint64_t,5> seen{};
+ if(const auto why=silhouette_buffers(r,raster,buffers,seen))
+  return native(8,{why,raster.vertex_mask,u(raster.index_buffer.Format),u(raster.topology),raster.vertex_buffer.StrideInBytes,
+   u(seen[0]),u(seen[1]),u(seen[2]),u(seen[3]),u(seen[4])});
  if(!layout(r.recipe->layout,true))return native(8,{100});
  if(!silhouette_code_stable(*r.recipe))return native(8,{101});
  for(auto ptr:{root,pipeline}){std::uintptr_t method{};for(unsigned slot:{0U,2U,7U})if(!pb::system_method(ptr,slot,method))return native(9);}
