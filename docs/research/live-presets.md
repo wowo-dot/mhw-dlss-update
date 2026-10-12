@@ -120,11 +120,40 @@ scale with its own anti-aliasing.
 - **`frame_generation_game`:** the ring is settled only without recording,
   unsubmitted, tagged or consuming slots, and `release_all()` frees ready ones.
 
-## In game (not yet seen)
+## In game: game-83 (v0.22.0, 2026-10-13)
 
-To check:
-- each preset to each other while playing, with FG on;
-- the `dlss_mode_change` phase times;
-- that FG comes back, with `input_releases` counted;
-- the status line's new sizes;
-- DLAA to Performance and back, which crosses the identity route.
+DLAA, 2560x1440, FG 2x with Auto pause, Reflex Boost. The player went DLAA →
+Quality → Balanced → Performance → DLAA from the menu, about 10-15 s apart.
+The run ended with `game_exit`, no fault and an empty crash log.
+
+| Change | Render | Total | Phase ends, ms (pause, drain, barrier, retarget, rebuild, resume) |
+|---|---|---|---|
+| DLAA → Quality | 1696x954 | 188 ms | 0, 16, 16, 47, 172, 172 |
+| Quality → Balanced | 1472x828 | 172 ms | 0, 16, 16, 47, 172, 172 |
+| Balanced → Performance | 1280x720 | 156 ms | 0, 15, 15, 31, 156, 156 |
+| Performance → DLAA | 2560x1440 | 187 ms | 0, 15, 15, 47, 187, 187 |
+
+- **Timing:**
+  - FG settled within one tick (`settle_ms` 0);
+  - the drain took one tick;
+  - the rebuild (retiring the old feature, then NGX creating the new one)
+    took about 125 ms.
+
+  The times are `GetTickCount64` ticks, so 15.6 ms steps.
+- **DLSS:**
+  - kept running with fault 0: frames 1,504 → 4,564 → 8,846 → 12,638 across
+    the four 20 s windows;
+  - one `first` history reset per change;
+  - about 19 skipped frames per change (the jitter gate's 32 visits, less the
+    pause).
+- **FG:**
+  - on again after every change, showing 2 frames per Present;
+  - `input_releases` 4 and `released` 3;
+  - `size_mismatch` 0, `create_failed` false;
+  - its render size followed: 1696x954, 1280x720, 2560x1440;
+  - `not_armed` grew by about 20 Presents per change.
+- **Back at DLAA:** the whole-copy depth admission ran again on every frame
+  (4,201 of 4,202).
+- **Streamline:** its two warnings in this run also appear in game-77 and
+  game-81, before any change. One is "slDLSSGGetState must be synchronized
+  with the present thread": the worker's single state query at `fg_armed`.
