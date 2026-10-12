@@ -435,6 +435,21 @@ evaluations. All 16 surveys completed (reason 0), and the first 8 match the
     (COPY_DEST, and COPY_DEST then a hoisted read); 96 frames and 786,432
     exact pixels on the RTX and WARP, with GPU validation clean.
 
+## game-77 (v0.19.4): DLAA depth fixed
+
+| | |
+|---|---|
+| DLSS frames | 8,688 |
+| Frames skipped | 1, for missing depth (one reason-5 rejection out of 8,689 attempts) |
+| Before, per session | 1,100–2,700 missing |
+| Whole-copy admissions | 8,688 accepted, all in the COPY_DEST state (no hoisted read in this session) |
+| Exceptions | 0 |
+
+- Title screen, menus and gameplay were all covered.
+- Frame generation was on the whole session.
+- The session ended with `game_exit`.
+- Tagged v0.19.4.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
