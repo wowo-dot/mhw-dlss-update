@@ -89,6 +89,7 @@ struct SilhouetteCpu {
  std::array<Code,2> identity;
  std::array<std::vector<std::byte>,2> bytes;
  std::uintptr_t set{};
+ ShaderHash vs_hash{},ps_hash{};  // for diagnostics: which programs a rejected draw used
 };
 struct LatePacket {
  std::array<std::uintptr_t,4> bindings{};std::array<unsigned,3> arguments{};

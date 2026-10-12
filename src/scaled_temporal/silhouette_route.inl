@@ -10,11 +10,25 @@ unsigned silhouette_cache_count{};
 // Pixel shaders outside the allowlist, by engine code identity, so a rejected
 // program is copied and hashed once rather than on every draw. A stale entry
 // can only keep a draw native.
-struct SilhouetteUnknown {std::uintptr_t set{},data{};unsigned size{};};
+struct SilhouetteUnknown {std::uintptr_t set{},data{};unsigned size{};ShaderHash hash{};std::uint64_t draws{};};
 std::array<SilhouetteUnknown,32> silhouette_unknown{};
 unsigned silhouette_unknown_count{};
-std::uint64_t silhouette_unknown_draws{},silhouette_cache_full{};
+std::uint64_t silhouette_unknown_draws{},silhouette_cache_full{},silhouette_recipe_failed{};
 ShaderHash silhouette_unknown_hash{};
+// Diagnostics: the first distinct draws per rejection reason (recipe and the
+// failed check's values), so a rejected class can be admitted deliberately.
+struct SilhouetteSample {unsigned reason{};const SilhouetteCpu *recipe{};std::uint64_t draws{};std::array<unsigned,24> detail{};unsigned detail_count{};};
+std::array<SilhouetteSample,24> silhouette_samples{};
+unsigned silhouette_sample_count{};
+std::uint64_t silhouette_samples_dropped{};
+void silhouette_sample(unsigned reason,const SilhouetteCpu *recipe,std::initializer_list<unsigned> detail){
+ const auto n=(std::min<std::size_t>)(detail.size(),24);
+ for(unsigned i=0;i<silhouette_sample_count;++i){auto &s=silhouette_samples[i];
+  if(s.reason==reason&&s.recipe==recipe&&s.detail_count==n&&std::equal(detail.begin(),detail.begin()+n,s.detail.begin())){++s.draws;return;}}
+ if(silhouette_sample_count==silhouette_samples.size()){++silhouette_samples_dropped;return;}
+ auto &s=silhouette_samples[silhouette_sample_count++];s.reason=reason;s.recipe=recipe;s.draws=1;s.detail_count=static_cast<unsigned>(n);
+ std::copy(detail.begin(),detail.begin()+n,s.detail.begin());
+}
 bool silhouette_code_stable(const SilhouetteCpu &r){
  for(unsigned i=0;i<2;++i){const auto &s=r.identity[i];std::uintptr_t entry{},desc{},data{};unsigned size{};
   if(!field(r.set,0x50+8*i,entry)||entry!=s.entry||!field(entry,0x10,desc)||desc!=s.descriptor||
@@ -25,15 +39,15 @@ bool silhouette_code_stable(const SilhouetteCpu &r){
  }return true;
 }
 bool silhouette_recipe_equal(pb::NativePipeline a,pb::NativePipeline b){a.render=b.render=0;a.graphics=b.graphics=0;return a==b;}
-std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet){
+std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet){
  pb::NativePipeline native;std::uintptr_t set{};
  if(!pb::snapshot_native_pipeline(cfg.image,packet,native)||!field(native.shader_handle,0,set)||!set||native.input_count>32)return {};
  for(const auto &cached:silhouette_cpu_cache)if(cached&&cached->set==set&&silhouette_recipe_equal(cached->native,native)){
   if(!layout(cached->layout,true)||!silhouette_code_stable(*cached))return {};return cached;}
  {std::uintptr_t entry{},descriptor{},data{};unsigned size{};
   if(field(set,0x58,entry)&&field(entry,0x10,descriptor)&&field(descriptor,0,size)&&field(descriptor,8,data))
-   for(unsigned i=0;i<silhouette_unknown_count;++i){const auto &u=silhouette_unknown[i];
-    if(u.set==set&&u.data==data&&u.size==size){++silhouette_unknown_draws;return {};}}}
+   for(unsigned i=0;i<silhouette_unknown_count;++i){auto &u=silhouette_unknown[i];
+    if(u.set==set&&u.data==data&&u.size==size){++silhouette_unknown_draws;++u.draws;return {};}}}
  unsigned empty=UINT_MAX;for(unsigned i=0;i<silhouette_cpu_cache.size();++i)if(!silhouette_cpu_cache[i]){empty=i;break;}
  if(empty==UINT_MAX){++silhouette_cache_full;return {};}
  auto r=std::make_shared<SilhouetteCpu>();r->native=native;r->set=set;r->layout.before.pipeline=native;
@@ -45,9 +59,19 @@ std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet){
  if(!known_silhouette_shader(r->bytes[1])){
   ++silhouette_unknown_draws;shader_sha256(r->bytes[1],silhouette_unknown_hash);
   if(silhouette_unknown_count<silhouette_unknown.size())
-   silhouette_unknown[silhouette_unknown_count++]={set,r->identity[1].data,r->identity[1].size};
+   silhouette_unknown[silhouette_unknown_count++]={set,r->identity[1].data,r->identity[1].size,silhouette_unknown_hash,1};
   return {};}
+ shader_sha256(r->bytes[0],r->vs_hash);shader_sha256(r->bytes[1],r->ps_hash);
  silhouette_cpu_cache[empty]=r;return r;
+}
+// Late packets resolve their recipe here; a null recipe keeps the draw native
+// (rejection 0). Counts lookups that failed for a reason other than an unknown
+// pixel shader or a full cache.
+std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet){
+ const auto unknown=silhouette_unknown_draws,full=silhouette_cache_full;
+ auto r=silhouette_cpu_lookup(packet);
+ if(!r&&unknown==silhouette_unknown_draws&&full==silhouette_cache_full)++silhouette_recipe_failed;
+ return r;
 }
 IndexedScope indexed_before(const pb::Frame &f) noexcept {
  auto scope=indexed_diagnostic_before(f);
@@ -89,20 +113,23 @@ bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std
  }
  return (found&11U)==11U;
 }
-bool silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers){
- if(!b.ready()||b.vertex_mask!=1||!b.index_known||b.topology!=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST||b.index_buffer.Format!=DXGI_FORMAT_R16_UINT)return false;
+// 0 when the vertex and index buffers qualify, else the first failed check
+// (1-5 raster state, 6-12 vertex buffer, 14-18 index buffer; diagnostics).
+unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers){
+ if(!b.ready())return 1;if(b.vertex_mask!=1)return 2;if(!b.index_known)return 3;
+ if(b.topology!=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)return 4;if(b.index_buffer.Format!=DXGI_FORMAT_R16_UINT)return 5;
  for(unsigned i=0;i<2;++i){std::uintptr_t owner{},backend{},resource{},address{};unsigned bytes{},offset{};
   const auto ia=r.bindings[1];unsigned char stride{};
   if(!field(ia,i?0x38:0,owner)||!field(owner,0x60,backend)||!field(backend,0x20,resource)||!field(backend,0x40,address)||
-     !field(backend,0x10,bytes)||!field(ia,i?0x40:0x24,offset)||offset>bytes||address>UINTPTR_MAX-offset)return false;
+     !field(backend,0x10,bytes)||!field(ia,i?0x40:0x24,offset)||offset>bytes||address>UINTPTR_MAX-offset)return 6+8*i;
   const auto description=indexed_description(resource);
-  if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||description[3]<bytes||description[13]!=address)return false;
-  if(i){if(b.index_buffer.BufferLocation!=address+offset||b.index_buffer.SizeInBytes!=bytes-offset||
-      (UINT64(r.arguments[0])+r.arguments[1])*2>b.index_buffer.SizeInBytes)return false;}
-  else{if(!field(ia,0x20,stride)||(stride<12||stride>128||stride%4)||b.vertex_buffer.BufferLocation!=address+offset||
-      b.vertex_buffer.SizeInBytes!=bytes-offset||b.vertex_buffer.StrideInBytes!=stride)return false;}
+  if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||description[3]<bytes||description[13]!=address)return 7+8*i;
+  if(i){if(b.index_buffer.BufferLocation!=address+offset)return 16;if(b.index_buffer.SizeInBytes!=bytes-offset)return 17;
+      if((UINT64(r.arguments[0])+r.arguments[1])*2>b.index_buffer.SizeInBytes)return 18;}
+  else{if(!field(ia,0x20,stride))return 8;if(stride<12||stride>128||stride%4)return 9;if(b.vertex_buffer.BufferLocation!=address+offset)return 10;
+      if(b.vertex_buffer.SizeInBytes!=bytes-offset)return 11;if(b.vertex_buffer.StrideInBytes!=stride)return 12;}
   buffers[i]=reinterpret_cast<ID3D12Resource *>(resource);
- }return true;
+ }return 0;
 }
 SilhouettePipeline *silhouette_pipeline(const std::shared_ptr<SilhouetteCpu> &r,ID3D12RootSignature *root){
  for(auto &p:silhouette_pipelines)if(p.draw&&p.recipe==r&&p.draw->root()==root)return &p;
@@ -131,13 +158,19 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(!track_recording(p,list,roots.generation,true)||!retain_recording(p,list,roots.generation)||p.handoff.record(handoff_indexed(p,scope.position),scope.draw.packet,
     {reinterpret_cast<std::uintptr_t>(list),roots.generation})!=FrameHandoff::Result::ok)throw std::runtime_error("silhouette recording ownership");
  ++silhouette_recorded;++p.late_recorded;
- const auto native=[&](unsigned reason){++silhouette_native;++silhouette_rejections[reason];completed(p);return false;};
+ const auto native=[&](unsigned reason,std::initializer_list<unsigned> detail={}){
+  ++silhouette_native;++silhouette_rejections[reason];silhouette_sample(reason,r.recipe.get(),detail);completed(p);return false;};
+ const auto u=[](auto v){return static_cast<unsigned>(v);};
  if(!r.recipe||!n)return native(0);
  pb::AttachmentSnapshot now;obs::RasterBindings raster;
  if(!pb::snapshot_attachments(cfg.image,scope.draw,now)||!pb::attachment_cache_matches(now)||now.pipeline!=r.native||
     now.color_count!=1||now.views[8].owner||now.views[0].resource!=reinterpret_cast<std::uintptr_t>(p.resources[3].Get())||
     now.views[0].format!=DXGI_FORMAT_R11G11B10_FLOAT||!obs::raster_current(list,raster)||!raster.output_known||
-    raster.render_target!=now.views[0].handle||raster.generation!=roots.generation)return native(1);
+    raster.render_target!=now.views[0].handle||raster.generation!=roots.generation){
+  const bool snapped=pb::snapshot_attachments(cfg.image,scope.draw,now),rastered=obs::raster_current(list,raster);
+  return native(1,{u(snapped),u(snapped&&pb::attachment_cache_matches(now)),u(now.pipeline==r.native),now.color_count,u(now.views[8].owner!=0),
+   u(now.views[0].resource==reinterpret_cast<std::uintptr_t>(p.resources[3].Get())),u(now.views[0].format),u(rastered),u(raster.output_known),
+   u(raster.render_target==now.views[0].handle),u(raster.generation==roots.generation)});}
  D3D12_BLEND_DESC blend{};D3D12_DEPTH_STENCIL_DESC depth{};D3D12_RASTERIZER_DESC rs{};
  std::memcpy(&blend,now.pipeline.blend.data(),sizeof(blend));std::memcpy(&depth,now.pipeline.depth.data(),sizeof(depth));std::memcpy(&rs,now.pipeline.raster.data(),sizeof(rs));
  const auto &b=blend.RenderTarget[0];
@@ -145,20 +178,31 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
     b.BlendOp!=D3D12_BLEND_OP_ADD||b.SrcBlendAlpha!=D3D12_BLEND_ONE||b.DestBlendAlpha!=D3D12_BLEND_ZERO||b.BlendOpAlpha!=D3D12_BLEND_OP_ADD||
     blend.AlphaToCoverageEnable||depth.DepthEnable||depth.StencilEnable||rs.FillMode!=D3D12_FILL_MODE_SOLID||
     !rs.DepthClipEnable||rs.DepthBias||rs.DepthBiasClamp||rs.SlopeScaledDepthBias||rs.MultisampleEnable||rs.AntialiasedLineEnable||
-    rs.ForcedSampleCount||rs.ConservativeRaster!=D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF)return native(2);
- for(unsigned i=0;i<3;++i){std::uintptr_t extra{};if(!field(r.recipe->set,0x60+8*i,extra)||extra)return native(3);}
+    rs.ForcedSampleCount||rs.ConservativeRaster!=D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF)
+  return native(2,{u(b.BlendEnable),u(b.SrcBlend),u(b.DestBlend),u(b.BlendOp),u(b.SrcBlendAlpha),u(b.DestBlendAlpha),u(b.BlendOpAlpha),
+   u(b.RenderTargetWriteMask),u(b.LogicOpEnable),u(blend.AlphaToCoverageEnable),u(blend.IndependentBlendEnable),u(depth.DepthEnable),
+   u(depth.DepthWriteMask),u(depth.DepthFunc),u(depth.StencilEnable),u(rs.FillMode),u(rs.CullMode),u(rs.FrontCounterClockwise),
+   u(rs.DepthClipEnable),u(rs.DepthBias),u(rs.MultisampleEnable),u(rs.AntialiasedLineEnable),u(rs.ForcedSampleCount),u(rs.ConservativeRaster)});
+ for(unsigned i=0;i<3;++i){std::uintptr_t extra{};if(!field(r.recipe->set,0x60+8*i,extra)||extra)return native(3,{i});}
  const auto &v=raster.viewport;const auto &sc=raster.scissor;
- if(v.TopLeftX||v.TopLeftY||v.Width!=render_w||v.Height!=render_h||v.MinDepth||v.MaxDepth!=1||sc.left||sc.top||sc.right!=LONG(render_w)||sc.bottom!=LONG(render_h))return native(4);
+ if(v.TopLeftX||v.TopLeftY||v.Width!=render_w||v.Height!=render_h||v.MinDepth||v.MaxDepth!=1||sc.left||sc.top||sc.right!=LONG(render_w)||sc.bottom!=LONG(render_h))
+  return native(4,{u(v.TopLeftX),u(v.TopLeftY),u(v.Width),u(v.Height),u(v.MinDepth*1000),u(v.MaxDepth*1000),u(sc.left),u(sc.top),u(sc.right),u(sc.bottom)});
  const auto state=recording_states.get(reinterpret_cast<std::uintptr_t>(list),roots.generation,now.views[0].resource);
- if(!state.known||state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5);
+ if(!state.known||state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5,{u(state.known),u(state.value)});
  std::array<ComPtr<ID3D12Resource>,2> textures,buffers;std::array<unsigned,28> screen{};std::array<unsigned,5> material{};
- if(!silhouette_bindings(r,screen,material,textures)||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
+ const bool bound=silhouette_bindings(r,screen,material,textures);
+ if(!bound||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
     screen[4]!=std::bit_cast<unsigned>(float(width))||screen[5]!=std::bit_cast<unsigned>(float(height))||screen[6]!=std::bit_cast<unsigned>(1.F/width)||screen[7]!=std::bit_cast<unsigned>(1.F/height)||
     screen[10]!=render_w||screen[11]!=render_h||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(render_w))||screen[15]!=std::bit_cast<unsigned>(float(render_h))||
-    screen[16]!=std::bit_cast<unsigned>(2.F/width)||screen[17]!=std::bit_cast<unsigned>(2.F/height))return native(6);
+    screen[16]!=std::bit_cast<unsigned>(2.F/width)||screen[17]!=std::bit_cast<unsigned>(2.F/height))
+  return native(6,{u(bound),material[2],material[3],material[4],screen[4],screen[5],screen[10],screen[11],screen[12],screen[13],screen[14],screen[15]});
  for(unsigned i=0;i<2;++i){if(!textures[i])continue;const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
-    d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))return native(7);}
- if(!silhouette_buffers(r,raster,buffers)||!layout(r.recipe->layout,true)||!silhouette_code_stable(*r.recipe))return native(8);
+    d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))
+   return native(7,{i,u(d.Dimension),u(d.Width),u(d.Height),u(d.DepthOrArraySize),u(d.MipLevels),u(d.SampleDesc.Count),u(d.Format)});}
+ if(const auto why=silhouette_buffers(r,raster,buffers))
+  return native(8,{why,raster.vertex_mask,u(raster.index_buffer.Format),u(raster.topology),raster.vertex_buffer.StrideInBytes,u(raster.ready()),u(raster.index_known)});
+ if(!layout(r.recipe->layout,true))return native(8,{100});
+ if(!silhouette_code_stable(*r.recipe))return native(8,{101});
  for(auto ptr:{root,pipeline}){std::uintptr_t method{};for(unsigned slot:{0U,2U,7U})if(!pb::system_method(ptr,slot,method))return native(9);}
  auto *cache=silhouette_pipeline(r.recipe,reinterpret_cast<ID3D12RootSignature *>(root));if(!cache)return native(10);
  std::array<IUnknown *,9> pins{reinterpret_cast<IUnknown *>(pipeline),reinterpret_cast<IUnknown *>(root),textures[1].Get(),buffers[0].Get(),buffers[1].Get(),cache->draw->pipeline()};unsigned size=6;
@@ -185,7 +229,15 @@ void silhouette_summary(std::ostream &o){
  indexed_array(o,silhouette_rejections);
  o<<",\"unknown_draws\":"<<silhouette_unknown_draws<<",\"unknown_programs\":"<<silhouette_unknown_count<<",\"cache_full\":"<<silhouette_cache_full<<",\"unknown_ps_sha256\":";
  if(silhouette_unknown_count){static const char *d="0123456789abcdef";o<<'"';for(auto b:silhouette_unknown_hash)o<<d[b>>4]<<d[b&15];o<<'"';}else o<<"null";
- o<<'}';
+ const auto hex=[&](const ShaderHash &h){static const char *d="0123456789abcdef";o<<'"';for(auto b:h)o<<d[b>>4]<<d[b&15];o<<'"';};
+ o<<",\"recipe_failed\":"<<silhouette_recipe_failed<<",\"unknown\":[";
+ for(unsigned i=0;i<silhouette_unknown_count;++i){const auto &x=silhouette_unknown[i];if(i)o<<',';o<<"{\"ps\":";hex(x.hash);o<<",\"draws\":"<<x.draws<<'}';}
+ o<<"],\"samples\":[";
+ for(unsigned i=0;i<silhouette_sample_count;++i){const auto &s=silhouette_samples[i];if(i)o<<',';
+  o<<"{\"reason\":"<<s.reason<<",\"draws\":"<<s.draws<<",\"vs\":";if(s.recipe)hex(s.recipe->vs_hash);else o<<"null";
+  o<<",\"ps\":";if(s.recipe)hex(s.recipe->ps_hash);else o<<"null";
+  o<<",\"detail\":[";for(unsigned j=0;j<s.detail_count;++j)o<<(j?",":"")<<s.detail[j];o<<"]}";}
+ o<<"],\"samples_dropped\":"<<silhouette_samples_dropped<<'}';
 }
 void silhouette_write(std::ostream &o){
  o<<"{\"schema\":1,\"policy\":\"indexed-native-coordinate-adapter-v1\",\"planned\":"<<silhouette_planned<<",\"recorded\":"<<silhouette_recorded
