@@ -66,6 +66,7 @@ class PackageRelease(unittest.TestCase):
         self.assertIn('not affiliated with, sponsored or endorsed by NVIDIA', readme)
         self.assertIn('Uninstall: delete the AsteraLoader/plugins/mhw_dlss folder.', readme)
         self.assertIn('an Astera Loader plugin', readme)
+        self.assertIn('With CMFM installed', readme)
         self.assertNotIn('winmm', readme)
         with zipfile.ZipFile(self.out / 'mhw-dlss-9.8.7.zip') as z:
             self.assertEqual(sorted(z.namelist()),

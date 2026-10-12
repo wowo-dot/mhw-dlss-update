@@ -38,6 +38,15 @@ bool frame_generation_on() noexcept;
 // Any thread. Total frame multiplier (2 = ordinary FG), applied at the next
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;
+// Any thread, lock-free: the session as status lines show it (alpha menu).
+struct Status {
+    bool armed{}, on{};
+    unsigned requested{};                 // total multiplier asked for
+    unsigned generated{};                 // generated frames per rendered frame now; 0 while Off
+    unsigned maximum{};                   // generated frames DLSS-G allows; 0 until its state was read
+    std::uint64_t presented_generated{};  // generated frames presented since the start
+};
+Status status() noexcept;
 
 // DLSS replacement thread, after a successful evaluation. Without
 // perf::keyed_staging no GPU work: the final draw copies `depth`/`motion`

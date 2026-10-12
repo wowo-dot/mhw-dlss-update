@@ -71,6 +71,10 @@ AsteraLoader/plugins/mhw_dlss.
 Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file). DLSS
 currently runs at Performance quality (half resolution); other modes come with
 later builds.
+With CMFM installed (an optional Astera Loader plugin), the game's own menus
+gain a Mods entry below Options. There, DLSS > Settings changes frame
+generation and its multiplier, and DLSS > Status shows what the mod is doing.
+The menu saves its changes to mhw_dlss.ini.
 
 Logs: AsteraLoader/plugins/mhw_dlss/logs, one file per launch. Please include it when
 reporting a problem.

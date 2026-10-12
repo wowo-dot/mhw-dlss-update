@@ -202,6 +202,10 @@ Kept:
 - **game-54 (v0.14.0, CMFM names):** frame generation, HUD-less frames and the
   silhouette ran as before. AL's side of that run (chain layers, owner,
   hello's counts) was not checked from this repository.
+- **game-55 (v0.15.0, tagged):** 94 launches, most of them from the Astera
+  Loader and CMFM sessions' own runs. In 89, all three live frame hooks were
+  active through `al.hooks` and frame generation armed. The four refusals
+  were SharpPluginLoader runs from before Astera Loader 7cf2e6c.
 
 ## Open
 
@@ -209,5 +213,7 @@ Kept:
   Streamline's proxy buffers, which GetBuffer routes to. A PRE_PRESENT overlay
   must draw into the buffer the game presents. If AL's layer queries the
   back-buffer index or buffers through an internal call, it reaches the
-  native chain's, not the proxy's. To settle with AL before the CMFM menu
-  draws.
+  native chain's, not the proxy's.
+  - CMFM no longer needs this: since 2026-10-11 its menu is the game's own
+    (CMFM draws nothing; `cmfm-menu.md`).
+  - Any future overlay plugin still does.

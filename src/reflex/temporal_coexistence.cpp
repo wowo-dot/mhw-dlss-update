@@ -90,6 +90,7 @@ void arm(ID3D12Device* device){
 bool healthy() noexcept{return installed&&!finished&&cd::healthy()&&bool(events);}
 bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
     return installed&&cd::scene_extent(scene_width,scene_height,window_width,window_height);}
+bool render_extent(unsigned &width,unsigned &height) noexcept{return installed&&cd::render_extent(width,height);}
 void sample(){
     require(healthy(),"temporal-runtime-fault");++samples;
     // perf::quiet_status: the dumps hold the render locks while they format and write.

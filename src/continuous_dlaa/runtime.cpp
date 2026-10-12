@@ -901,6 +901,10 @@ bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_
     if(!pass)return false;
     scene_width=runtime.width;scene_height=runtime.height;window_width=runtime.window_width;window_height=runtime.window_height;return true;
 }
+bool render_extent(unsigned &width,unsigned &height) noexcept{
+    if(!pass)return false;
+    width=render_width();height=render_height();return true;
+}
 bool qualified(std::uintptr_t image,pb::Runtime &found,std::string &reason){
         if(!pb::discover(image,found,reason)||
             !pb::verify_code(image,0x2392150,4221,"d2c6c0f6a5ed39c998bcf62afed19132e6dd0d7cfbb19e18b80c15531af2bf91")||

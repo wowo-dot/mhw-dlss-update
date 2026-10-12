@@ -86,4 +86,37 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
     c.log_dir = resolve(logs);
     return c;
 }
+
+// The ini value of the frame generation setting: "off", or "2x" to "6x".
+inline std::string frame_generation_value(bool on, unsigned multiplier) {
+    return on ? std::to_string(multiplier) + "x" : "off";
+}
+
+// `text` with frame_generation set to `value`. Only the value of the last
+// frame_generation line changes (the one parse_config ends up with): its key,
+// spacing, comment and line ending stay, as does every other byte. Without
+// such a line, one is added at the end with the file's line ending.
+inline std::string with_frame_generation(std::string_view text, std::string_view value) {
+    constexpr auto none = std::string_view::npos;
+    std::size_t begin = none, end = none;
+    for (std::size_t pos = 0; pos < text.size();) {
+        const auto newline = text.find('\n', pos);
+        auto line = text.substr(pos, (newline == none ? text.size() : newline) - pos);
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (const auto comment = line.find_first_of("#;"); comment != none) line = line.substr(0, comment);
+        if (const auto equals = line.find('='); equals != none && trimmed_lower(line.substr(0, equals)) == "frame_generation") {
+            auto first = equals + 1, last = line.size();
+            while (first < last && std::isspace(static_cast<unsigned char>(line[first]))) ++first;
+            while (last > first && std::isspace(static_cast<unsigned char>(line[last - 1]))) --last;
+            begin = pos + first;
+            end = pos + last;
+        }
+        pos = newline == none ? text.size() : newline + 1;
+    }
+    if (begin != none) return std::string(text.substr(0, begin)).append(value).append(text.substr(end));
+    const std::string_view newline = text.find("\r\n") != none ? "\r\n" : "\n";
+    std::string out(text);
+    if (!out.empty() && out.back() != '\n') out.append(newline);
+    return out.append("frame_generation = ").append(value).append(newline);
+}
 }  // namespace mhw::alpha

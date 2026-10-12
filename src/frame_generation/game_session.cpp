@@ -109,6 +109,10 @@ struct Session {
         null_tags{}, unpresented{}, exceptions{}, lifecycle_calls{}, lifecycle_offs{};
     std::atomic<unsigned> requested_multiplier{2};
     unsigned applied_generated{};  // 0 while Off
+    // Mirrors for status() (any thread): applied_generated, the state's
+    // numFramesToGenerateMax, and generated frames presented so far.
+    std::atomic<unsigned> shown_generated{}, shown_maximum{};
+    std::atomic<std::uint64_t> presented_generated{};
     std::uint64_t generated_changes{}, generated_limited{};
     // Tagged frames with reset: all, and those whose DLSS history was reset
     // (the rest had no consecutive predecessor). DLSS-G presents no generated
@@ -218,6 +222,7 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     if (result != sl::Result::eOk) s.last_sdk_error = result;
     s.on.store(false);
     s.applied_generated = 0;
+    s.shown_generated.store(0);
     ++s.mode_changes;
 }
 
@@ -229,6 +234,7 @@ unsigned wanted_generated(Session &s) {
         if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
             s.state = state;
             s.state_valid = true;
+            s.shown_maximum.store(state.numFramesToGenerateMax);
         }
     }
     const auto multiplier = s.requested_multiplier.load();
@@ -253,6 +259,11 @@ void arm(bool armed) noexcept { session.armed.store(armed); }
 bool frame_generation_on() noexcept { return session.on.load(); }
 void multiplier(unsigned total) noexcept {
     if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
+}
+Status status() noexcept {
+    const auto &s = session;
+    return {s.armed.load(), s.on.load(), s.requested_multiplier.load(), s.shown_generated.load(), s.shown_maximum.load(),
+            s.presented_generated.load()};
 }
 
 void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
@@ -526,6 +537,7 @@ bool lifecycle_guard(unsigned) noexcept {
         if (result != sl::Result::eOk) s.last_sdk_error = result;
         s.on.store(false);
         s.applied_generated = 0;
+        s.shown_generated.store(0);
         ++s.mode_changes;
         ++s.lifecycle_offs;
         return true;
@@ -644,6 +656,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
                 ++s.mode_changes;
             s.on.store(true);
             s.applied_generated = generated;
+            s.shown_generated.store(generated);
         }
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
@@ -669,7 +682,9 @@ static void finish_pending(Session &s, bool presented) {
     if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
         s.state = state;
         s.state_valid = true;
+        s.shown_maximum.store(state.numFramesToGenerateMax);
         ++s.presented_frames[std::min<std::uint32_t>(state.numFramesActuallyPresented, 7)];
+        if (state.numFramesActuallyPresented > 1) s.presented_generated.fetch_add(state.numFramesActuallyPresented - 1);
         s.fence = static_cast<ID3D12Fence *>(state.inputsProcessingCompletionFence);
         s.ring.presented(s.pending, state.lastPresentInputsProcessingCompletionFenceValue);
     } else {

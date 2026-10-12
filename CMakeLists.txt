@@ -281,6 +281,11 @@ if(BUILD_TESTING)
     target_compile_options(alpha_config_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     set_target_properties(alpha_config_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME alpha_config_tests COMMAND alpha_config_tests)
+    add_executable(alpha_menu_tests tests/alpha_menu_tests.cpp)
+    target_compile_features(alpha_menu_tests PRIVATE cxx_std_20)
+    target_compile_options(alpha_menu_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    set_target_properties(alpha_menu_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME alpha_menu_tests COMMAND alpha_menu_tests)
     add_executable(sampler_tests tests/sampler_tests.cpp src/perf/sampler.cpp)
     target_compile_features(sampler_tests PRIVATE cxx_std_20)
     target_compile_definitions(sampler_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
@@ -820,7 +825,8 @@ if(TARGET mhw_dlss_sdk_live)
         # Alpha (v0.13): the FG game build configured by mhw_dlss.ini, arming itself
         # once the game is ready, every lean path on and light logging.
         get_target_property(fg_game_sources mhw_fg_game_probe SOURCES)
-        add_library(mhw_dlss_alpha SHARED ${fg_game_sources})
+        # v0.16: the status lines and the optional CMFM pages (third_party/cmfm).
+        add_library(mhw_dlss_alpha SHARED ${fg_game_sources} src/alpha/status.cpp src/alpha/menu.cpp)
         target_compile_features(mhw_dlss_alpha PRIVATE cxx_std_20)
         target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
             "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")

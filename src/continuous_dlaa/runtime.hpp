@@ -14,6 +14,8 @@ bool healthy() noexcept;
 // Scene and window sizes from discovery (equal unless the aspect-ratio option
 // letterboxes or pillarboxes the scene). False before install.
 bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept;
+// DLSS's render size (half the scene at Performance in the scaled build). False before install.
+bool render_extent(unsigned &width,unsigned &height) noexcept;
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;
