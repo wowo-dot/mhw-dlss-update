@@ -22,6 +22,7 @@
 #include "native_state_admission.hpp"
 #include "depth_eligibility.hpp"
 #include "depth_destination.hpp"
+#include "depth_lease.hpp"
 #include "../temporal_present/unfiltered.hpp"
 #include "../temporal_bindings/depth_routes.hpp"
 #include "../temporal_bindings/shader.hpp"
@@ -515,7 +516,7 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destinatio
         DEPTH_NOTE(5,8,d,{2,copy_count,caller,reinterpret_cast<std::uintptr_t>(list),reinterpret_cast<std::uintptr_t>(source),reinterpret_cast<std::uintptr_t>(destination)});return;}
     Lock lock;if(!accepting.load())return;if(lease.list){DEPTH_NOTE(5,2,d,{2,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame});++skips;return;}
     auto *l=find(list);if(!l||l->closed){DEPTH_NOTE(5,3,d,{2,reinterpret_cast<std::uintptr_t>(list)});return;}
-    const Taa *selected{};for(const auto &t:requests)if(t.live&&!t.forwarding&&t.source.frame==d.stamp.frame&&t.source.epoch==d.stamp.epoch&&t.source.view==d.stamp.view&&t.source.bank==d.stamp.bank&&t.source.async==d.stamp.async&&t.depth.container==d.stamp.container&&t.depth.texture==d.destination)selected=&t;
+    const Taa *selected{};for(const auto &t:requests)if(depth_copy_belongs(t,d))selected=&t;
     if(!selected){DEPTH_NOTE(5,4,d,{2,reinterpret_cast<std::uintptr_t>(list),l->generation});return;}
     recording_pins.collect(fence->GetCompletedValue());
     if(!recording_pins.retain(list,l->generation,selected->resources)){fail(1);return;}

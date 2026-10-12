@@ -254,9 +254,50 @@ reflex_fault "frame-policy-or-sdk" detail {call 100, thread = owner, links 0,
 **Confirmed in game-72 (v0.19.0, which carries this change):** the log ends
 with `game_exit` after 24,175 frames, `exit_gate` true, no fault.
 
-**Still open from this run.** DLSS skipped 2,709 frames for missing depth,
-the same pattern as game-68 and game-69: most of it outside gameplay (title
-and loading). Not yet traced.
+## Depth missing on the title and loading screens (v0.19.1)
+
+In every DLAA session DLSS skipped about 1,100–2,700 frames for missing
+depth, mostly on the title and loading screens. Gameplay was nearly clean
+(game-70, last two windows: 1 and 105).
+
+**The trace (game-69 and game-70 `depth_capture`).**
+- **Stage-5 outcomes per window** (the copy hook):
+
+  | Code | Meaning | Gameplay | Title and loading |
+  |---|---|---|---|
+  | 0 | leased | one a frame | fewer than one a frame |
+  | 8 | mismatch | two a frame | 4,841 (game-70, first window) |
+  | 2 | lease already held | about 0 | up to 2,998 a window |
+  | 4 | no request for this stamp | about 0 | up to 6,460 a window |
+
+- **A missing frame, in detail** (frame 4182):
+  - three depth copies were produced: 9505, 9506 and 9507. All have the same
+    stamp, source and destination and the full 2560x1440 rectangle;
+  - the TAA request chose 9507, the newest matching copy (stage 2);
+  - 9505's copy failed the copy checks (8);
+  - 9506's copy matched by stamp and took the lease, on generation 48233 of
+    its list;
+  - 9507's copy would have been skipped (lease held; seen directly in the
+    next sample, copy 9515);
+  - the evaluation expected the lease on its own recording, generation
+    48234. It found the lease elsewhere, so DLSS skipped the frame
+    (depth missing).
+- **Why gameplay works:** the two extra copies a frame differ in their
+  resources and fail the copy checks, so the stamp alone already picked the
+  request's copy.
+
+**v0.19.1.** `depth_copy_belongs` (`depth_lease.hpp`) is the lease rule. A copy
+belongs to a request only when:
+- the stamp, container and destination match, as before;
+- and, in the scaled build, its sequence is the request's `depth_sequence`,
+  the copy the request chose.
+
+Earlier identical copies no longer take the lease, so the request's own copy
+is leased on its own recording. The unscaled build has no chosen copy and
+keeps the stamp rule. Unit test `depth_lease`: the title pattern (three
+identical copies), gameplay, each stamp field, destination, retired and
+forwarded requests, and the unscaled rule. The in-game check is game-74
+(DLAA).
 
 ## What true DLAA needs (design)
 
