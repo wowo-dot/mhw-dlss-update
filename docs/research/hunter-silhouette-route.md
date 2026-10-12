@@ -67,6 +67,14 @@ symptom of a draw left at the 1280 x 720 viewport.
   - `Simple_Mt_AlphaTest`, with no visible artefact reported.
 - DLSS ran without faults, and there was no crash.
 
+**Open: scheduled with the long session test (the user, 2026-10-12).**
+- Rejection 0 records no state yet. Add the `Simple_Mt_AlphaTest` draw's
+  blend, write mask, depth, `fGlobalTransparency` and alpha test to the
+  diagnostics.
+- If it writes pixels, admit it. That needs its own binding admission, since
+  it binds neither CBMhMaterialGlobal nor tGBuffer1, plus a fixture
+  validation of the rule-1 adaptation.
+
 The list of rejections and fixes continues:
    - `Simple_Mt_AlphaTest` stays native. Redrawing a lit forward material at
      output size is a separate adaptation: its tiled lights are indexed in
