@@ -957,8 +957,10 @@ template<class F> bool observed_true(F &&idle,std::uint64_t ms){
 }
 bool live_modes() noexcept{return live_installed.load()&&healthy();}
 ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
-    ModeChange r;const auto began=GetTickCount64();
-    const auto mark=[&](unsigned phase){r.phase=phase;r.ms[phase]=GetTickCount64()-began;};
+    ModeChange r;
+    LARGE_INTEGER began{},frequency{};QueryPerformanceCounter(&began);QueryPerformanceFrequency(&frequency);
+    const auto mark=[&](unsigned phase){LARGE_INTEGER now{};QueryPerformanceCounter(&now);r.phase=phase;
+        r.us[phase]=frequency.QuadPart>0?static_cast<std::uint64_t>((now.QuadPart-began.QuadPart)*1000000/frequency.QuadPart):0;};
     // Nothing changed: admit frames again, unless a fault arrived meanwhile.
     const auto resume=[&](const char *why){
         r.reason=why;

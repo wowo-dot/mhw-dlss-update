@@ -38,7 +38,7 @@ struct ModeChange {
     bool ok{}, resumed{}, unchanged{};
     unsigned phase{};  // the last phase reached (above)
     std::string reason;
-    std::array<std::uint64_t, 7> ms{};  // time from the start at the end of each phase
+    std::array<std::uint64_t, 7> us{};  // microseconds from the start at the end of each phase
     std::uint64_t barrier{};  // the queue barrier's fence value
     dlss_sdk::ReconstructionMode mode{};  // the mode DLSS runs afterwards
     unsigned render_width{}, render_height{};

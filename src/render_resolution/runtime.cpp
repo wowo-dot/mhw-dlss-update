@@ -51,6 +51,14 @@ struct Snapshot {
     // Which snapshot check failed (0 = qualified; see snapshot()), with the
     // renderer's sizing word and whether a backend wrapper was present.
     unsigned check{},sizing{};bool wrapper{};
+    // The live aspect change (docs/research/live-aspect.md, clean image):
+    // sRender's window size (+0x1f448), the aspect mode requested and applied
+    // (+0x7b440, +0x7b43c; 0 window, 1 16:9, 2 64:27; 0x229ef20 applies it and
+    // writes the scene size +0x198), its pending-change flags (+0x1f548; 4 is
+    // the aspect, consumed by 0x229b020 on the game thread) and the scene
+    // rectangle in the window (+0x188, 0x229f090).
+    unsigned window_width{},window_height{},aspect_requested{},aspect_applied{},flags{};
+    std::array<int,4> rect{};
 };
 Snapshot baseline{},reduced{},last{},restoration{};
 // The startup admission snapshot, and the first and last unqualified
@@ -65,6 +73,35 @@ float truncated_ratio(const Plan &t) noexcept {return static_cast<float>(t.rende
 // The view scale of the planned extent: the quantized request, or its
 // truncated ratio (identical, 0.5, for 2:1 scenes).
 bool planned_view_scale(const Plan &t,float value) noexcept {return value==t.quantized||value==truncated_ratio(t);}
+// Aspect-change capture (part B research). A visit is notable when the
+// requested and applied aspect differ, the scene or window size differs from
+// the previous visit's, the sizing bit is set, or it is the first refused
+// snapshot. Each capture holds the 16 visits before its first notable visit
+// and the 240 from it; two per session (a switch and its way back).
+struct Visit {std::int64_t qpc{};Snapshot s;};
+constexpr unsigned visits_before=16,visits_after=240,capture_slots=2;
+struct Capture {std::array<Visit,visits_before+visits_after> visits{};unsigned count{};bool done{},written{};};
+std::array<Visit,visits_before> recent_visits{};unsigned recent_count{};
+std::array<Capture,capture_slots> captures{};unsigned capture_index{};bool capturing{};
+Snapshot previous_visit{};bool previous_valid{};
+// Under the lock, every visit.
+void note_visit(const Snapshot &s) noexcept {
+    LARGE_INTEGER now{};QueryPerformanceCounter(&now);const Visit v{now.QuadPart,s};
+    const bool notable=s.aspect_requested!=s.aspect_applied||(s.sizing&1)||(s.check&&unqualified==1)||
+        (previous_valid&&(s.width!=previous_visit.width||s.height!=previous_visit.height||
+                          s.window_width!=previous_visit.window_width||s.window_height!=previous_visit.window_height));
+    previous_visit=s;previous_valid=true;
+    if(capturing){
+        auto &c=captures[capture_index];c.visits[c.count++]=v;
+        if(c.count==c.visits.size()){c.done=true;capturing=false;++capture_index;}
+    }else if(notable&&capture_index<capture_slots){
+        auto &c=captures[capture_index];c.count=0;
+        const unsigned kept=std::min(recent_count,visits_before);
+        for(unsigned i=0;i<kept;++i)c.visits[c.count++]=recent_visits[(recent_count-kept+i)%visits_before];
+        c.visits[c.count++]=v;capturing=true;
+    }
+    recent_visits[recent_count++%visits_before]=v;
+}
 struct ViewportSample {std::uint64_t tick{};std::uintptr_t caller{};std::array<float,6> values{};};
 ViewportSample first_reduced_viewport{},last_reduced_viewport{};
 void fail(unsigned reason) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,reason);requested=false;}
@@ -92,6 +129,10 @@ bool snapshot(Snapshot &s,const Plan &t) noexcept {
     s.wrapper=wrapper!=0;
     if(!pb::read(image+0x51c5320,config)||!config||config>UINTPTR_MAX-0x2cdb||!pb::read(config+0x2cda,override_width))return stop(7);
     s.tick=GetTickCount64();s.view=view;s.width_override=override_width;
+    // Diagnostics only (the aspect capture); a failed read leaves zeros.
+    pb::read(renderer+0x1f448,s.window_width);pb::read(renderer+0x1f44c,s.window_height);
+    pb::read(renderer+0x7b440,s.aspect_requested);pb::read(renderer+0x7b43c,s.aspect_applied);
+    pb::read(renderer+0x1f548,s.flags);pb::read(renderer+0x188,s.rect);
     if(!pb::read(renderer+0x1f210,s.frame)||!pb::read(renderer+0x198,s.width)||!pb::read(renderer+0x19c,s.height)||
        !pb::read(renderer+0x1f0,s.desired)||!pb::read(renderer+0x1f4,s.applied)||!pb::read(renderer+0x1f8,s.previous)||
        !pb::read(renderer+0x200,s.content_desired)||!pb::read(renderer+0x204,s.content)||!pb::read(renderer+0x208,s.combined)||
@@ -141,10 +182,10 @@ void update(pb::Frame *f) {
     }
     mhw_binding_forward(original,f);
     Snapshot s{};
-    if(!snapshot(s,t)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;if(overrides)fail(4);return;}
+    if(!snapshot(s,t)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;note_visit(s);if(overrides)fail(4);return;}
     {
     Lock lock;
-    ++visits;last=s;
+    ++visits;last=s;note_visit(s);
     if(s.view_scale<.5F){if(!truncated_views++)first_truncated=s;}
     // A retarget during this visit leaves its count for the next one.
     if(t.quantized==target.quantized&&s.applied==t.quantized&&planned_view_scale(t,s.view_scale)&&s.combined==t.quantized&&s.view_combined==t.quantized){
@@ -266,6 +307,26 @@ bool retarget(float scale,std::string &reason) {
     target=planned;scaled_observed=0;return true;
 }
 std::uint64_t applied_visits() noexcept {Lock lock;return scaled_observed;}
+unsigned write_captures(std::ostream &out,bool partial) {
+    Lock lock;unsigned written=0;
+    for(unsigned i=0;i<capture_slots;++i){auto &c=captures[i];
+        if(c.written||!c.count||(!c.done&&!(partial&&capturing&&i==capture_index)))continue;
+        LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);const auto first=c.visits[0].qpc;
+        out<<std::boolalpha<<"{\"event\":\"aspect_capture\",\"schema\":1,\"index\":"<<i<<",\"complete\":"<<c.done
+           <<",\"before\":"<<visits_before<<",\"visits\":[";
+        for(unsigned j=0;j<c.count;++j){const auto &v=c.visits[j];const auto &s=v.s;
+            const auto us=frequency.QuadPart>0?(v.qpc-first)*1000000/frequency.QuadPart:0;
+            out<<(j?",":"")<<"{\"us\":"<<us<<",\"frame\":"<<s.frame<<",\"check\":"<<s.check<<",\"sizing\":"<<s.sizing
+               <<",\"display\":["<<s.width<<','<<s.height<<"],\"window\":["<<s.window_width<<','<<s.window_height
+               <<"],\"aspect\":["<<s.aspect_requested<<','<<s.aspect_applied<<"],\"flags\":"<<s.flags
+               <<",\"rect\":["<<s.rect[0]<<','<<s.rect[1]<<','<<s.rect[2]<<','<<s.rect[3]
+               <<"],\"scales\":["<<s.desired<<','<<s.applied<<','<<s.content_desired<<','<<s.content<<','<<s.view_scale<<','<<s.view_content
+               <<"],\"override\":"<<s.width_override<<",\"basis\":["<<s.basis_width<<','<<s.basis_height
+               <<"],\"depth\":["<<s.depth_width<<','<<s.depth_height<<"],\"wrapper\":"<<s.wrapper<<'}';}
+        out<<"]}\n"<<std::flush;c.written=true;++written;
+    }
+    return written;
+}
 bool active_ready() noexcept {Lock lock;return requested.load()&&!fault.load()&&scaled_observed>=32;}
 bool input_stamp(std::uintptr_t view,InputStamp &out) noexcept {
     Lock lock;Snapshot s{};

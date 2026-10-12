@@ -33,6 +33,7 @@
 #include "../../third_party/al/al_plugin.h"
 #include "../temporal_present/observer.hpp"
 #include "../continuous_dlaa/runtime.hpp"
+#include "../render_resolution/runtime.hpp"
 #include "../scaled_temporal/stream_route.hpp"
 #include <cstddef>
 #include <iterator>
@@ -226,8 +227,8 @@ void change_dlss_mode(mhw::dlss_sdk::ReconstructionMode wanted,DlssRetry &retry)
     log<<"{\"event\":\"dlss_mode_change\",\"from\":"<<quoted(mhw::alpha::dlss_mode_value(from))
        <<",\"requested\":"<<quoted(mhw::alpha::dlss_mode_value(wanted))<<",\"mode\":"<<quoted(mhw::alpha::dlss_mode_value(r.mode))
        <<",\"ok\":"<<r.ok<<",\"unchanged\":"<<r.unchanged<<",\"resumed\":"<<r.resumed<<",\"phase\":"<<r.phase
-       <<",\"reason\":"<<quoted(r.reason)<<",\"render\":["<<r.render_width<<','<<r.render_height<<"],\"barrier\":"<<r.barrier<<",\"phase_ms\":[";
-    for(unsigned i=1;i<r.ms.size();++i)log<<(i>1?",":"")<<r.ms[i];
+       <<",\"reason\":"<<quoted(r.reason)<<",\"render\":["<<r.render_width<<','<<r.render_height<<"],\"barrier\":"<<r.barrier<<",\"phase_us\":[";
+    for(unsigned i=1;i<r.us.size();++i)log<<(i>1?",":"")<<r.us[i];
     log<<"],\"frame_generation\":{\"paused\":"<<generation<<",\"settle_ms\":"<<fg_ms<<",\"settled\":"<<settled<<",\"released\":"<<released
        <<"},\"total_ms\":"<<GetTickCount64()-began<<",\"retry\":"<<retry.count<<"}\n"<<std::flush;
     if(r.ok){
@@ -1026,14 +1027,10 @@ DWORD WINAPI worker(void*) noexcept {
                     mhw::frame_generation::game::mode(fg_mode, fg_target);
 #endif
                     mhw::frame_generation::game::arm(true);
-                    sl::DLSSGState fg_state{};
-                    const auto fg_state_result = sdk.frame_generation_state(sl::ViewportHandle{0}, fg_state);
+                    // DLSS-G's state is read on the present thread (Streamline
+                    // requires it there) and logged in fg_status ("state").
                     log << "{\"event\":\"fg_armed\",\"width\":" << chain.width << ",\"height\":" << chain.height
                         << ",\"scene\":[" << scene.x << ',' << scene.y << ',' << scene.width << ',' << scene.height << ']'
-                        << ",\"state_result\":" << static_cast<int>(fg_state_result) << ",\"status\":" << static_cast<unsigned>(fg_state.status)
-                        << ",\"max_generated\":" << fg_state.numFramesToGenerateMax << ",\"min_width_or_height\":" << fg_state.minWidthOrHeight
-                        << ",\"vsync_support\":" << static_cast<int>(fg_state.bIsVsyncSupportAvailable)
-                        << ",\"dynamic_supported\":" << static_cast<int>(fg_state.bIsDynamicMFGSupported)
                         << ",\"display_hz\":" << mhw::frame_generation::display_refresh_hz() << "}\n" << std::flush;
 #ifdef MHW_ALPHA
                     mhw::alpha::status::generation(mhw::alpha::status::Generation::armed);
@@ -1090,6 +1087,7 @@ DWORD WINAPI worker(void*) noexcept {
                         live_check_sleeps=0;
                         require(driver_mode("live",reflex_applied.load()!=0),"driver-live-mode");
                     }
+                    mhw::render_resolution::write_captures(log);
                     {   // A live preset change from the menu, or its retry.
                         mhw::dlss_sdk::ReconstructionMode wanted{};
                         if(mhw::continuous_dlaa::requested_mode(wanted)){dlss_retry={};change_dlss_mode(wanted,dlss_retry);}
@@ -1210,7 +1208,11 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_ALPHA
             // A DLSS fault: the game's own rendering returns, at its own render
             // scale and anti-aliasing, instead of the reduced scale DLSS asked for.
-            if(stop_reason==std::string_view("temporal_unhealthy"))mhw::continuous_dlaa::stop();
+            if(stop_reason==std::string_view("temporal_unhealthy")){
+                mhw::continuous_dlaa::stop();
+                const auto until=GetTickCount64()+3000;
+                while(GetTickCount64()<until&&!mhw::render_resolution::write_captures(log))Sleep(50);
+            }
 #endif
             const auto frames=live_frames->snapshot();
             if(stop_reason==std::string_view("duration")&&std::filesystem::exists(stop_file))stop_reason="stop_request";
@@ -1230,6 +1232,9 @@ DWORD WINAPI worker(void*) noexcept {
                 log_lifecycle(log);
                 poll_perf(log,output,name,creation,perf_requests);
                 if(GetTickCount64()-window_start>=5000){log_frames(log,"fg_off");log_latency(log);mhw::perf::sampler::write(log);window_start=GetTickCount64();}
+#ifdef MHW_ALPHA
+                mhw::render_resolution::write_captures(log);
+#endif
                 const auto stats=presentation->snapshot();
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes

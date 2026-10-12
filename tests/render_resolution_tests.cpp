@@ -148,6 +148,16 @@ int main(){
     rr::requested=true;rr::restored=false;rr::fault=0;action=3;exception_step();action=0;
     check(rr::fault==7&&rr::pending==0&&!rr::requested,"setter exception drains without holding telemetry lock");
     step();check(rr::restored&&!rr::ownership.owned&&get<float>(renderer.p+0x1f0)==1.F,"setter exception retains native rendering");
+    {   // Aspect capture: a pending aspect change (requested 64:27, applied
+        // still 16:9) starts one; it is written once it holds 256 visits.
+        put(renderer.p+0x7b440,2U);put(renderer.p+0x7b43c,1U);step();put(renderer.p+0x7b43c,2U);
+        std::ostringstream early;const auto before_full=rr::write_captures(early);
+        for(unsigned i=0;i<300;++i)step();
+        std::ostringstream c;const auto written=rr::write_captures(c);
+        check(before_full+written>=1&&c.str().find("\"aspect\":[2,1]")!=std::string::npos&&c.str().find("\"complete\":true")!=std::string::npos,
+              "an aspect change is captured");
+        std::ostringstream again;check(rr::write_captures(again)==0,"each capture is written once");
+    }
     std::ostringstream out;rr::write(out);check(out.str().find("\"dlss_evaluations\":0")!=std::string::npos,"diagnostic scope explicit");
     std::cout<<"Render-resolution geometry, ownership, native update, ABI, stop and exception checks passed.\n";
 }

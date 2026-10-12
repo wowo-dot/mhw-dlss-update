@@ -27,6 +27,10 @@ bool active_ready() noexcept;
 bool retarget(float scale,std::string &reason);
 // Visits since install or the last retarget that showed the target applied.
 std::uint64_t applied_visits() noexcept;
+// Worker: writes each aspect-change capture once it is complete (with
+// `partial`, also one still filling), as "aspect_capture" events. Returns how
+// many it wrote. Research for the live aspect change (part B).
+unsigned write_captures(std::ostream &,bool partial=false);
 bool input_stamp(std::uintptr_t view,InputStamp &) noexcept;
 void stop() noexcept;
 bool healthy() noexcept;
