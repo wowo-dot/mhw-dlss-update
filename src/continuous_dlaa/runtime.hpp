@@ -4,7 +4,12 @@
 #include "../temporal_bindings/inputs.hpp"
 #include <filesystem>
 #include <iosfwd>
+#include "../dlss_sdk/geometry.hpp"
 namespace mhw::continuous_dlaa {
+// Before ready()/install() (alpha: dlss_mode in mhw_dlss.ini): the DLSS preset,
+// which also sets the render scale asked of the game. Performance by default.
+void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept;
+dlss_sdk::ReconstructionMode reconstruction_mode() noexcept;
 bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
 // install()'s qualification of the game (renderer discovery, code gates and,
 // for the scaled build, the native sizing admission) without side effects.

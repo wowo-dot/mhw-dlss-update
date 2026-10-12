@@ -23,7 +23,9 @@ int main(int argc,char **argv){try{
     }
     check(argc==1,"usage: scaled_effect_vertices_tests [capture-geometry.txt]");
     unsigned cases{};
-    for(auto g:std::array<sf::FilterGeometry,4>{{{1280,720,2560,1440},{64,32,128,64},{2560,1440,2560,1440},{65,33,130,66}}}){
+    // Performance, tiny 2:1, DLAA, odd 2:1, and the Quality and Balanced extents
+    // the game quantizes at 2560x1440.
+    for(auto g:std::array<sf::FilterGeometry,6>{{{1280,720,2560,1440},{64,32,128,64},{2560,1440,2560,1440},{65,33,130,66},{1696,954,2560,1440},{1472,828,2560,1440}}}){
         for(auto stage:{sf::EffectStage::motion_filter,sf::EffectStage::color_grade,sf::EffectStage::final_screen,sf::EffectStage::haze})for(bool full:{false,true}){
             const auto v=sf::effect_vertices(stage,g,full);const bool haze=stage==sf::EffectStage::haze;const bool triangle=stage==sf::EffectStage::final_screen||haze;
             check(v.count==(triangle?3U:4U),"primitive count");check(v.topology==D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,"native topology");
@@ -49,7 +51,7 @@ int main(int argc,char **argv){try{
             }++cases;
         }
     }
-    for(const auto bad:std::array<sf::FilterGeometry,7>{{{0,720,2560,1440},{1280,0,2560,1440},{1280,720,1920,1080},{1280,720,2560,720},{2560,1440,1280,720},{UINT_MAX,720,2560,1440},{17,9,34,18}}})
+    for(const auto bad:std::array<sf::FilterGeometry,7>{{{0,720,2560,1440},{1280,0,2560,1440},{1280,720,1920,1440},{1280,720,2560,720},{2560,1440,1280,720},{UINT_MAX,720,2560,1440},{17,9,34,18}}})
         for(auto stage:{sf::EffectStage::motion_filter,sf::EffectStage::color_grade,sf::EffectStage::final_screen,sf::EffectStage::haze})rejects([&]{sf::effect_vertices(stage,bad,true);});
     rejects([]{sf::effect_vertices(static_cast<sf::EffectStage>(8),{64,32,128,64},true);});
     // uDepthColorFilter (game-41 capture) draws haze's native triangle and keeps
@@ -60,7 +62,11 @@ int main(int argc,char **argv){try{
     {const auto d=sf::effect_vertices(sf::EffectStage::screen_filter,{1280,720,2560,1440},false);
      const std::array<float,12> captured{-1,1,0,0,-1,-3,0,1,3,1,1,0};
      for(unsigned i=0;i<12;++i)check(d.values[i]==captured[i],"screen filter (depth color) matches the captured native vertices");}
-    // A pillarboxed odd scene renders at the truncated half (game-20).
-    check(sf::valid_filter_geometry({1706,720,3413,1440})&&!sf::valid_filter_geometry({1707,720,3413,1440})&&!sf::valid_filter_geometry({1705,720,3413,1440}),"truncated half");
+    // One scale for both axes, at least half, truncated per axis: a pillarboxed
+    // odd scene at the truncated half (game-20), the presets' extents, and not
+    // below half or with the axes disagreeing.
+    check(sf::valid_filter_geometry({1706,720,3413,1440})&&!sf::valid_filter_geometry({1705,720,3413,1440}),"truncated half");
+    check(sf::valid_filter_geometry({1696,954,2560,1440})&&sf::valid_filter_geometry({1472,828,2560,1440})&&
+          sf::valid_filter_geometry({1280,720,1920,1080})&&!sf::valid_filter_geometry({1696,955,2560,1440}),"preset extents");
     std::cout<<"PASS: "<<cases<<" geometry cases, 29 rejected configurations\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

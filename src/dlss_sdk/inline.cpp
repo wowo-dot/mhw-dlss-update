@@ -115,16 +115,23 @@ InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array
         require(p.parameters->Get(NVSDK_NGX_Parameter_SuperSampling_Available,&available)==NVSDK_NGX_Result_Success&&available==1&&
             p.parameters->Get(NVSDK_NGX_Parameter_SuperSampling_NeedsUpdatedDriver,&update)==NVSDK_NGX_Result_Success&&update==0&&
             p.parameters->Get(NVSDK_NGX_Parameter_SuperSampling_FeatureInitResult,&init)==NVSDK_NGX_Result_Success&&init==1,"inline capability values");
-        const auto quality=geometry.mode==ReconstructionMode::dlaa?NVSDK_NGX_PerfQuality_Value_DLAA:NVSDK_NGX_PerfQuality_Value_MaxPerf;
+        // The SDK's quality value and the preset hint it reads for that value;
+        // preset K (transformer) for every mode.
+        NVSDK_NGX_PerfQuality_Value quality=NVSDK_NGX_PerfQuality_Value_MaxPerf;const char *preset=NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance;
+        switch(geometry.mode){
+        case ReconstructionMode::dlaa:quality=NVSDK_NGX_PerfQuality_Value_DLAA;preset=NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA;break;
+        case ReconstructionMode::quality:quality=NVSDK_NGX_PerfQuality_Value_MaxQuality;preset=NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality;break;
+        case ReconstructionMode::balanced:quality=NVSDK_NGX_PerfQuality_Value_Balanced;preset=NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced;break;
+        case ReconstructionMode::performance:break;
+        }
         p.quality=static_cast<unsigned>(quality);
         if(geometry.mode!=ReconstructionMode::dlaa){
             p.optimal_result=NGX_DLSS_GET_OPTIMAL_SETTINGS(p.parameters,ow,oh,quality,&p.optimal.width,&p.optimal.height,
                 &p.maximum.width,&p.maximum.height,&p.minimum.width,&p.minimum.height,&p.sharpness);
-            require(p.optimal_result==1&&optimal_matches(geometry,p.optimal,p.minimum,p.maximum),"inline SDK optimal extent");
+            require(p.optimal_result==1&&render_supported(geometry,p.optimal,p.minimum,p.maximum),"inline SDK render extent outside the mode's range");
         }
         NVSDK_NGX_DLSS_Create_Params create{};create.Feature={w,h,ow,oh,quality};create.InFeatureCreateFlags=75;
-        p.parameters->Set(geometry.mode==ReconstructionMode::dlaa?NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA:
-            NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,static_cast<unsigned>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
+        p.parameters->Set(preset,static_cast<unsigned>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
         p.create_result=NGX_D3D12_CREATE_DLSS_EXT(p.create_list.Get(),1,1,&p.feature,p.parameters,&create);require(p.create_result==1&&p.feature,"inline CreateFeature");
         hr(p.create_list->Close(),"inline create close");ID3D12CommandList *lists[]{p.create_list.Get()};p.queue->ExecuteCommandLists(1,lists);hr(p.queue->Signal(p.create_fence.Get(),1),"inline create signal");
         const auto start_tick=GetTickCount64();while(p.create_fence->GetCompletedValue()==0&&GetTickCount64()-start_tick<15000)Sleep(1);

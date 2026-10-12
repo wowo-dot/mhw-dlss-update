@@ -3,7 +3,34 @@
 #include <cmath>
 
 namespace mhw::dlss_sdk {
-enum class ReconstructionMode { performance, dlaa };
+// The DLSS presets. Upscaling modes render below the output, DLAA at it.
+enum class ReconstructionMode { performance, dlaa, balanced, quality };
+constexpr bool upscales(ReconstructionMode m) noexcept {
+    return m==ReconstructionMode::performance||m==ReconstructionMode::balanced||m==ReconstructionMode::quality;
+}
+// The render scale each mode asks of the game. The game's setter quantizes it
+// to 16-pixel steps of the basis width (render_resolution::plan), so DLSS gets
+// the game's extent, not the SDK's optimal one.
+constexpr float requested_scale(ReconstructionMode m) noexcept {
+    switch(m){
+    case ReconstructionMode::quality: return 2.F/3.F;
+    case ReconstructionMode::balanced: return .58F;
+    case ReconstructionMode::dlaa: return 1.F;
+    case ReconstructionMode::performance: break;
+    }
+    return .5F;
+}
+// One scale q in [0.5, 1] for both axes, each truncated by the game:
+// render = floor(output * q). Holds when the per-axis intervals [r/o, (r+1)/o)
+// overlap and reach 0.5 (2r + 1 >= o). Exact 2:1 sizes satisfy it, as do a
+// 3413x1440 scene at 1706x720, and the presets' quantized extents (Quality
+// 1696x954 and Balanced 1472x828 of 2560x1440; render_resolution_tests checks
+// the plans of common displays).
+constexpr bool single_scale(std::uint64_t rw,std::uint64_t rh,std::uint64_t ow,std::uint64_t oh) noexcept {
+    if(!rw||!rh||rw>ow||rh>oh||2*rw+1<ow||2*rh+1<oh)return false;
+    if(rw==ow&&rh==oh)return true;
+    return rw*oh<(rh+1)*ow&&rh*ow<(rw+1)*oh;
+}
 struct Extent {
     unsigned width{},height{};
     constexpr bool operator==(const Extent &) const =default;
@@ -31,21 +58,17 @@ constexpr bool valid_geometry(const Geometry &g) noexcept {
        g.render.width>g.allocation.width||g.render.height>g.allocation.height||
        g.render.width>g.output.width||g.render.height>g.output.height)return false;
     if(g.mode==ReconstructionMode::dlaa)return g.render==g.output;
-    if(g.mode!=ReconstructionMode::performance)return false;
-    // One scale for both axes, each truncated by the game: render = floor(output*q).
-    // That holds when the intervals [r/o,(r+1)/o) of both axes overlap. Exact
-    // 2:1 sizes satisfy it; so does a 3413x1440 scene rendered at 1706x720.
-    const std::uint64_t rw=g.render.width,rh=g.render.height,ow=g.output.width,oh=g.output.height;
-    return rw<ow&&rh<oh&&rw*oh<(rh+1)*ow&&rh*ow<(rw+1)*oh;
+    if(!upscales(g.mode)||g.render==g.output)return false;
+    return single_scale(g.render.width,g.render.height,g.output.width,g.output.height);
 }
-// This upscale route is static: the render extent is the game's. Accept the
-// SDK's recommended extent within one pixel per axis (the SDK rounds a half
-// pixel where the game truncates), inside sane reported bounds; do not
-// silently resize captured inputs.
-constexpr bool optimal_matches(const Geometry &g,Extent optimal,Extent minimum,Extent maximum) noexcept {
-    const auto within_one=[](unsigned a,unsigned b){return a+1>=b&&b+1>=a;};
+// This upscale route is static: the render extent is the game's, quantized to
+// 16-pixel steps (Quality at 2560 renders 1696 wide where the SDK's optimal is
+// 1708). DLSS accepts any input extent within the minimum and maximum the SDK
+// reports for the mode (its dynamic-resolution range); the render extent must
+// lie inside it (one pixel of slack below, as the SDK rounds where the game
+// truncates), inside sane reported bounds. Captured inputs are never resized.
+constexpr bool render_supported(const Geometry &g,Extent optimal,Extent minimum,Extent maximum) noexcept {
     return valid_geometry(g)&&valid_extent(optimal)&&valid_extent(minimum)&&valid_extent(maximum)&&
-        within_one(g.render.width,optimal.width)&&within_one(g.render.height,optimal.height)&&
         minimum.width<=optimal.width&&minimum.height<=optimal.height&&
         maximum.width>=optimal.width&&maximum.height>=optimal.height&&
         maximum.width<=g.output.width&&maximum.height<=g.output.height&&

@@ -17,6 +17,7 @@ int main() {
     {
         const auto c = mhw::alpha::parse_config("", folder);
         check(c.frame_generation && c.multiplier == 2 && c.reflex && c.warnings.empty(), "defaults");
+        check(c.dlss_mode == mhw::dlss_sdk::ReconstructionMode::performance, "Performance by default");
         check(c.runtime_dir == folder && c.log_dir == folder / "logs", "default folders");
     }
     {
@@ -36,6 +37,19 @@ int main() {
         check(c.reflex, "reflex stays on");
         check(c.warnings.size() == 5, "five warnings");
         check(c.log_dir == folder / "logs", "empty folder keeps the default");
+    }
+    {
+        using mhw::dlss_sdk::ReconstructionMode;
+        const auto c = mhw::alpha::parse_config("dlss_mode = Quality\n", folder);
+        check(c.dlss_mode == ReconstructionMode::quality && c.warnings.empty(), "dlss_mode quality, any case");
+        check(mhw::alpha::parse_config("dlss_mode=dlaa", folder).dlss_mode == ReconstructionMode::dlaa, "dlss_mode dlaa");
+        check(mhw::alpha::parse_config("dlss_mode = balanced", folder).dlss_mode == ReconstructionMode::balanced, "dlss_mode balanced");
+        const auto bad = mhw::alpha::parse_config("dlss_mode = ultra_performance\n", folder);
+        check(bad.dlss_mode == ReconstructionMode::performance && bad.warnings.size() == 1, "unknown mode keeps Performance with a warning");
+        for (const auto m : {ReconstructionMode::dlaa, ReconstructionMode::quality, ReconstructionMode::balanced, ReconstructionMode::performance}) {
+            ReconstructionMode back{};
+            check(mhw::alpha::parse_dlss_mode(mhw::alpha::dlss_mode_value(m), back) && back == m, "mode values round-trip");
+        }
     }
     if (failures) return 1;
     std::printf("alpha config tests passed\n");

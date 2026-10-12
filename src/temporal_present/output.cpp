@@ -1,4 +1,5 @@
 #include "output.hpp"
+#include "../dlss_sdk/geometry.hpp"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <array>
@@ -102,9 +103,10 @@ Output::Output(ID3D12Device *device, unsigned w, unsigned h, bool continuous,boo
     const auto &r=p.region;
     require(r.width&&r.height&&r.width<=r.allocation_width&&r.height<=r.allocation_height&&r.width<=w&&r.height<=h&&
         r.allocation_width<=8192&&r.allocation_height<=8192&&UINT64(r.allocation_width)*r.allocation_height<=16777216&&
-        // Exact proportion, or the truncated half of a pillarboxed odd scene
-        // (3413x1440 rendered at 1706x720).
-        (UINT64(r.width)*h==UINT64(r.height)*w||(r.width==w/2&&r.height==h/2)),"presentation source region");
+        // One render scale in [0.5, 1] per axis, truncated by the game: exact
+        // proportions, the truncated half of a pillarboxed odd scene (3413x1440
+        // at 1706x720), and the DLSS presets' quantized extents.
+        dlss_sdk::single_scale(r.width,r.height,w,h),"presentation source region");
     D3D12_FEATURE_DATA_FORMAT_SUPPORT support{DXGI_FORMAT_R11G11B10_FLOAT};
     hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)), "presentation format query");
     require((support.Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D) &&

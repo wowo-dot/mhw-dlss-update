@@ -1,8 +1,10 @@
 #pragma once
 #include <array>
 #include <string>
+#include "../dlss_sdk/geometry.hpp"
 
 // The settings CMFM's "Settings" page shows, as the ini holds them (alpha).
+// - "DLSS mode" needs a restart: the pipeline is sized at start.
 // - "Frame generation" Off/On needs a restart: DLSS-G loads only at start.
 // - "Multiplier" changes at once while frame generation runs.
 // - One ini key holds both: Off writes "off", On writes the multiplier. While
@@ -11,9 +13,28 @@
 namespace mhw::alpha::menu_model {
 
 struct Settings {
+    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
     bool frame_generation = true;
     unsigned multiplier = 2;
 };
+
+// "DLSS mode" choices, highest quality first.
+inline constexpr std::array<dlss_sdk::ReconstructionMode, 4> modes{
+    dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality, dlss_sdk::ReconstructionMode::balanced,
+    dlss_sdk::ReconstructionMode::performance};
+inline constexpr const char *mode_names[]{"DLAA", "Quality", "Balanced", "Performance"};
+static_assert(std::size(mode_names) == modes.size());
+constexpr int choice_of(dlss_sdk::ReconstructionMode mode) {
+    for (unsigned i = 0; i < modes.size(); ++i)
+        if (modes[i] == mode) return static_cast<int>(i);
+    return 3;
+}
+// The mode at a CHOICE index; false outside the list.
+constexpr bool mode_at(int index, dlss_sdk::ReconstructionMode &mode) {
+    if (index < 0 || index >= static_cast<int>(modes.size())) return false;
+    mode = modes[static_cast<unsigned>(index)];
+    return true;
+}
 
 inline constexpr std::array<unsigned, 4> multipliers{2, 3, 4, 6};
 inline constexpr const char *multiplier_names[]{"2x", "3x", "4x", "6x"};

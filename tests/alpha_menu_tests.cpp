@@ -17,6 +17,7 @@ void check(bool ok, const char *what) {
 constexpr std::string_view shipped =
     "# MHW DLSS / Frame Generation (alpha) configuration.\r\n"
     "# Lines are \"key = value\"; '#' or ';' starts a comment. Folders are relative to this folder.\r\n"
+    "dlss_mode = performance    ; dlaa, quality, balanced, performance (applies from the next start)\r\n"
     "frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)\r\n"
     "reflex = on                ; on (off is not available yet)\r\n"
     "runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package\r\n"
@@ -55,6 +56,18 @@ void ini_edits() {
               "a commented-out line is not a setting");
     }
     check(a::frame_generation_value(false, 4) == "off" && a::frame_generation_value(true, 3) == "3x", "ini values");
+    {
+        // The shipped ini's dlss_mode changes in place; an ini without one gains it.
+        const auto out = a::with_value(shipped, "dlss_mode", "quality");
+        std::string expected(shipped);
+        expected.replace(expected.find("= performance") + 2, 11, "quality");
+        check(out == expected, "dlss_mode replaced in the shipped ini, comment and CRLF kept");
+        check(a::with_value("reflex = on\r\n", "dlss_mode", "dlaa") == "reflex = on\r\ndlss_mode = dlaa\r\n", "dlss_mode added");
+        const auto c = a::parse_config(out, folder);
+        check(c.dlss_mode == mhw::dlss_sdk::ReconstructionMode::quality && c.frame_generation && c.warnings.empty(), "reads back");
+        const auto again = a::with_value("dlss_mode = quality   ; dlaa, quality\nframe_generation = off\n", "dlss_mode", "dlaa");
+        check(again == "dlss_mode = dlaa   ; dlaa, quality\nframe_generation = off\n", "dlss_mode value replaced in place");
+    }
 }
 
 void settings_model() {
@@ -69,6 +82,10 @@ void settings_model() {
     check(m::multiplier_allowed(4, 3, why) && !m::multiplier_allowed(6, 3, why), "limit 3: up to 4x");
     check(why == "This graphics card shows 4x at most.", "limit 3 reason");
     check(m::multiplier_allowed(6, 5, why), "limit 5: 6x");
+    using mhw::dlss_sdk::ReconstructionMode;
+    check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3, "mode choices, best first");
+    ReconstructionMode mode{};
+    check(m::mode_at(1, mode) && mode == ReconstructionMode::quality && !m::mode_at(4, mode) && !m::mode_at(-1, mode), "mode at index");
 }
 
 void status_lines() {
@@ -89,6 +106,15 @@ void status_lines() {
     check(s::dlss_line(v) == "Performance", "running, sizes unknown");
     v.render_width = 1280, v.render_height = 720, v.scene_width = 2560, v.scene_height = 1440;
     check(s::dlss_line(v) == "Performance, 1280x720 to 2560x1440", "running with sizes");
+    {
+        auto q = v;
+        q.dlss_mode = "Quality";
+        q.render_width = 1696, q.render_height = 954;
+        check(s::dlss_line(q) == "Quality, 1696x954 to 2560x1440", "quality line");
+        q.dlss_mode = "DLAA";
+        q.render_width = 2560, q.render_height = 1440;
+        check(s::dlss_line(q) == "DLAA, 2560x1440", "DLAA line");
+    }
     check(s::reflex_line(v) == "On (low latency)", "reflex on");
 
     v.generation = s::Generation::armed;

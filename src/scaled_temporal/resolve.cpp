@@ -8,7 +8,7 @@ continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &pass,
     using continuous_dlaa::ResolveOutcome;
     continuous_dlaa::ResolveResult result;
     const auto g=pass.geometry();
-    if(!bindings.ready()||!dlss_sdk::valid_geometry(g)||g.mode!=dlss_sdk::ReconstructionMode::performance||
+    if(!bindings.ready()||!dlss_sdk::valid_geometry(g)||
         !recovery.spatial_contract({g.allocation.width,g.allocation.height,g.render.width,g.render.height},g.output.width,g.output.height))return result;
     // Allocate the binding restorer and reserve all bounded references before
     // SDK commands. Rejection cannot leave a half-recorded native output.

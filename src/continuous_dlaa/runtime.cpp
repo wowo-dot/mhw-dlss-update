@@ -66,6 +66,7 @@ dlss_sdk::Geometry scaled_geometry;
 // even scenes, truncated per axis for a pillarboxed odd scene (3413 -> 1706).
 dlss_sdk::Extent scaled_render{};
 unsigned render_width(){return scaled_render.width;}unsigned render_height(){return scaled_render.height;}
+dlss_sdk::ReconstructionMode configured_mode{dlss_sdk::ReconstructionMode::performance};
 #else
 constexpr unsigned hook_count=11;
 constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
@@ -897,6 +898,16 @@ void native_seh(unsigned kind,NativeFrame *f){
 }
 }
 void native(unsigned kind,NativeFrame *f){pending.fetch_add(1);__try{native_seh(kind,f);}__finally{pending.fetch_sub(1);}}
+#ifdef MHW_CONTINUOUS_SCALED
+void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept{if(!pass)configured_mode=m;}
+// Worker: the mode DLSS runs (after install; it may differ from the configured
+// one, see install) or will run.
+dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_geometry.mode:configured_mode;}
+#else
+// The unscaled build always runs DLAA.
+void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
+dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
+#endif
 bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
     if(!pass)return false;
     scene_width=runtime.width;scene_height=runtime.height;window_width=runtime.window_width;window_height=runtime.window_height;return true;
@@ -926,7 +937,7 @@ bool ready(std::uintptr_t image,std::string &reason){
         if(pass){reason="continuous-already-prepared";return false;}
         pb::Runtime found;if(!qualified(image,found,reason))return false;
 #ifdef MHW_CONTINUOUS_SCALED
-        if(!render_resolution::ready(image,.5F,reason))return false;
+        if(!render_resolution::ready(image,dlss_sdk::requested_scale(configured_mode),reason))return false;
 #endif
         return true;
     }catch(const std::exception &e){reason=e.what();return false;}
@@ -943,11 +954,17 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&raw[i]))))throw std::runtime_error("continuous raw allocation");}
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         #ifdef MHW_CONTINUOUS_SCALED
-        {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,.5F);
+        {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,
+             dlss_sdk::requested_scale(configured_mode));
          if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};
          edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
          edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);}
-        scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},dlss_sdk::ReconstructionMode::performance};
+        // DLAA renders at the scene size. A basis width that is not a multiple
+        // of 16 pixels quantizes 100% just below it; DLSS then upscales that
+        // extent as Quality.
+        auto mode=configured_mode;
+        if(mode==dlss_sdk::ReconstructionMode::dlaa&&(render_width()!=runtime.width||render_height()!=runtime.height))mode=dlss_sdk::ReconstructionMode::quality;
+        scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},mode};
         pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
 #else
@@ -973,7 +990,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         };
         #ifdef MHW_CONTINUOUS_SCALED
         // The sizing gates must be checked before activation modifies their callees.
-        if(!render_resolution::install(image,.5F,reason,true))throw std::runtime_error(reason);
+        if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
 #ifdef MHW_FG_GAME

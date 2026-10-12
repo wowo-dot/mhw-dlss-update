@@ -651,6 +651,8 @@ DWORD WINAPI worker(void*) noexcept {
             runtime = alpha_config.runtime_dir;
             fg_plugin = alpha_config.frame_generation; fg_multiplier = alpha_config.multiplier;
             mhw::alpha::status::generation(fg_plugin ? mhw::alpha::status::Generation::starting : mhw::alpha::status::Generation::off);
+            mhw::continuous_dlaa::reconstruction_mode(alpha_config.dlss_mode);
+            mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(alpha_config.dlss_mode));
             mhw::perf::toggles.store(mhw::perf::all_toggles);
             mhw::reflex::sdk_verbose_log = false;
         }
@@ -742,7 +744,8 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
             << "}\n" << std::flush;
 #ifdef MHW_ALPHA
-        log << "{\"event\":\"alpha_config\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
+        log << "{\"event\":\"alpha_config\",\"dlss_mode\":\"" << mhw::alpha::dlss_mode_value(alpha_config.dlss_mode)
+            << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
             << ",\"reflex\":" << alpha_config.reflex << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -880,6 +883,7 @@ DWORD WINAPI worker(void*) noexcept {
                     mhw::reflex::temporal::render_extent(render_w,render_h);
                     mhw::reflex::temporal::scene_extent(scene_w,scene_h,window_w,window_h);
                     mhw::alpha::status::dlss_sizes(render_w,render_h,scene_w,scene_h);
+                    mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(mhw::continuous_dlaa::reconstruction_mode()));
                     mhw::alpha::status::dlss(mhw::alpha::status::Stage::running);
                 }
 #endif

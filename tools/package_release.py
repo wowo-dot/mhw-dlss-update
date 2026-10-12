@@ -42,6 +42,7 @@ COVERAGE = [
 ]
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
+dlss_mode = performance    ; dlaa, quality, balanced, performance (applies from the next start)
 frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)
 reflex = on                ; on (off is not available yet)
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
@@ -68,9 +69,10 @@ Install: copy the AsteraLoader folder from this archive into the game folder
 Organizer 2. The mod is an Astera Loader plugin and lives in
 AsteraLoader/plugins/mhw_dlss.
 
-Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file). DLSS
-currently runs at Performance quality (half resolution); other modes come with
-later builds.
+Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file).
+DLSS mode (dlss_mode): DLAA renders at full resolution; Quality, Balanced and
+Performance render at 67%, 58% and 50% and upscale. The default is Performance.
+A change applies from the next start.
 With CMFM installed (an optional Astera Loader plugin), the game's own menus
 gain a Mods entry below Options. There, DLSS > Settings changes frame
 generation and its multiplier, and DLSS > Status shows what the mod is doing.

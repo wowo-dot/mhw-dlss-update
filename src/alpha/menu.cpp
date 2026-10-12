@@ -21,6 +21,9 @@ namespace fg = frame_generation::game;
 enum Row : std::uint32_t {
     frame_generation_row = 1,
     multiplier_row,
+    dlss_mode_row,
+    upscaling_section = 20,
+    generation_section,
     mod_row = 10,
     dlss_row,
     reflex_row,
@@ -36,6 +39,7 @@ struct State {
     std::filesystem::path folder, ini;
     mm::Settings settings;  // what the ini holds, or will hold once saved
     bool dirty{};           // changed since the last save
+    bool mode_dirty{}, generation_dirty{};  // which keys
     bool fg_loaded{};       // DLSS-G loaded at start: the multiplier applies live
 };
 State state;
@@ -111,12 +115,18 @@ void save() {
     if (!state.dirty) return;
     std::string text;
     read_file(state.ini, text);  // a missing file starts empty
-    const auto value = frame_generation_value(state.settings.frame_generation, state.settings.multiplier);
-    const auto updated = with_frame_generation(text, value);
+    const auto &s = state.settings;
+    const auto value = frame_generation_value(s.frame_generation, s.multiplier);
+    const std::string mode = dlss_mode_value(s.dlss_mode);
+    auto updated = text;
+    if (state.mode_dirty) updated = with_value(updated, "dlss_mode", mode);
+    if (state.generation_dirty) updated = with_frame_generation(updated, value);
     const auto check = parse_config(updated, state.folder);
-    if (check.frame_generation != state.settings.frame_generation ||
-        (check.frame_generation && check.multiplier != state.settings.multiplier)) {
-        log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for frame_generation = " + value + " would not read back; not written");
+    if ((state.mode_dirty && check.dlss_mode != s.dlss_mode) ||
+        (state.generation_dirty && (check.frame_generation != s.frame_generation ||
+                                    (check.frame_generation && check.multiplier != s.multiplier)))) {
+        log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", frame_generation = " + value +
+                              " would not read back; not written");
         return;
     }
     std::string why;
@@ -124,8 +134,8 @@ void save() {
         log(AL_LOG_WARNING, "menu: mhw_dlss.ini not written: " + why);
         return;
     }
-    state.dirty = false;
-    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with frame_generation = " + value);
+    state.dirty = state.mode_dirty = state.generation_dirty = false;
+    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", frame_generation = " + value);
 }
 
 // Page opened: the ini as it is now (players may edit it while the game runs),
@@ -134,6 +144,7 @@ void reload() {
     std::string text;
     if (state.dirty || !read_file(state.ini, text)) return;
     const auto c = parse_config(text, state.folder);
+    state.settings.dlss_mode = c.dlss_mode;
     state.settings.frame_generation = c.frame_generation;
     if (c.frame_generation) state.settings.multiplier = c.multiplier;
 }
@@ -143,6 +154,7 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
         std::lock_guard lock(state.mutex);
         if (id == frame_generation_row) value->i = state.settings.frame_generation ? 1 : 0;
         else if (id == multiplier_row) value->i = mm::choice_of(state.settings.multiplier);
+        else if (id == dlss_mode_row) value->i = mm::choice_of(state.settings.dlss_mode);
         else return CMFM_ERROR;
         return CMFM_OK;
     } catch (...) {
@@ -168,6 +180,12 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
         std::lock_guard lock(state.mutex);
         auto &s = state.settings;
         bool live = false;
+        if (id == dlss_mode_row) {
+            if (!mm::mode_at(value->i, s.dlss_mode)) return CMFM_ERROR;
+            state.dirty = state.mode_dirty = true;
+            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_mode_value(s.dlss_mode) + " (from the next start)");
+            return CMFM_OK;
+        }
         if (id == frame_generation_row) {
             s.frame_generation = value->i != 0;
         } else if (id == multiplier_row) {
@@ -179,7 +197,7 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
         } else {
             return CMFM_ERROR;
         }
-        state.dirty = true;
+        state.dirty = state.generation_dirty = true;
         log(AL_LOG_INFO, "menu: frame_generation = " + frame_generation_value(s.frame_generation, s.multiplier) +
                              (live ? " (multiplier applied now)" : " (from the next start)"));
         return CMFM_OK;
@@ -259,10 +277,16 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.self = self;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.frame_generation, config.multiplier};
+            state.settings = {config.dlss_mode, config.frame_generation, config.multiplier};
             state.fg_loaded = fg_loaded;
         }
         cmfm_setting_t settings[]{
+            row(upscaling_section, CMFM_TYPE_SECTION, "Upscaling", nullptr),
+            row(dlss_mode_row, CMFM_TYPE_CHOICE, "DLSS mode",
+                "DLAA renders at full resolution; Quality, Balanced and Performance render at 67%, 58% and 50% and "
+                "upscale. Lower is faster.",
+                CMFM_FLAG_RESTART),
+            row(generation_section, CMFM_TYPE_SECTION, "Frame generation", nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, "Frame generation",
                 "DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics card.",
                 CMFM_FLAG_RESTART),
@@ -270,14 +294,16 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
                 "Frames shown for each rendered frame; 3x and up need an RTX 50. A change applies at once while frame "
                 "generation runs."),
         };
-        settings[0].default_value.i = 1;
-        settings[1].choices = mm::multiplier_names;
-        settings[1].choice_count = static_cast<std::uint32_t>(mm::multipliers.size());
-        settings[1].default_value.i = mm::choice_of(2);
+        settings[1].choices = mm::mode_names;
+        settings[1].choice_count = static_cast<std::uint32_t>(mm::modes.size());
+        settings[1].default_value.i = mm::choice_of(dlss_sdk::ReconstructionMode::performance);
+        settings[3].default_value.i = 1;
+        settings[4].choices = mm::multiplier_names;
+        settings[4].choice_count = static_cast<std::uint32_t>(mm::multipliers.size());
+        settings[4].default_value.i = mm::choice_of(2);
         const cmfm_setting_t lines[]{
             row(mod_row, CMFM_TYPE_TEXT, "Mod", "The mod's state, as Astera Loader shows it.", CMFM_FLAG_LIVE),
-            row(dlss_row, CMFM_TYPE_TEXT, "DLSS", "Upscaling: this version runs DLSS at Performance (half resolution).",
-                CMFM_FLAG_LIVE),
+            row(dlss_row, CMFM_TYPE_TEXT, "DLSS", "The DLSS mode and the render and output resolutions.", CMFM_FLAG_LIVE),
             row(reflex_row, CMFM_TYPE_TEXT, "Reflex", "NVIDIA Reflex Low Latency, always on.", CMFM_FLAG_LIVE),
             row(generation_row, CMFM_TYPE_TEXT, "Frame generation", "Frames shown for each rendered frame right now.",
                 CMFM_FLAG_LIVE),

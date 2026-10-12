@@ -1,0 +1,75 @@
+# DLSS presets (v0.17.0, 2026-10-12)
+
+The roadmap's "DLSS ready to ship" step begins with the quality presets:
+DLAA, Quality, Balanced and Performance. Ultra Performance is left out by the
+user's call. The game's render-scale setter only goes down to 50%, so it would
+need a fight with the game for little gain.
+
+Step 1 (this version) picks the preset at start: the ini's `dlss_mode`, or the
+Mods menu, where the change is marked "Restart needed". Step 2 will rebuild
+the pipeline at a new render size while the game runs. That gives live preset
+changes and fixes the live 16:9 / 21:9 stop.
+
+## Presets
+
+| Preset | Scale asked of the game | At 2560x1440 (quantized by the game) | NGX quality value, preset hint |
+|---|---|---|---|
+| DLAA | 1.0 | 2560x1440 | DLAA, `Hint_Render_Preset_DLAA` |
+| Quality | 2/3 | 1696x954 | MaxQuality, `..._Quality` |
+| Balanced | 0.58 | 1472x828 | Balanced, `..._Balanced` |
+| Performance | 0.5 | 1280x720 | MaxPerf, `..._Performance` |
+
+- Preset K (transformer) is used for every mode, as before.
+- The game's setter quantizes the scale to 16-pixel steps of the basis width
+  (`render_resolution::plan`). DLSS gets that extent, never a resized one.
+- A DLAA basis width that is not a multiple of 16 quantizes just below 100%.
+  DLSS then runs that extent as Quality.
+
+## What changed
+
+- **`dlss_sdk::single_scale`.** This is the one rule for every render extent:
+  one scale in [0.5, 1] for both axes, truncated per axis.
+  - Replaced the "identity or exact half" gates in three places:
+    - the DLSS geometry contract;
+    - the shader adapters' gate (`valid_filter_geometry`, which covers the
+      filter, haze, depth of field, depth colour, effects, screen-shader and
+      silhouette adapters);
+    - the spatial fallback (`temporal_present::Output`).
+  - The adaptations already used the actual ratio render/output.
+- **`render_supported`** replaces `optimal_matches`. The render extent must
+  lie in the mode's reported range (the NGX minimum and maximum), not within
+  one pixel of the optimal extent. Example: Quality at 2560 renders 1696 wide,
+  where NGX's optimal is 1708.
+- **`continuous_dlaa::reconstruction_mode`** is set by the worker from the
+  config before preparing. It replaces the three hard-coded `.5F` scales. The
+  scaled resolve no longer insists on Performance.
+- **Ini, menu and status.**
+  - The ini key is `dlss_mode = dlaa | quality | balanced | performance`
+    (default Performance). The log's `alpha_config` event records it.
+  - The menu's Settings page has an "Upscaling" section with "DLSS mode"
+    (CHOICE, RESTART) above the "Frame generation" section.
+  - Status reads "Quality, 1696x954 to 2560x1440" or "DLAA, 2560x1440".
+
+## Checked offline
+
+- **Tests:** 668 of 668 pass, plus 182 of 182 code gates on the clean image.
+  New tests:
+  - the presets' geometries and range checks (`dlss_sdk_contract`);
+  - the plan of every preset on nine common displays and on 21:9 pillarboxed
+    in a 32:9 window is a single scale (`render_resolution_tests`);
+  - the Quality and Balanced extents in the effect-vertex tests;
+  - the ini key, menu model and status lines (`alpha_menu_tests`,
+    `alpha_config_tests`).
+- **Bug caught by the new test:** a first version of `single_scale` accepted
+  touching intervals. That admitted 2560x1439 of 2560x1440, which no single
+  scale can produce.
+
+## Not yet proven (hypotheses until the in-game runs)
+
+- The shader adapters were verified on the GPU at 2:1 and at identity (and at
+  a fractional 2:3 in `temporal_spatial_fractional_warp`). Real game shaders
+  at Quality and Balanced ratios run for the first time in game.
+- NGX's reported minimum and maximum for Quality and Balanced have not been
+  seen yet. The SDK receipt in the log records the optimal, minimum and
+  maximum. If the game's extent falls outside them, DLSS fails closed, with
+  the reason "inline SDK render extent outside the mode's range".

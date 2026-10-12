@@ -20,6 +20,7 @@ enum class Generation : unsigned { off, starting, armed, unavailable, stopped };
 struct View {
     Loader loader = Loader::active;
     std::string loader_reason;
+    std::string dlss_mode = "Performance";  // as players read it
     Stage dlss = Stage::starting, reflex = Stage::starting;
     std::string dlss_reason, reflex_reason;
     unsigned render_width{}, render_height{}, scene_width{}, scene_height{};
@@ -38,6 +39,7 @@ void dlss(Stage, std::string_view reason = {}) noexcept;
 void reflex(Stage, std::string_view reason = {}) noexcept;
 void generation(Generation, std::string_view reason = {}) noexcept;
 void dlss_sizes(unsigned render_width, unsigned render_height, unsigned scene_width, unsigned scene_height) noexcept;
+void dlss_mode(std::string_view name) noexcept;
 // The worker stopped on `reason`: what had not started yet is off.
 void worker_failed(std::string_view reason) noexcept;
 // Menu thread.
@@ -97,8 +99,10 @@ inline std::string dlss_line(const View &v) {
     if (v.dlss == Stage::starting) return "Starting";
     if (v.dlss == Stage::off) return with_reason("Off", reason_text(v.dlss_reason));
     if (!v.dlss_healthy) return "Stopped; the game renders without DLSS";
-    if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return "Performance";
-    return "Performance, " + size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
+    if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return v.dlss_mode;
+    if (v.render_width == v.scene_width && v.render_height == v.scene_height)
+        return v.dlss_mode + ", " + size_text(v.scene_width, v.scene_height);
+    return v.dlss_mode + ", " + size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
 }
 
 inline std::string reflex_line(const View &v) {

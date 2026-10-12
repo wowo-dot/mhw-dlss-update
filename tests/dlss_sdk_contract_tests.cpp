@@ -51,20 +51,39 @@ int main(){
         bad=upscale;bad.render=e;if(valid_geometry(bad))return 27;
         bad=upscale;bad.output=e;if(valid_geometry(bad))return 28;
     }
-    if(!optimal_matches(upscale,{1280,720},{640,360},{2560,1440}))return 29;
+    if(!render_supported(upscale,{1280,720},{640,360},{2560,1440}))return 29;
     // A pillarboxed 21:9 scene in a 5120x1440 window: the game truncates
     // 1706.5 where the SDK may round to 1707 (game-20).
     const Geometry pillar{{3413,1440},{1706,720},{3413,1440},ReconstructionMode::performance};
-    if(!valid_geometry(pillar)||!optimal_matches(pillar,{1707,720},{1707,720},{3413,1440})||
-       !optimal_matches(pillar,{1706,720},{1706,720},{3413,1440}))return 38;
+    if(!valid_geometry(pillar)||!render_supported(pillar,{1707,720},{1707,720},{3413,1440})||
+       !render_supported(pillar,{1706,720},{1706,720},{3413,1440}))return 38;
     bad=pillar;bad.render={1706,721};if(valid_geometry(bad))return 39;
-    bad=pillar;bad.render={1704,720};if(valid_geometry(bad)||optimal_matches(bad,{1707,720},{1707,720},{3413,1440}))return 40;
-    if(optimal_matches(pillar,{1708,720},{1708,720},{3413,1440})||optimal_matches(pillar,{1707,720},{1707,720},{1705,1440}))return 41;
-    if(optimal_matches(upscale,{1278,720},{640,360},{2560,1440})||
-       optimal_matches(upscale,{1280,720},{1281,720},{2560,1440})||
-       optimal_matches(upscale,{1280,720},{640,360},{1279,720})||
-       optimal_matches(upscale,{1280,720},{640,360},{2561,1440})||
-       optimal_matches(upscale,{1280,720},{0,0},{2560,1440}))return 30;
+    bad=pillar;bad.render={1704,720};if(valid_geometry(bad)||render_supported(bad,{1707,720},{1707,720},{3413,1440}))return 40;
+    if(render_supported(pillar,{1708,720},{1708,720},{3413,1440})||render_supported(pillar,{1707,720},{1707,720},{1705,1440}))return 41;
+    // The render extent is the game's, not the SDK's optimal one: any extent
+    // inside the mode's reported range is accepted; bounds must be sane.
+    if(!render_supported(upscale,{1278,720},{640,360},{2560,1440})||
+       render_supported(upscale,{1280,720},{1281,720},{2560,1440})||
+       render_supported(upscale,{1280,720},{640,360},{1279,720})||
+       render_supported(upscale,{1280,720},{640,360},{2561,1440})||
+       render_supported(upscale,{1280,720},{0,0},{2560,1440}))return 30;
+    // The presets at 2560x1440, quantized by the game (16-pixel steps): Quality
+    // 1696x954 where the SDK's optimal is 1708x960, Balanced 1472x828, DLAA.
+    const Geometry quality{{2560,1440},{1696,954},{2560,1440},ReconstructionMode::quality};
+    const Geometry balanced{{2560,1440},{1472,828},{2560,1440},ReconstructionMode::balanced};
+    const Geometry dlaa_scaled{{2560,1440},{2560,1440},{2560,1440},ReconstructionMode::dlaa};
+    if(!valid_geometry(quality)||!valid_geometry(balanced)||!valid_geometry(dlaa_scaled)||
+       !render_supported(quality,{1708,960},{854,480},{2560,1440})||!render_supported(balanced,{1485,835},{854,480},{2560,1440}))return 42;
+    if(render_supported(quality,{1708,960},{1700,956},{2560,1440}))return 43;
+    bad=quality;bad.render=bad.output;if(valid_geometry(bad))return 44;
+    bad=dlaa_scaled;bad.render={1696,954};if(valid_geometry(bad))return 45;
+    // One scale per axis, at least half, truncated by the game.
+    if(!single_scale(1280,720,1920,1080)||!single_scale(2288,957,3440,1440)||!single_scale(2560,1440,2560,1440)||
+       single_scale(1279,720,2560,1440)||single_scale(1280,721,2560,1440)||single_scale(2560,1439,2560,1440)||
+       single_scale(2561,1440,2560,1440)||single_scale(0,720,2560,1440))return 46;
+    if(requested_scale(ReconstructionMode::performance)!=.5F||requested_scale(ReconstructionMode::dlaa)!=1.F||
+       !(requested_scale(ReconstructionMode::balanced)>.5F&&requested_scale(ReconstructionMode::balanced)<requested_scale(ReconstructionMode::quality)))return 47;
+    if(!upscales(ReconstructionMode::quality)||upscales(ReconstructionMode::dlaa))return 48;
     PixelJitter mapped;
     if(!projection_jitter(upscale,{.375F,-.4375F},2560,1440,mapped)||mapped.x!=.09375F||mapped.y!=.109375F)return 31;
     if(!projection_jitter(upscale,{.375F,-.4375F},1280,720,mapped)||mapped.x!=.1875F||mapped.y!=.21875F)return 32;

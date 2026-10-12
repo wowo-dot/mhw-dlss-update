@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "../dlss_sdk/geometry.hpp"
 
 namespace mhw::alpha {
 // mhw_dlss.ini next to the DLL (alpha). Lines are "key = value"; '#' or ';'
@@ -11,14 +12,16 @@ namespace mhw::alpha {
 // values are reported as warnings and keep the default. Relative folders are
 // relative to the DLL's folder.
 //
+//   dlss_mode = performance ; dlaa, quality, balanced, performance
 //   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x (DLSS-G not loaded when off)
 //   reflex = on             ; on (off is not available yet)
 //   runtime_dir = .         ; Streamline and NVIDIA DLSS DLLs
 //   log_dir = logs          ; log files of each launch
 //
-// DLSS runs at Performance (half resolution); DLAA and other modes come with
-// later builds.
+// The DLSS mode sets the render scale asked of the game (Performance 50%,
+// Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
 struct Config {
+    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
     bool frame_generation = true;
     unsigned multiplier = 2;
     bool reflex = true;
@@ -32,6 +35,36 @@ inline std::string trimmed_lower(std::string_view s) {
     std::string out(s);
     for (auto &c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return out;
+}
+
+// The ini value of a DLSS mode, and the mode of an ini value (false if unknown).
+inline const char *dlss_mode_value(dlss_sdk::ReconstructionMode m) {
+    switch (m) {
+    case dlss_sdk::ReconstructionMode::dlaa: return "dlaa";
+    case dlss_sdk::ReconstructionMode::quality: return "quality";
+    case dlss_sdk::ReconstructionMode::balanced: return "balanced";
+    case dlss_sdk::ReconstructionMode::performance: break;
+    }
+    return "performance";
+}
+// The mode as players read it (menu and status lines).
+inline const char *dlss_mode_name(dlss_sdk::ReconstructionMode m) {
+    switch (m) {
+    case dlss_sdk::ReconstructionMode::dlaa: return "DLAA";
+    case dlss_sdk::ReconstructionMode::quality: return "Quality";
+    case dlss_sdk::ReconstructionMode::balanced: return "Balanced";
+    case dlss_sdk::ReconstructionMode::performance: break;
+    }
+    return "Performance";
+}
+inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode &m) {
+    for (const auto candidate : {dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality,
+                                 dlss_sdk::ReconstructionMode::balanced, dlss_sdk::ReconstructionMode::performance})
+        if (value == dlss_mode_value(candidate)) {
+            m = candidate;
+            return true;
+        }
+    return false;
 }
 
 inline Config parse_config(std::string_view text, const std::filesystem::path &dll_folder) {
@@ -54,7 +87,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         const auto key = trimmed_lower(line.substr(0, equals));
         const auto raw = line.substr(equals + 1);
         const auto value = trimmed_lower(raw);
-        if (key == "frame_generation") {
+        if (key == "dlss_mode") {
+            if (!parse_dlss_mode(value, c.dlss_mode)) c.warnings.push_back(where + "dlss_mode must be dlaa, quality, balanced or performance");
+        } else if (key == "frame_generation") {
             if (value == "off") c.frame_generation = false;
             else if (value == "2x" || value == "3x" || value == "4x" || value == "6x") {
                 c.frame_generation = true;
@@ -92,11 +127,11 @@ inline std::string frame_generation_value(bool on, unsigned multiplier) {
     return on ? std::to_string(multiplier) + "x" : "off";
 }
 
-// `text` with frame_generation set to `value`. Only the value of the last
-// frame_generation line changes (the one parse_config ends up with): its key,
-// spacing, comment and line ending stay, as does every other byte. Without
-// such a line, one is added at the end with the file's line ending.
-inline std::string with_frame_generation(std::string_view text, std::string_view value) {
+// `text` with `key` set to `value`. Only the value of the last line with that
+// key changes (the one parse_config ends up with): its key, spacing, comment
+// and line ending stay, as does every other byte. Without such a line, one is
+// added at the end with the file's line ending. `key` is lower case.
+inline std::string with_value(std::string_view text, std::string_view key, std::string_view value) {
     constexpr auto none = std::string_view::npos;
     std::size_t begin = none, end = none;
     for (std::size_t pos = 0; pos < text.size();) {
@@ -104,7 +139,7 @@ inline std::string with_frame_generation(std::string_view text, std::string_view
         auto line = text.substr(pos, (newline == none ? text.size() : newline) - pos);
         if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
         if (const auto comment = line.find_first_of("#;"); comment != none) line = line.substr(0, comment);
-        if (const auto equals = line.find('='); equals != none && trimmed_lower(line.substr(0, equals)) == "frame_generation") {
+        if (const auto equals = line.find('='); equals != none && trimmed_lower(line.substr(0, equals)) == key) {
             auto first = equals + 1, last = line.size();
             while (first < last && std::isspace(static_cast<unsigned char>(line[first]))) ++first;
             while (last > first && std::isspace(static_cast<unsigned char>(line[last - 1]))) --last;
@@ -117,6 +152,9 @@ inline std::string with_frame_generation(std::string_view text, std::string_view
     const std::string_view newline = text.find("\r\n") != none ? "\r\n" : "\n";
     std::string out(text);
     if (!out.empty() && out.back() != '\n') out.append(newline);
-    return out.append("frame_generation = ").append(value).append(newline);
+    return out.append(key).append(" = ").append(value).append(newline);
+}
+inline std::string with_frame_generation(std::string_view text, std::string_view value) {
+    return with_value(text, "frame_generation", value);
 }
 }  // namespace mhw::alpha

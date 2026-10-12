@@ -1,5 +1,6 @@
 // Production callback and forwarding ASM against owned native-shaped memory.
 #include "../src/render_resolution/runtime.cpp"
+#include "../src/dlss_sdk/geometry.hpp"
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
@@ -45,6 +46,21 @@ void exception_step(){bool caught=false;
 int main(){
     const auto p=rr::plan({2560,1440},.5F);check(p.valid&&p.render==rr::Extent{1280,720}&&p.quantized==.5F,"half-size plan");
     const auto q=rr::plan({2560,1440},2.F/3.F);check(q.valid&&q.render==rr::Extent{1696,954},"native 16-pixel quantization");
+    // The DLSS presets: Balanced 58% quantizes to 1472 (0.575), DLAA is the scene.
+    check(rr::plan({2560,1440},.58F).render==rr::Extent{1472,828},"balanced plan");
+    check(rr::plan({2560,1440},1.F).render==rr::Extent{2560,1440}&&rr::plan({2560,1440},1.F).quantized==1.F,"full-size plan");
+    check(rr::plan({1920,1080},2.F/3.F).render==rr::Extent{1280,720},"quality at 1080p");
+    // Every preset on common displays (and 21:9 pillarboxed in a 32:9 window):
+    // the game's quantized extent is one scale per axis, as DLSS and the
+    // shader adaptations require.
+    for(const auto d:{rr::Extent{1920,1080},rr::Extent{2560,1440},rr::Extent{3440,1440},rr::Extent{3840,2160},rr::Extent{5120,1440},
+                      rr::Extent{2560,1080},rr::Extent{1600,900},rr::Extent{1366,768},rr::Extent{3413,1440}})
+        for(const auto m:{mhw::dlss_sdk::ReconstructionMode::performance,mhw::dlss_sdk::ReconstructionMode::balanced,
+                          mhw::dlss_sdk::ReconstructionMode::quality,mhw::dlss_sdk::ReconstructionMode::dlaa}){
+            const auto planned=rr::plan(d,d.width==3413?5120U:d.width,mhw::dlss_sdk::requested_scale(m));
+            if(!planned.valid)continue;  // widths the native setter cannot quantize
+            check(mhw::dlss_sdk::single_scale(planned.render.width,planned.render.height,d.width,d.height),"preset plan is one scale");
+        }
     check(rr::plan({3840,2160},.5F).render==rr::Extent{1920,1080},"4K geometry without allocation claim");
     check(rr::plan({5120,1440},.5F).render==rr::Extent{2560,720},"ultrawide geometry");
     // 21:9 pillarboxed in a 5120x1440 window: the scale quantizes against the
