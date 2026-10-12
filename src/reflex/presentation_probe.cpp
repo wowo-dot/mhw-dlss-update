@@ -183,18 +183,18 @@ const char* reflex_mode_name(unsigned mode) noexcept {
 }
 // The worker, under sdk_mutex: applies the requested mode if it changed. Off
 // is refused while DLSS-G is loaded (it needs Reflex); the menu already keeps
-// players from asking for that.
-void apply_reflex_mode(bool fg_loaded) {
+// players from asking for that. True when a new mode was applied.
+bool apply_reflex_mode(bool fg_loaded) {
     const auto requested=reflex_requested.load();
-    if(requested==reflex_applied.load()||requested>2)return;
+    if(requested==reflex_applied.load()||requested>2)return false;
     if(requested==0&&fg_loaded){
         log << "{\"event\":\"reflex_mode_refused\",\"mode\":0,\"reason\":\"frame generation needs Reflex\"}\n" << std::flush;
-        reflex_requested.store(reflex_applied.load());return;
+        reflex_requested.store(reflex_applied.load());return false;
     }
     const auto mode=static_cast<sl::ReflexMode>(requested);
     const auto result=sdk.options(mode);mode_options("live",mode,result);
-    if(result==sl::Result::eOk){reflex_applied.store(requested);mhw::alpha::status::reflex_mode(reflex_mode_name(requested));}
-    else reflex_requested.store(reflex_applied.load());
+    if(result==sl::Result::eOk){reflex_applied.store(requested);mhw::alpha::status::reflex_mode(reflex_mode_name(requested));return true;}
+    reflex_requested.store(reflex_applied.load());return false;
 }
 #endif
 #endif
@@ -986,6 +986,11 @@ DWORD WINAPI worker(void*) noexcept {
                 }
 #endif
                 const auto started=GetTickCount64();auto last=started;
+#ifdef MHW_ALPHA
+                // After a live mode change: the sleep count at which the driver is
+                // asked whether it took the change (it applies at the next sleep).
+                std::uint64_t live_check_sleeps{};
+#endif
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
 #endif
@@ -1021,7 +1026,14 @@ DWORD WINAPI worker(void*) noexcept {
 #endif
                     if(!frames.running || frames.faults || !stats.routing || stats.faults)break;
 #ifdef MHW_ALPHA
-                    if(reflex_requested.load()!=reflex_applied.load()){std::lock_guard lock(sdk_mutex);apply_reflex_mode(fg_plugin);}
+                    if(reflex_requested.load()!=reflex_applied.load()){
+                        std::lock_guard lock(sdk_mutex);
+                        if(apply_reflex_mode(fg_plugin))live_check_sleeps=live_frames->snapshot().sleeps+2;
+                    }else if(live_check_sleeps&&frames.sleeps>=live_check_sleeps){
+                        // As at the first heartbeat: low latency on for On and Boost, off for Off.
+                        live_check_sleeps=0;
+                        require(driver_mode("live",reflex_applied.load()!=0),"driver-live-mode");
+                    }
 #endif
 #ifdef MHW_FG_SCENE_PROBE
                     if(frames.completed&&scene_requested<4) {

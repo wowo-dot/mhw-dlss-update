@@ -1,4 +1,4 @@
-# Reflex options (v0.20.0)
+# Reflex options (v0.20.0 to v0.20.2)
 
 Roadmap step 2, "DLSS wholesale". Reflex was always Low Latency. Players can
 now choose it.
@@ -65,10 +65,52 @@ DLSS Frame Generation needs Reflex. Three places enforce that:
   reason, the `sl::ReflexMode` values, the three status lines, and that a
   failure still degrades.
 
-## In game (not yet seen)
+## In game: game-79 (v0.20.1, 2026-10-13)
 
-Boost and Off have not run in game yet. To confirm:
-- a live On → Boost → On switch: `mode_options` with phase `live`, then
-  `driver_sleep_status`;
-- a start with frame generation off and Reflex Off: `frames_armed` mode 0,
-  and the driver reporting low latency off.
+The Settings page shows again (CMFM: "Settings" added, 7 settings). This run
+used DLAA at 2560x1440, with three launches. Every launch ended with
+`game_exit`, with no Reflex fault and empty crash logs.
+
+| Launch | Start | Live changes | Reflex frames | DLAA frames |
+|---|---|---|---|---|
+| 1 | FG 2x, Reflex On | On → Boost → On | 15,213 | 8,314 of 8,315 |
+| 2 | FG 2x, Reflex On | menu: FG Off, Reflex Off (next start) | 5,616 | n/a |
+| 3 | FG off, Reflex Off | Off → On → Boost | 20,900 | 15,991 of 15,992 |
+
+- **Live changes:** each was one `mode_options` with phase `live` and result
+  0, with `boost_requested` set only for Boost. CMFM logged the same choices.
+  FG kept generating through On → Boost → On.
+- **Launch 2:**
+  - the menu took Off only for the next start;
+  - it logged "frame generation runs until then";
+  - the worker made no live call;
+  - the saved ini read back as `frame_generation = off`, `reflex = off`.
+- **The Off start (launch 3):**
+  - `mode_options` activate mode 0 and `frames_armed` mode 0;
+  - the driver reported `low_latency` false at `running_on`;
+  - DLSS-G was not loaded (`fg_unsupported` `plugin_off`);
+  - the frame hooks kept running in Off (sleeps = frames), as designed.
+- **Latency, launch 3 (PCL ranges in µs, one 20 s window each):** these
+  are not a benchmark, since the scene changed between windows.
+
+  | Mode | queue | driver |
+  |---|---|---|
+  | Off | 3,802–5,218 | 421–1,377 |
+  | On | 3,190–4,080 | 271–893 |
+  | Boost | 3,460–4,518 | 283–932 |
+
+  The scene was GPU-bound at about 240 fps, so Boost has little to do there.
+
+The phase names `activate_on`, `requested_on` and `running_on` predate the
+modes and are kept for log compatibility. With Off they carry mode 0 and
+`low_latency` false.
+
+### The driver check after a live change (v0.20.2)
+
+game-79 showed that only the first heartbeat asked the driver for its mode,
+so a live change was never confirmed. Now, after a change applies, the worker
+takes the sleep count. Two sleeps later it logs `driver_sleep_status` with
+phase `live`, under the first heartbeat's rule (low latency on for On and
+Boost, off for Off). A mismatch fails closed with `driver-live-mode`, the same
+as a startup mismatch. The driver's sleep-status structure (version 1) has no
+Boost flag, so Boost is confirmed only as low latency on.
