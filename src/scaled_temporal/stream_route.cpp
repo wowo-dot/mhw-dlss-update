@@ -1071,7 +1071,8 @@ bool draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,unsigned
 }
 bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,std::string &reason){
  cfg=c;width=w;height=h;render_w=rw;render_h=rh;
- if(!valid_filter_geometry({rw,rh,w,h})||(rw==w&&rh==h)){reason="stream extent";return false;}
+ // DLAA renders at the scene size; the route then runs at identity.
+ if(!valid_filter_geometry({rw,rh,w,h})){reason="stream extent";return false;}
  struct Gate{unsigned rva,bytes;const char *sha;};
  constexpr Gate gates[]{
   {0x23d2370,1047,"0cf82d2b8b6259fbb5cad0c7468a780bb7026d9a20f720e9bbd8b5cd501fffc3"},
@@ -1435,6 +1436,9 @@ void write_summary(std::ostream &o){
  a(indexed_candidate_reasons);o<<",\"max\":"<<indexed_candidates_max<<",\"capacity\":"<<Plan::late_capacity<<'}';
  // Which late draws drew the output-sized silhouette, and why others stayed native.
  o<<",\"silhouette\":";silhouette_summary(o);
+ // Depth of field: a failed qualification rejects the whole plan (rejection 17,
+ // qualification 14), so DLSS skips the frame. Which check failed, and how.
+ o<<",\"dof\":";dof_write(o);
  // Dependency discovery failures: {rejection, stage, texture check, role, engine
  // format, DXGI format, width, height} of the first and the latest.
  o<<",\"dependency_failures\":"<<dependency_failures<<",\"dependency_failure\":{\"first\":";a(dependency_first_failure);

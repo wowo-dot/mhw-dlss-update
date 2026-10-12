@@ -89,6 +89,10 @@ IndexedScope indexed_before(const pb::Frame &f) noexcept {
   if(!field(f.gpr[1],8,scope.state)||!field(scope.state,0x20,scope.draw.command))fail(14);
  }catch(...){Lock lock;fail(14);}return scope;
 }
+// CBScreen (32-bit words): [4..5] fScreenSize (output), [6..7] fScreenInverseSize,
+// [10..11] iViewSize (render), [12..13] fViewOffset, [14..15] fViewSize,
+// [16..17] fViewInverseSize = 1 / render. At 2:1, 1/render equals 2/output,
+// which the first checks assumed (game-61: every draw rejected at Quality).
 // Engine global binding IDs (shader census): CBScreen 12, CBMhMaterialGlobal
 // 433, tVolumeBlendDepthMap 159, tGBuffer1 41. The hidden-surface variants bind
 // them in different registers (mask t1..t20, material b5 or b6); only some
@@ -217,8 +221,9 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(!bound||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
     screen[4]!=std::bit_cast<unsigned>(float(width))||screen[5]!=std::bit_cast<unsigned>(float(height))||screen[6]!=std::bit_cast<unsigned>(1.F/width)||screen[7]!=std::bit_cast<unsigned>(1.F/height)||
     screen[10]!=render_w||screen[11]!=render_h||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(render_w))||screen[15]!=std::bit_cast<unsigned>(float(render_h))||
-    screen[16]!=std::bit_cast<unsigned>(2.F/width)||screen[17]!=std::bit_cast<unsigned>(2.F/height))
-  return native(6,{u(bound),material[2],material[3],material[4],screen[4],screen[5],screen[10],screen[11],screen[12],screen[13],screen[14],screen[15]});
+    screen[16]!=std::bit_cast<unsigned>(1.F/float(render_w))||screen[17]!=std::bit_cast<unsigned>(1.F/float(render_h)))
+  return native(6,{u(bound),material[2],material[3],material[4],screen[4],screen[5],screen[6],screen[7],screen[10],screen[11],screen[12],screen[13],
+   screen[14],screen[15],screen[16],screen[17]});
  for(unsigned i=0;i<2;++i){if(!textures[i])continue;const auto d=textures[i]->GetDesc();if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width||d.Height!=height||
     d.DepthOrArraySize!=1||d.MipLevels!=1||d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=(i?DXGI_FORMAT_R8G8B8A8_TYPELESS:DXGI_FORMAT_R32_FLOAT))
    return native(7,{i,u(d.Dimension),u(d.Width),u(d.Height),u(d.DepthOrArraySize),u(d.MipLevels),u(d.SampleDesc.Count),u(d.Format)});}

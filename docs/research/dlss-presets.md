@@ -64,6 +64,33 @@ changes and fixes the live 16:9 / 21:9 stop.
   touching intervals. That admitted 2560x1439 of 2560x1440, which no single
   scale can produce.
 
+## game-61 (v0.17.0): the first Quality run
+
+**Outline at about 2/3 size and position (confirmed cause).** Every
+silhouette draw was rejected with reason 6 (160k). The check compared CBScreen
+`[16..17]`, which is `fViewInverseSize` (1 / render), with 2 / output. At
+Performance both are 1/1280, so the check had only ever passed by coincidence.
+**v0.17.1** compares it with 1 / render. The log now records all four inverse
+sizes when the check fails.
+
+**DLSS and frame generation stop after a cutscene (an older bug, not caused
+by the presets).**
+- **What happened:**
+  - Two same-size `resize_buffers` calls came around the cutscene.
+  - From then on every plan was rejected: plan rejection 17 (an overlay
+    failure), command-gate branch 10 (`input_bindings`), qualification 14,
+    which is `dof_qualify`.
+  - Readiness then stayed `unbuilt`, DLSS skipped every frame (skip 7), and
+    frame generation had no ready frames.
+- **It also happened at Performance:** two game-55 runs (v0.15.0) show the
+  same rejection, 1,143 and 498 times.
+- **Why the depth of field fails is still unknown.** The summary did not
+  include the DOF diagnostics. v0.17.1 adds `route.dof`: the failing check,
+  the failed pass, and the first failure's misses.
+
+**DLAA would not have started.** The stream route's `prepare` refused identity
+extents. v0.17.1 lets it run at identity; every adaptation then uses scale 1.
+
 ## Not yet proven (hypotheses until the in-game runs)
 
 - The shader adapters were verified on the GPU at 2:1 and at identity (and at
