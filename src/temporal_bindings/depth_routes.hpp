@@ -17,6 +17,13 @@ struct CopyPacket {
 bool stamp(const Reader &,const Config &,Stamp &);
 bool packet(const Reader &,std::uintptr_t,CopyPacket &);
 bool copy_states(std::span<const D3D12_RESOURCE_BARRIER>,std::uintptr_t,std::uintptr_t) noexcept;
+// As copy_states, but a resource without an observed transition is accepted:
+// the native CopyResource itself requires COPY_SOURCE/COPY_DEST, so a copy that
+// ran establishes them. Observed transitions must still end there, and
+// aliasing, split or subresource barriers still reject. For the plain depth
+// copy at render scale 1.0, whose transitions the planner may hoist out of the
+// callback (0x229eb22; game-67).
+bool copy_states_consistent(std::span<const D3D12_RESOURCE_BARRIER>,std::uintptr_t,std::uintptr_t) noexcept;
 bool draw_states(std::span<const D3D12_RESOURCE_BARRIER>,std::uintptr_t,std::uintptr_t) noexcept;
 bool prepare_pixels(unsigned,unsigned,std::string &);
 bool finish_pixels(bool) noexcept;

@@ -100,6 +100,16 @@ void route_contract_tests(){
   check(dr::copy_states(barriers,0x1000,0x2000),"exact depth-copy state interval");
   check(!dr::copy_states(std::span(barriers.data(),1),0x1000,0x2000),"missing destination state");
   check(!dr::copy_states(barriers,0x1000,0x1000),"copy state alias");
+  // Render scale 1.0: the copy itself establishes the states; only observed
+  // transitions must agree, and aliasing or contradictions still reject.
+  check(dr::copy_states_consistent(barriers,0x1000,0x2000),"consistent: exact interval");
+  check(dr::copy_states_consistent(std::span(barriers.data(),1),0x1000,0x2000),"consistent: destination transition hoisted");
+  check(dr::copy_states_consistent({},0x1000,0x2000),"consistent: both transitions hoisted");
+  check(!dr::copy_states_consistent(barriers,0x1000,0x1000),"consistent: copy state alias");
+  {auto bad=barriers;bad[1].Transition.StateAfter=D3D12_RESOURCE_STATE_RENDER_TARGET;
+   check(!dr::copy_states_consistent(bad,0x1000,0x2000),"consistent: contradicting destination state");}
+  {auto bad=barriers;bad[0].Type=D3D12_RESOURCE_BARRIER_TYPE_ALIASING;bad[0].Aliasing={reinterpret_cast<ID3D12Resource *>(0x1000ULL),nullptr};
+   check(!dr::copy_states_consistent(bad,0x1000,0x2000),"consistent: aliasing rejects");}
   for(unsigned variant=0;variant<5;++variant){auto bad=barriers;
     if(variant==0)bad[0].Transition.StateAfter=static_cast<D3D12_RESOURCE_STATES>(0x840);
     if(variant==1)bad[0].Flags=D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;

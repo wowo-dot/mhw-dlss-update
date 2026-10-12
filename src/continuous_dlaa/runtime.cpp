@@ -506,7 +506,12 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destinatio
     if(injected||current_kind!=2||!accepting.load())return;
     const auto &d=depth_consumer;
     if(++copy_count!=1||caller!=cfg.image+0x259e100||list!=current_list||reinterpret_cast<std::uintptr_t>(destination)!=d.destination.resource||reinterpret_cast<std::uintptr_t>(source)!=d.source.resource||
-        !dr::copy_states(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)){
+#ifdef MHW_CONTINUOUS_SCALED
+        !dr::copy_states_consistent(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)
+#else
+        !dr::copy_states(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)
+#endif
+        ){
         DEPTH_NOTE(5,8,d,{2,copy_count,caller,reinterpret_cast<std::uintptr_t>(list),reinterpret_cast<std::uintptr_t>(source),reinterpret_cast<std::uintptr_t>(destination)});return;}
     Lock lock;if(!accepting.load())return;if(lease.list){DEPTH_NOTE(5,2,d,{2,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame});++skips;return;}
     auto *l=find(list);if(!l||l->closed){DEPTH_NOTE(5,3,d,{2,reinterpret_cast<std::uintptr_t>(list)});return;}

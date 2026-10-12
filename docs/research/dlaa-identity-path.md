@@ -116,6 +116,20 @@ render extent equals the scene (`identity_extent`):
   right after;
 - at identity the lease alone qualifies the depth, with no scaled admission.
 
+**game-67 (v0.18.2).** The plain depth copy now reached the lease path. The
+copy's caller (`0x259e100`), command list, source, destination and count all
+matched. It was rejected (trace stage 5, reason 8) by `copy_states`, which
+must *see* both transitions inside the depth-consumer callback. At 100% the
+planner issues them earlier: the transition hoisting at `0x229eb22`
+described in `scaled-consumer-depth-copy.md`.
+
+**v0.18.3.** `copy_states_consistent` accepts a resource with no observed
+transition. The native `CopyResource`, which ran first, requires COPY_SOURCE
+and COPY_DEST, so the copy itself establishes them. Observed transitions must
+still end there, and aliasing, split and subresource barriers still reject.
+It is tested in `temporal_inputs_contract`. Only the 100% path uses it; the
+unscaled build keeps the strict check.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
