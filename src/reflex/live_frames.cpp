@@ -89,14 +89,24 @@ struct LiveFrames::State {
     FrameStamp stamp() const noexcept {
         return read_frame_stamp([](std::uintptr_t at, auto& out) noexcept { return pb::read(at,out); },renderer).value;
     }
-    bool identities() const noexcept {
-        std::uintptr_t e{},r{},b{},d{},link{};
-        return pb::read(image+0x51c4148,e) && e==engine && pb::read(image+0x51c4480,r) && r==renderer &&
-            pb::read(image+0x51c7050,b) && b==backend && pb::read(backend+0x18,d) && d==device &&
-            pb::read(engine+0xaf7b0,link) && link==renderer && pb::read(renderer+0x78,link) && link==backend;
+    // The failed identity links as a mask (0: all hold); see LiveFrameStats::Fault.
+    unsigned identity_links() const noexcept {
+        std::uintptr_t e{},r{},b{},d{},link{};unsigned failed{};
+        if(!pb::read(image+0x51c4148,e) || e!=engine)failed|=1;
+        if(!pb::read(image+0x51c4480,r) || r!=renderer)failed|=2;
+        if(!pb::read(image+0x51c7050,b) || b!=backend)failed|=4;
+        if(!pb::read(backend+0x18,d) || d!=device)failed|=8;
+        if(!pb::read(engine+0xaf7b0,link) || link!=renderer)failed|=16;
+        if(!pb::read(renderer+0x78,link) || link!=backend)failed|=32;
+        return failed;
     }
-    void fault(const char* why) noexcept {
-        if(!stats.faults) { ++stats.faults;reason=why; }
+    bool identities() const noexcept { return !identity_links(); }
+    unsigned call{}; // the hooked call being checked (LiveFrameStats::Fault::call)
+    void fault(const char* why, unsigned code=0, unsigned stage=0) noexcept {
+        if(!stats.faults) {
+            ++stats.faults;reason=why;
+            stats.fault={call,GetCurrentThreadId(),stats.owner,identity_links(),code,stage,frames.id(),stats.frame_active};
+        }
         stats.running=false;stats.frame_active=false;frames.stop();
     }
     bool accepted(sl::Result result, unsigned stage, FrameStamp value) noexcept {
@@ -104,13 +114,16 @@ struct LiveFrames::State {
         if(sample_count<samples.size() && frames.id()<=8)
             samples[sample_count++]={frames.id(),stage,GetCurrentThreadId(),static_cast<unsigned>(result),
                 static_cast<std::uint64_t>(time.QuadPart),frames.tokens(),frames.sleeps(),frames.markers(),value};
-        if(result!=sl::Result::eOk || frames.disabled()) { fault("frame-policy-or-sdk");return false; }
+        if(result!=sl::Result::eOk || frames.disabled()) {
+            fault("frame-policy-or-sdk",static_cast<unsigned>(result)|(frames.disabled()?0x100u:0u),stage);return false;
+        }
         return true;
     }
     bool enter(unsigned kind, const boundaries::Frame& f) noexcept {
         try {
             std::lock_guard lock(mutex);
             if(!stats.running)return false;
+            call=kind;
             if(kind==0 && stop_requested.load()) { stats.running=false;frames.stop();return false; }
             const auto thread=GetCurrentThreadId();
             if(!identities() || (stats.owner && stats.owner!=thread)) { fault("frame-owner-or-identity");return false; }
@@ -134,6 +147,7 @@ struct LiveFrames::State {
         try {
             std::lock_guard lock(mutex);
             if(!ticket || !stats.running)return;
+            call=100+kind;
             if(!completed) { fault("native-frame-exception");return; }
             if(!identities() || GetCurrentThreadId()!=stats.owner) { fault("frame-return-identity");return; }
             const auto value=stamp();
@@ -150,6 +164,7 @@ struct LiveFrames::State {
     bool present_begin(std::uintptr_t swap, unsigned flags) noexcept {
         try {
             std::lock_guard lock(mutex);
+            call=20;
             if(flags&DXGI_PRESENT_TEST) { ++stats.present_tests;return false; }
             if(!stats.running || !stats.frame_active) {
                 ++stats.untracked_presents;
@@ -184,9 +199,12 @@ struct LiveFrames::State {
         try {
             std::lock_guard lock(mutex);
             if(!stats.running)return;
+            call=21;
             std::uintptr_t native{};
-            if(flags&DXGI_PRESENT_TEST || FAILED(result) || !identities() || GetCurrentThreadId()!=stats.owner ||
-                !pb::read(backend+0x1470,native) || native!=swap) { fault("present-return-invariant");return; }
+            // stage: the first failed condition, in order.
+            const unsigned failed=flags&DXGI_PRESENT_TEST?1u:FAILED(result)?2u:!identities()?3u:GetCurrentThreadId()!=stats.owner?4u:
+                !pb::read(backend+0x1470,native) || native!=swap?5u:0u;
+            if(failed) { fault("present-return-invariant",static_cast<unsigned>(result),failed);return; }
             const auto value=stamp();accepted(frames.present_end(stats.owner,value),4,value);
 #ifdef MHW_FG_GAME
             frame_generation::game::present_end(true);

@@ -11,6 +11,13 @@ struct LiveFrameStats {
     unsigned owner{}, pending_calls{}, frame_id{};
     bool running{}, frame_active{}, restored{};
     const char *fault_reason{};  // the first fault's reason (a string literal), or null
+    // The first fault's context. call: 0 Main:Update, 2 Render:Publish,
+    // 11 Render:Submit (+100 on return), 20 Present, 21 Present return.
+    // links: the identity checks that failed (1 engine, 2 renderer, 4 backend
+    // globals, 8 device, 16 engine->renderer, 32 renderer->backend). code: the
+    // Streamline result (+0x100 when the frame policy is disabled), or Present's
+    // HRESULT.
+    struct Fault { unsigned call{}, thread{}, owner{}, links{}, code{}, stage{}; std::uint64_t frame{}; bool in_frame{}; } fault;
 };
 // Process-lived storage; one instance. Worker installs/restores. FrameSession
 // is serialized to the qualified native owner thread. Original calls always

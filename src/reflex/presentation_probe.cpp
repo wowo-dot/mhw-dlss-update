@@ -552,6 +552,13 @@ void log_frames(std::ostream& out, const char* phase) {
         << ",\"p50_us\":" << w.p50_us << ",\"p95_us\":" << w.p95_us << ",\"p99_us\":" << w.p99_us << ",\"max_us\":" << w.max_us
         << ",\"over_50ms\":" << w.over_50ms << "}\n" << std::flush;
 }
+// The first Reflex frame fault: its reason and context (LiveFrameStats::Fault).
+void write_reflex_fault(std::ostream& out, const mhw::reflex::LiveFrameStats& frames) {
+    const auto& f = frames.fault;
+    out << "\"reflex_fault\":\"" << (frames.fault_reason ? frames.fault_reason : "") << "\",\"reflex_fault_detail\":{\"call\":" << f.call
+        << ",\"thread\":" << f.thread << ",\"owner\":" << f.owner << ",\"links\":" << f.links << ",\"code\":" << f.code
+        << ",\"stage\":" << f.stage << ",\"frame\":" << f.frame << ",\"in_frame\":" << f.in_frame << '}';
+}
 template<std::size_t N> std::uint64_t median_of(std::array<std::uint64_t, N>& values, unsigned count) {
     if (!count) return 0;
     std::nth_element(values.begin(), values.begin() + count / 2, values.begin() + count);
@@ -966,7 +973,12 @@ DWORD WINAPI worker(void*) noexcept {
                     const auto frames=live_frames->snapshot();const auto stats=presentation->snapshot();
 #ifdef MHW_FG_GAME
                     log_lifecycle(log);
-                    if(!frames.running || frames.faults){stop_reason="reflex_frames";break;}
+                    if(!frames.running || frames.faults){
+                        // Logged at once: a fault on the game's way out can be followed by the exit.
+                        log << "{\"event\":\"reflex_fault\",\"running\":" << frames.running << ",\"completed\":" << frames.completed << ',';
+                        write_reflex_fault(log, frames);log << "}\n" << std::flush;
+                        stop_reason="reflex_frames";break;
+                    }
                     if(!stats.routing || stats.faults){stop_reason="presentation";break;}
 #endif
                     if(!frames.running || frames.faults || !stats.routing || stats.faults)break;
@@ -1083,8 +1095,8 @@ DWORD WINAPI worker(void*) noexcept {
             if(stop_reason==std::string_view("duration")&&std::filesystem::exists(stop_file))stop_reason="stop_request";
             log_lifecycle(log);
             log << "{\"event\":\"fg_stopped\",\"reason\":\"" << stop_reason << "\",\"off\":" << !mhw::frame_generation::game::frame_generation_on()
-                << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults
-                << ",\"reflex_fault\":\"" << (frames.fault_reason?frames.fault_reason:"") << "\",\"session\":";
+                << ",\"reflex_frames\":" << frames.completed << ",\"reflex_faults\":" << frames.faults << ',';
+            write_reflex_fault(log, frames);log << ",\"session\":";
             mhw::frame_generation::game::write(log);log << "}\n";
         }
         log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":true,\"temporal_active\":true}\n" << std::flush;

@@ -142,12 +142,51 @@ unscaled build keeps the strict check.
 | Exceptions | 0 | 0 |
 
 - No crash in either run.
-- **Open: a Reflex frame fault in DLAA sessions.** Seen in game-64, 65 and 67
-  and in game-68 run 1, not run 2, and never in the scaled runs.
-  - It came after the last heartbeat. The game kept rendering about 9 s
-    afterwards, which suggests a quit or return-to-title path.
+- **Open: a Reflex frame fault in DLAA sessions.** Seen in game-64, 65, 66 and
+  67 and in game-68 run 1, not run 2, and never in the scaled runs.
   - Frame generation stops for the session when it happens.
   - v0.18.4 logs the fault's reason in `fg_stopped` (`reflex_fault`).
+
+## game-69 (v0.18.4): the fault is the game's exit
+
+The user played DLAA, quit to the title, loaded back in, played about 30 s and
+quit.
+- **No fault this run.** DLSS ran 5,753 frames and frame generation was on at
+  the last status, mostly 2 frames per Present (5,714 of them). It paused at
+  the title screen and came back within a few seconds after loading in (the
+  user saw it too). Quit-to-title is therefore not the fault path.
+- **The fault is the last frame of the process (from the five faulted logs).**
+  After the last heartbeat, the presentation hook counted exactly as many
+  Presents as the Reflex hooks completed frames (158, 758, 1,478, 1,515 and
+  2,014). So the game presented nothing after the fault.
+  - The 7 to 11 s "stop" window measured from the last heartbeat *to* the
+    fault. It is not rendering after it, as v0.18.4's notes said.
+  - Each log then ends within 5 s, with no `fg_off` window.
+  - The two clean DLAA logs (game-68 run 2, game-69) end at a heartbeat with
+    nothing after it, like every scaled log. The process ended before the
+    next poll, so a fault on the way out may simply not have been logged.
+- **The exit path (static, clean database).**
+  - `sAppExt::run` (the window thread) sets the quit flag (`+0x2BE8`) on
+    WM_QUIT and waits for the game thread.
+  - The game thread `sub_1422E4AE0` loops on that flag: each turn calls the
+    renderer (`sub_14229C0C0` or the vtable `+0x68`, then `sub_14229B020`),
+    then Main:Update (`vtable +0x30` of sMhMain, the hooked `0x1af2b60`).
+  - After the loop it destroys its systems on the same thread. `sMain`'s
+    destructor (`sub_141AEE800`) first waits on `sub_141B1FB90` (32 ms
+    sleeps), then tears down units, and finally clears the engine global
+    (`qword_1451C4148 = 0`, `sub_14225CA50`).
+  - Candidates: a hooked render call during that teardown would fail the
+    identity or owner check *before* the hook sees it is outside a frame;
+    or the last frame returns with changed identities; or Streamline
+    refuses a marker while the swap chain goes away.
+- **v0.18.5 (diagnostics only).**
+  - The first fault records which call (Main:Update, Publish, Submit, their
+    returns, Present), the thread and owner, the identity links that failed
+    (a mask), the Streamline result or Present HRESULT, the failing stage,
+    the frame id and whether a frame was active.
+  - The worker logs a `reflex_fault` event the moment it sees the fault,
+    before turning frame generation off, so a quick exit still leaves it.
+  - No behaviour change: the fix waits for the logged cause.
 
 ## What true DLAA needs (design)
 
