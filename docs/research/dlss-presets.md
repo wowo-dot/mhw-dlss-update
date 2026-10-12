@@ -195,8 +195,23 @@ DLSS skipped those frames, so frame generation paused for the whole DOF shot.
   and fails only on the capture's 2:1 CBScreen (check 3). A mixed-scale
   extent is refused (96).
 
-**Not yet seen:** the game's real DOF at Quality and Balanced in a cutscene
-(game-71 onwards).
+**game-72 (v0.19.0, Quality, 2026-10-12): the cutscene DOF runs.**
+
+| | |
+|---|---|
+| DLSS frames | 10,061, with 4 skips (none for depth) |
+| DOF plans qualified | 7,191 |
+| Complete six-pass DOF sequences | 7,189 |
+| Adapted dispatches (passes 0 and 3) | 14,378, all restored |
+| Rejections, failures | 0, 0 |
+
+- Between the third and fourth heartbeat every DLSS frame carried DOF:
+  3,368 frames, 3,368 complete sequences.
+- Frame generation presented 2 frames each time through all of it, and its
+  `no_ready` count did not move. Before v0.19.0 it paused for the whole shot.
+- The session ended with `game_exit` (`exit_gate` true) and no Reflex fault,
+  which confirms v0.18.6 in game.
+- Balanced (1472x828) has not run in game yet.
 
 ## Not yet proven (hypotheses until the in-game runs)
 

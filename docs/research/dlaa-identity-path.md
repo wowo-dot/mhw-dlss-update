@@ -251,6 +251,9 @@ reflex_fault "frame-policy-or-sdk" detail {call 100, thread = owner, links 0,
 - Unit test `reflex_frame_policy_tests`: `presented()` through a frame, the
   skipped-Present exit, and the close.
 
+**Confirmed in game-72 (v0.19.0, which carries this change):** the log ends
+with `game_exit` after 24,175 frames, `exit_gate` true, no fault.
+
 **Still open from this run.** DLSS skipped 2,709 frames for missing depth,
 the same pattern as game-68 and game-69: most of it outside gameplay (title
 and loading). Not yet traced.
