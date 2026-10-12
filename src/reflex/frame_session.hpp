@@ -18,6 +18,7 @@ public:
     sl::Result end(unsigned thread);
     void stop() noexcept { policy_.abort(FrameFault::none); token_ = nullptr; }
     bool disabled() const noexcept { return policy_.disabled(); }
+    bool presented() const noexcept { return policy_.presented(); }
     std::uint32_t id() const noexcept { return policy_.id(); }
     std::uint64_t completed() const noexcept { return policy_.completed(); }
     std::uint64_t tokens() const noexcept { return tokens_; }

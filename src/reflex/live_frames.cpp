@@ -62,6 +62,24 @@ static_assert(heads_valid(),"each al.hooks pattern is the function's first 16 by
 bool verify_chained(std::uintptr_t image, const Gate& g) noexcept {
     Head head{};return parse_head(g.pattern,head) && pb::verify_code_with_head(image,g.rva,g.bytes,g.sha,head.data(),head_size);
 }
+// The game's exit (clean image a78ea69b...1d80): the window procedure's
+// WM_DESTROY (sub_1422E3160) calls the setter with the destroyed window; when
+// it is the swap chain's (cD3DRender+0x1460), cD3DRender+0x1482 becomes 1 and
+// stays set (only initForD3D11/12 clear it). From then on present12 jumps past
+// Present, so the engine frame running at that moment, and any after it, ends
+// without one. The quit flag stops the game thread's loop shortly after.
+// Read-only spans; when one differs the flag is not read (dlaa-identity-path.md).
+struct Span { unsigned rva, bytes; const char* sha; };
+constexpr Span exit_spans[]{
+    {0x23acbf0,17,"70eea0a022c36a8fec38c3f39f1f9f5ebfb3cb0a32f4cc3eae718b7fcd4105bb"},  // the setter
+    {0x23a9e20,13,"ba1f3b884c9fe6772b29e07ac3eb09e20206312ac7bcf63df64f00b5ce6860d8"},  // present12: cmp [rbx+1482h],0; jnz
+    {0x23aa22c,91,"13bb557a8281add92426ff34f25079acb4181af042c2baad157ad1938817c09d"}   // the jump target: return without Present
+};
+constexpr std::uintptr_t window_destroyed_offset=0x1482;
+bool verify_exit(std::uintptr_t image) noexcept {
+    for(const auto& s:exit_spans)if(!pb::verify_code(image,s.rva,s.bytes,s.sha))return false;
+    return true;
+}
 std::atomic<LiveFrames::State*> dispatch{};
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 }
@@ -101,6 +119,11 @@ struct LiveFrames::State {
         return failed;
     }
     bool identities() const noexcept { return !identity_links(); }
+    // On a qualified backend only (after the identity check).
+    bool window_destroyed() const noexcept {
+        std::uint8_t destroyed{};return stats.exit_gate && pb::read(backend+window_destroyed_offset,destroyed) && destroyed;
+    }
+    void close() noexcept { stats.running=false;stats.frame_active=false;stats.closed=true;frames.stop(); }
     unsigned call{}; // the hooked call being checked (LiveFrameStats::Fault::call)
     void fault(const char* why, unsigned code=0, unsigned stage=0) noexcept {
         if(!stats.faults) {
@@ -132,6 +155,7 @@ struct LiveFrames::State {
             const auto value=stamp();
             if(kind==0) {
                 if(stats.frame_active) { fault("nested-engine-frame");return false; }
+                if(window_destroyed()) { close();return false; } // No frame the game cannot present.
                 stats.owner=thread;
                 if(!accepted(frames.begin(thread,value),0,value))return false;
                 stats.frame_active=true;return true;
@@ -154,9 +178,14 @@ struct LiveFrames::State {
             if(!value.valid) { fault("frame-return-stamp");return; }
             if(kind==11)accepted(frames.render_end(stats.owner,value),2,value);
             if(kind==0) {
+                // The game's exit: its window went away during this frame, so
+                // present12 skipped Present. Close without closing markers.
+                const bool destroyed=window_destroyed();
+                if(destroyed && !frames.presented()) { close();return; }
                 if(accepted(frames.end(stats.owner),5,value)) {
                     stats.frame_active=false;
-                    if(stop_requested.load()) { stats.running=false;frames.stop(); }
+                    if(destroyed)close();
+                    else if(stop_requested.load()) { stats.running=false;frames.stop(); }
                 }
             }
         } catch(...) { std::lock_guard lock(mutex);fault("frame-return-exception"); }
@@ -266,6 +295,7 @@ void LiveFrames::install(std::uintptr_t image,std::uintptr_t sdk_device,std::ost
             Head head{};parse_head(g.pattern,head);std::memcpy(h.original.data(),head.data(),head_size);
             for(unsigned n=head_size/8;n<h.original.size();++n)require(pb::read(h.target+n*8ULL,h.original[n]),"live-frame-original-head");
         }
+        s.stats.exit_gate=verify_exit(image);
         // Each hook is live as soon as AL accepts it. Entries wait on this
         // lock until all three are in; Main:Update joins last.
         s.stats.running=true;
@@ -287,6 +317,7 @@ void LiveFrames::install(std::uintptr_t image,std::uintptr_t sdk_device,std::ost
         h.created=true;
     }
     for(auto& h:s.heads) { require(MH_QueueEnableHook(reinterpret_cast<void*>(h.target))==MH_OK,"live-frame-queue-hook");h.enabled=true; }
+    s.stats.exit_gate=verify_exit(image);
     s.stats.running=true;
     require(MH_ApplyQueued()==MH_OK,"live-frame-enable-hooks");
 }
@@ -359,7 +390,7 @@ void LiveFrames::describe(std::ostream& log, unsigned requested_mode) const {
            <<(s.chained?"al.hooks":"minhook")<<"\",\"order\":"<<(s.chained?g.order:0)<<",\"handle\":"<<s.handles[i]
            <<",\"state\":"<<(s.chained?static_cast<unsigned>(mhw::astera::game_hook_state(s.handles[i])):1u)<<"}";
     }
-    log<<"]}\n"<<std::flush;
+    log<<"],\"exit_gate\":"<<s.stats.exit_gate<<"}\n"<<std::flush;
 }
 void LiveFrames::write(std::ostream& log) const {
     auto& s=*state_;std::lock_guard lock(s.mutex);
@@ -376,7 +407,7 @@ void LiveFrames::write(std::ostream& log) const {
     log<<"{\"event\":\"frame_finished\",\"completed\":"<<s.frames.completed()<<",\"tokens\":"<<s.frames.tokens()<<",\"sleeps\":"<<s.frames.sleeps()
        <<",\"markers\":"<<s.frames.markers()<<",\"faults\":"<<s.stats.faults<<",\"owner\":"<<s.stats.owner<<",\"pending_calls\":"<<s.calls.load()
        <<",\"frame_active\":"<<s.stats.frame_active<<",\"native_bytes_restored\":"<<s.stats.restored<<",\"present_tests\":"<<s.stats.present_tests
-       <<",\"untracked_presents\":"<<s.stats.untracked_presents<<",\"reason\":\""<<(s.reason?s.reason:"")<<"\"}\n"<<std::flush;
+       <<",\"untracked_presents\":"<<s.stats.untracked_presents<<",\"closed\":"<<s.stats.closed<<",\"reason\":\""<<(s.reason?s.reason:"")<<"\"}\n"<<std::flush;
 }
 }
 extern "C" void mhw_reflex_boundary_dispatch(unsigned kind,mhw::reflex::boundaries::Frame* frame) noexcept {

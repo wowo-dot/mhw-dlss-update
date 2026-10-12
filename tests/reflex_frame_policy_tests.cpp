@@ -55,6 +55,22 @@ void tests() {
     }
     FramePolicy incomplete; incomplete.begin(7, start);
     require(incomplete.end(7).fault == FrameFault::order, "engine end is not simulation end");
+
+    // The game's exit: once its window is destroyed, present12 skips Present,
+    // so the engine frame ends after render with no Present (game-70). The
+    // integration asks presented() first and closes instead of ending.
+    FramePolicy presenting;
+    require(!presenting.presented(), "no frame yet");
+    presenting.begin(7, start); presenting.render_begin(7, render); presenting.render_end(7, render);
+    require(!presenting.presented(), "rendered, Present skipped");
+    presenting.present_begin(7, render, false);
+    require(!presenting.presented(), "inside Present");
+    presenting.present_end(7, render, false);
+    require(presenting.presented(), "after Present");
+    presenting.end(7);
+    require(!presenting.presented() && presenting.completed() == 1, "ended");
+    presenting.begin(7, render); presenting.abort(FrameFault::none);
+    require(!presenting.presented() && presenting.disabled(), "closed without closing markers");
     FramePolicy changed; changed.begin(7, start); changed.render_begin(7, render);
     require(changed.render_end(7, {101,52,1,true}).fault == FrameFault::counter, "mid-frame stamp change");
     FramePolicy repeat; complete(repeat, start, render);

@@ -10,6 +10,9 @@ struct LiveFrameStats {
     std::uint64_t completed{}, tokens{}, sleeps{}, markers{}, faults{}, present_tests{}, untracked_presents{};
     unsigned owner{}, pending_calls{}, frame_id{};
     bool running{}, frame_active{}, restored{};
+    // The game destroyed its presentation window (its exit): the session
+    // closed without a fault and without closing markers.
+    bool closed{};
     const char *fault_reason{};  // the first fault's reason (a string literal), or null
     // The first fault's context. call: 0 Main:Update, 2 Render:Publish,
     // 11 Render:Submit (+100 on return), 20 Present, 21 Present return.
@@ -18,6 +21,7 @@ struct LiveFrameStats {
     // Streamline result (+0x100 when the frame policy is disabled), or Present's
     // HRESULT.
     struct Fault { unsigned call{}, thread{}, owner{}, links{}, code{}, stage{}; std::uint64_t frame{}; bool in_frame{}; } fault;
+    bool exit_gate{};  // the game's window-destroyed flag is gated (closed can be seen)
 };
 // Process-lived storage; one instance. Worker installs/restores. FrameSession
 // is serialized to the qualified native owner thread. Original calls always

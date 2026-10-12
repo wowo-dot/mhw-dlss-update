@@ -973,8 +973,13 @@ DWORD WINAPI worker(void*) noexcept {
                     const auto frames=live_frames->snapshot();const auto stats=presentation->snapshot();
 #ifdef MHW_FG_GAME
                     log_lifecycle(log);
+                    if(frames.closed && !frames.faults){
+                        // The game destroyed its window (its exit); logged at once, the process ends soon.
+                        log << "{\"event\":\"game_exit\",\"completed\":" << frames.completed << "}\n" << std::flush;
+                        stop_reason="game_exit";break;
+                    }
                     if(!frames.running || frames.faults){
-                        // Logged at once: a fault on the game's way out can be followed by the exit.
+                        // Logged at once: the process may end before fg_stopped.
                         log << "{\"event\":\"reflex_fault\",\"running\":" << frames.running << ",\"completed\":" << frames.completed << ',';
                         write_reflex_fault(log, frames);log << "}\n" << std::flush;
                         stop_reason="reflex_frames";break;
@@ -1083,9 +1088,10 @@ DWORD WINAPI worker(void*) noexcept {
         if(live_frames) {
 #ifdef MHW_ALPHA
             {   // The loop ended on a fault: frame generation is off from here on.
+                // The game's exit is not one; the status keeps its last state.
                 const std::string_view why=stop_reason;
                 if(why=="reflex_frames"||why=="presentation")mhw::alpha::status::reflex(mhw::alpha::status::Stage::off,why);
-                mhw::alpha::status::worker_failed(why);
+                if(why!="game_exit")mhw::alpha::status::worker_failed(why);
             }
 #endif
             mhw::frame_generation::game::arm(false);

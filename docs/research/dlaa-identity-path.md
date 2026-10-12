@@ -188,6 +188,73 @@ quit.
     before turning frame generation off, so a quick exit still leaves it.
   - No behaviour change: the fix waits for the logged cause.
 
+## game-70 (v0.18.5): the cause, and the fix (v0.18.6)
+
+**The logged fault.** The run lasted 22,358 Reflex frames, with DLSS on 10,315
+of them and frame generation on to the end. On exit:
+
+```
+reflex_fault "frame-policy-or-sdk" detail {call 100, thread = owner, links 0,
+  code 275, stage 5, in_frame true}
+```
+
+- Call 100 is Main:Update's return, on its own thread, with every identity
+  link intact.
+- Code 275 is 0x100 | 19: the policy was disabled, and 19 is
+  `eErrorInvalidIntegration`, which `FrameSession::apply` returns for a policy
+  fault, not a Streamline error.
+- Stage 5 is `FramePolicy::end`. With the thread right, its only fault is
+  `order`: the engine frame ended before its Present.
+- The log ends right after that event. The process exited during the 3 s
+  wait for frame generation to switch off, so there is no `fg_stopped`.
+
+**Why the last frame has no Present (static, clean database).**
+- The window procedure `sub_1422E3160` handles WM_DESTROY (message 2). It
+  saves the window position, then calls `sub_1423ACBF0(renderer+0x78,
+  hwnd)`, then `PostQuitMessage(0)`.
+- `sub_1423ACBF0` sets `cD3DRender+0x1482 = 1` when the window is the swap
+  chain's (`cD3DRender+0x1460`). Only `initForD3D11/12` clear it.
+- `cD3DRender::present12` checks it before every Present
+  (`0x23a9e20 cmp byte ptr [rbx+1482h],0; jnz 0x23aa22c`). The target leaves
+  the critical section and returns success without calling Present.
+- So the engine frame running when the window goes away (the window thread
+  sets the flag while the game thread is mid-frame) renders but skips
+  Present. WM_QUIT then sets the quit flag, and the game thread's loop ends.
+- Ruled out along the way: `sRender+0x91` is `mFrameSkip` (with
+  `+0x93 mParallelRendering`, `+0x92 mDisableRendering`, from
+  `sMhRender::populatePropertyList`). It gates the other early return, in
+  `sub_1422980B0`. The constructor clears it and no game code sets it, so
+  that path does not skip frames here.
+- It is a race with the window thread. That explains why the fault shows in
+  some exits and not others, and why some faulted logs never reached
+  `fg_stopped`. Nothing ties it to DLAA itself.
+
+**v0.18.6: the game's exit closes the session instead of faulting.**
+- Three read-only code spans are gated at install, each against the clean
+  image:
+  - the setter `0x23acbf0`, 17 bytes;
+  - present12's check and jump `0x23a9e20`, 13 bytes;
+  - the jump target `0x23aa22c`, 91 bytes, which returns without Present.
+  The result is logged as `exit_gate` in `frame_hooks_installed`. If a span
+  differs, the flag is never read and the old behaviour stays.
+- On Main:Update's return, after the identity and thread checks, the hooks
+  read `backend+0x1482`:
+  - if it is set and the frame did not present (`FramePolicy::presented()`),
+    the session closes;
+  - if it did present, the frame ends normally and then the session closes.
+  "Closes" means `running` is off and `closed` is set; the policy aborts
+  with no fault and no closing markers.
+- Main:Update's entry also closes rather than begin a frame the game cannot
+  present.
+- The worker logs `game_exit` and stops frame generation with reason
+  `game_exit`. It does not mark Reflex or the worker as failed.
+- Unit test `reflex_frame_policy_tests`: `presented()` through a frame, the
+  skipped-Present exit, and the close.
+
+**Still open from this run.** DLSS skipped 2,709 frames for missing depth,
+the same pattern as game-68 and game-69: most of it outside gameplay (title
+and loading). Not yet traced.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy

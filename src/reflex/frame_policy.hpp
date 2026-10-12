@@ -75,6 +75,8 @@ public:
     // Native originals must still run; the caller owns hook/resource cleanup.
     constexpr void abort(FrameFault fault = FrameFault::sdk) noexcept { disabled_ = true; fault_ = fault; }
     constexpr bool disabled() const noexcept { return disabled_; }
+    // The current frame reached the end of its Present.
+    constexpr bool presented() const noexcept { return !disabled_ && stage_ == Stage::complete; }
     constexpr std::uint64_t completed() const noexcept { return completed_; }
     constexpr std::uint32_t id() const noexcept { return id_; }
     constexpr bool input_token_available(unsigned thread) const noexcept {
