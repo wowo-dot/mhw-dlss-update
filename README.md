@@ -626,8 +626,20 @@ Configure a 64-bit MSVC build:
 ```powershell
 cmake -S . -B build -A x64
 cmake --build build --config RelWithDebInfo
-ctest --test-dir build -C RelWithDebInfo --output-on-failure
+ctest --test-dir build -C RelWithDebInfo --output-on-failure -j 32
 ```
+
+The tests come in two tiers (labels):
+- `quick`: everything that takes under about a second.
+- `heavy`: over a second each. These create a hardware D3D12 device per
+  process or run a whole WARP pipeline. Each heavy test reserves 4 processor
+  slots, so a parallel run keeps at most eight busy at once. Unthrottled, they
+  slow each other past their timeouts.
+
+While iterating, run `ctest -L quick -j 32` plus the changed area's own tests
+(`ctest -R <name>`). Run the whole suite before a build is handed out. A new
+test that takes over a second belongs in the `heavy` patterns at the end of
+`CMakeLists.txt`.
 
 MinHook 1.3.4 is fetched at configure time from its pinned upstream commit; see
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

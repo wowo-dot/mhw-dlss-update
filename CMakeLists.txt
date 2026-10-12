@@ -1672,3 +1672,45 @@ if(BUILD_TESTING)
 endif()
 
 include(cmake/ReflexBoundaries.cmake)
+
+# Test tiers (measured serially 2026-10-12: 669 tests, 667 s). "heavy": over a
+# second each, 196 tests and 598 s. These create a hardware D3D12 device per
+# process (the projection families: driver start-up dominates) or run a whole
+# WARP pipeline. "quick": everything else, 473 tests and 69 s, including light
+# WARP cases and the deliberate-timeout cases (they sleep; they do not load
+# the CPU). Each heavy test reserves 4 processor slots, so a parallel run keeps
+# at most eight busy at once: 24 unthrottled ones ran 7x slower and hit their
+# timeouts. Iteration: ctest -L quick -j 32 plus the changed area's tests;
+# before a build is handed out: the whole suite, ctest -j 32. A new test that
+# takes over a second belongs in this list.
+if(BUILD_TESTING)
+    get_property(mhw_registered_tests DIRECTORY PROPERTY TESTS)
+    set(mhw_heavy_test_patterns
+        "^projection_provenance_" "^projection_binding_" "^aa_binding_readback_" "^temporal_state_jowned_"
+        "^temporal_(present|spatial|spatial_fractional|spatial_identity)_warp$")
+    set(mhw_heavy_tests)
+    set(mhw_quick_tests)
+    foreach(mhw_test IN LISTS mhw_registered_tests)
+        set(mhw_heavy FALSE)
+        foreach(mhw_pattern IN LISTS mhw_heavy_test_patterns)
+            if(mhw_test MATCHES "${mhw_pattern}")
+                set(mhw_heavy TRUE)
+            endif()
+        endforeach()
+        if(mhw_heavy)
+            list(APPEND mhw_heavy_tests "${mhw_test}")
+        else()
+            list(APPEND mhw_quick_tests "${mhw_test}")
+        endif()
+    endforeach()
+    if(mhw_heavy_tests)
+        set_tests_properties(${mhw_heavy_tests} PROPERTIES LABELS heavy PROCESSORS 4)
+    endif()
+    if(mhw_quick_tests)
+        set_tests_properties(${mhw_quick_tests} PROPERTIES LABELS quick)
+    endif()
+    # A rate claim (at least 300 stack samples in 1.5 s): only a quiet machine
+    # can keep the sampler thread at about 1 kHz. It failed once in three
+    # parallel runs, so it runs alone.
+    set_tests_properties(sampler_tests PROPERTIES LABELS heavy RUN_SERIAL TRUE)
+endif()
