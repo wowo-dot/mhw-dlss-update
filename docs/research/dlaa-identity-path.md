@@ -89,6 +89,33 @@ COPY_DEST here.
 **Telemetry.** The `route.identity` summary records plans, final copies and
 observed copies.
 
+## game-65 and game-66: depth at 100%
+
+**game-65 (v0.18.0).** The identity route worked: 3,586 plans, 3,585 final
+copies observed by frame generation. But DLSS skipped every frame
+(`depth_missing`), so the clean image the user saw was the game's own render,
+and frame generation had nothing to generate from.
+
+**game-66 (v0.18.1, depth diagnostics).**
+- **The admission.** The scaled depth admission rejected every attempt with
+  reason 1, its entry condition: it requires the nested depth writer
+  (`expected.nested`) and a render rectangle smaller than the depth texture.
+  Both are false at 100%.
+- **The hooks.** The depth producer and consumer hooks fired (about 14k each)
+  and matched DLSS's frame. The nested depth draw never happened (trace
+  stage 4: 0).
+- **Conclusion.** At 100% the depth writer is the game's plain native
+  `CopyResource` (caller `0x259e100`). That is the path the unscaled DLAA
+  build already leased.
+
+**v0.18.2.** In the scaled build, the unscaled depth lease runs when the
+render extent equals the scene (`identity_extent`):
+- the native depth copy inside the depth-consumer callback is checked for
+  source, destination, barriers, list and frame;
+- the lease is taken, and the depth is copied into DLSS's private texture
+  right after;
+- at identity the lease alone qualifies the depth, with no scaled admission.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
