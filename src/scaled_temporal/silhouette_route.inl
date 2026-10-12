@@ -118,10 +118,18 @@ bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std
 // failed buffer's resource facts for diagnostics: valid, dimension, width,
 // engine address - resource base, engine byte count.
 //
-// The engine's buffer may be a range inside a larger D3D12 buffer (the
-// equipment attached to one bone, MeshSkin1Weight, draws from such ranges,
-// game-58): the resource must contain [address, address + bytes). The bound
-// views are then checked against that range exactly.
+// The engine's buffer may be a range inside a larger D3D12 buffer: the
+// resource must contain [address, address + bytes), and the bound views are
+// then checked against that range exactly.
+//
+// The shield's index range (MeshSkin1Weight Uber_Mt_General and
+// PL_Mt_AlphaTest, game-59) is held by an engine object that is not an
+// ID3D12Resource. That index buffer alone is accepted without a resource when
+// the bound view matches the engine range exactly, and it is not pinned
+// (buffers[1] stays null). The replacement is recorded right after the native
+// draw in the same list, reads the same bound view, and the predicate executes
+// exactly one of them. So the game's own lifetime guarantee for that index
+// data covers the replacement.
 unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std::array<ComPtr<ID3D12Resource>,2> &buffers,
                             std::array<std::uint64_t,5> &seen){
  if(!b.ready())return 1;if(b.vertex_mask!=1)return 2;if(!b.index_known)return 3;
@@ -132,13 +140,14 @@ unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std
      !field(backend,0x10,bytes)||!field(ia,i?0x40:0x24,offset)||offset>bytes||address>UINTPTR_MAX-offset)return 6+8*i;
   const auto description=indexed_description(resource);
   seen={description[1],description[2],description[3],address-description[13],bytes};
-  if(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||address<description[13]||
-     address-description[13]>description[3]||bytes>description[3]-(address-description[13]))return 7+8*i;
+  const bool unpinned=i==1&&!description[1];
+  if(!unpinned&&(!description[1]||description[2]!=D3D12_RESOURCE_DIMENSION_BUFFER||address<description[13]||
+     address-description[13]>description[3]||bytes>description[3]-(address-description[13])))return 7+8*i;
   if(i){if(b.index_buffer.BufferLocation!=address+offset)return 16;if(b.index_buffer.SizeInBytes!=bytes-offset)return 17;
       if((UINT64(r.arguments[0])+r.arguments[1])*2>b.index_buffer.SizeInBytes)return 18;}
   else{if(!field(ia,0x20,stride))return 8;if(stride<12||stride>128||stride%4)return 9;if(b.vertex_buffer.BufferLocation!=address+offset)return 10;
       if(b.vertex_buffer.SizeInBytes!=bytes-offset)return 11;if(b.vertex_buffer.StrideInBytes!=stride)return 12;}
-  buffers[i]=reinterpret_cast<ID3D12Resource *>(resource);
+  if(!unpinned)buffers[i]=reinterpret_cast<ID3D12Resource *>(resource);
  }return 0;
 }
 SilhouettePipeline *silhouette_pipeline(const std::shared_ptr<SilhouetteCpu> &r,ID3D12RootSignature *root){
@@ -221,7 +230,8 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(!silhouette_code_stable(*r.recipe))return native(8,{101});
  for(auto ptr:{root,pipeline}){std::uintptr_t method{};for(unsigned slot:{0U,2U,7U})if(!pb::system_method(ptr,slot,method))return native(9);}
  auto *cache=silhouette_pipeline(r.recipe,reinterpret_cast<ID3D12RootSignature *>(root));if(!cache)return native(10);
- std::array<IUnknown *,9> pins{reinterpret_cast<IUnknown *>(pipeline),reinterpret_cast<IUnknown *>(root),textures[1].Get(),buffers[0].Get(),buffers[1].Get(),cache->draw->pipeline()};unsigned size=6;
+ std::array<IUnknown *,9> pins{reinterpret_cast<IUnknown *>(pipeline),reinterpret_cast<IUnknown *>(root),textures[1].Get(),buffers[0].Get(),cache->draw->pipeline()};unsigned size=5;
+ if(buffers[1])pins[size++]=buffers[1].Get();
  if(textures[0])pins[size++]=textures[0].Get();
  for(auto heap:roots.heaps)if(heap)pins[size++]=reinterpret_cast<IUnknown *>(heap);
  if(!retain_recording(p,list,roots.generation,std::span(pins).first(size)))throw std::runtime_error("silhouette draw pins");

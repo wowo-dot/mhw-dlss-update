@@ -44,6 +44,22 @@ are named from the census. Confirmed:
    RENDER_TARGET is still rejected.
 3. **Unchanged.**
    - The eye draws stay native; they write nothing.
+
+**game-59 (v0.16.2).** The user named the remaining blocky piece: the shield.
+It was drawn at half size and half position near the top left, the original
+symptom of a draw left at the 1280 x 720 viewport.
+- **Confirmed: the state fix works.** Rejection 5 fell to 0.
+- **Confirmed: the shield is the rest of rejection 8.** That is the
+  `Uber_Mt_General` and `PL_Mt_AlphaTest` MeshSkin1Weight draws, about 23k.
+  Its index range's engine object is not an ID3D12Resource at all (valid 0,
+  dimension 0, width 0; 41,916 bytes). The sword passed.
+- **v0.16.3** accepts that index buffer without a resource. It requires the
+  bound index view to match the engine range exactly, and does not pin it.
+  This is safe because the replacement is recorded right after the native
+  draw in the same list and reads the same view, and the predicate executes
+  exactly one of them. The game's own lifetime guarantee covers it.
+
+The list of rejections and fixes continues:
    - `Simple_Mt_AlphaTest` stays native. Redrawing a lit forward material at
      output size is a separate adaptation: its tiled lights are indexed in
      render space. First, find out what it draws.
