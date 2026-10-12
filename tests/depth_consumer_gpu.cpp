@@ -44,7 +44,7 @@ int wmain(int argc,wchar_t **argv){try{
     ComPtr<ID3D12DescriptorHeap> rtv;D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=1;
     hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv)),"rtv");device->CreateRenderTargetView(source.Get(),nullptr,rtv->GetCPUDescriptorHandleForHeapStart());
     cd::RecordingPins pins;std::uint64_t pixels{},signals{};unsigned switches{};
-    for(unsigned frame=1;frame<=64;++frame){
+    for(unsigned frame=1;frame<=96;++frame){
         // Rotate the native source after the prior recording has retired. Its
         // optimized clear matches this frame, avoiding fixture-only warnings.
         const float value=float(frame)/128.F;D3D12_CLEAR_VALUE clear{DXGI_FORMAT_R32_FLOAT,{value,value,value,value}};
@@ -53,9 +53,13 @@ int wmain(int argc,wchar_t **argv){try{
         device->CreateRenderTargetView(source.Get(),nullptr,rtv->GetCPUDescriptorHandleForHeapStart());
         for(unsigned i=0;i<2;++i){hr(allocators[i]->Reset(),"reset allocator");hr(lists[i]->Reset(allocators[i].Get(),nullptr),"reset list");}
         auto *consumer=lists[1].Get();auto *writer=lists[0].Get();
+        // 0-3: the scaled writer (render target), then no or a hoisted read.
+        // 4-5: the whole-copy writer (render scale 1.0) leaves COPY_DEST, then
+        // no read transition before the consumer (game-76) or a hoisted one (game-75).
         constexpr D3D12_RESOURCE_STATES states[]{D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
-        const auto state=states[(frame-1)%4];const bool hoisted=state!=D3D12_RESOURCE_STATE_RENDER_TARGET;
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+        const unsigned kind=(frame-1)%6;const auto state=states[kind];const bool whole=kind>=4,hoisted=kind!=0&&kind!=4;
         const cd::ResourcePins resources{source,destination,source,destination};require(pins.retain(consumer,frame,resources),"retain consumer recording");
         require(!cd::record_consumer_depth(consumer,source.Get(),source.Get(),128,64,state,barriers,copy),"reject self copy");
         require(!cd::record_consumer_depth(consumer,source.Get(),destination.Get(),127,64,state,barriers,copy),"reject extent mismatch");
@@ -66,13 +70,16 @@ int wmain(int argc,wchar_t **argv){try{
         D3D12_TEXTURE_COPY_LOCATION dst{},src{};dst.pResource=readback.Get();dst.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;dst.PlacedFootprint=footprint;
         src.pResource=destination.Get();src.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;consumer->CopyTextureRegion(&dst,0,0,0,&src,nullptr);
         transition(consumer,destination.Get(),D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
-        if(!hoisted)transition(consumer,source.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // The native sequence continues from the restored state.
+        if(!hoisted)transition(consumer,source.Get(),state,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         transition(consumer,source.Get(),hoisted?state:D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_RENDER_TARGET);
         hr(consumer->Close(),"close consumer first");
         // Deliberately record the native writer after the consumer CPU callback.
         const float color[]{value,value,value,value};
         writer->ClearRenderTargetView(rtv->GetCPUDescriptorHandleForHeapStart(),color,0,nullptr);
-        if(hoisted)transition(writer,source.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,state);
+        if(whole){transition(writer,source.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_COPY_DEST);
+            if(hoisted)transition(writer,source.Get(),D3D12_RESOURCE_STATE_COPY_DEST,state);}
+        else if(hoisted)transition(writer,source.Get(),D3D12_RESOURCE_STATE_RENDER_TARGET,state);
         hr(writer->Close(),"close writer last");
         const unsigned queue_index=((frame-1)/8)%2;auto *queue=queues[queue_index].Get();
         if(frame>1&&(frame-1)%8==0){hr(queue->Wait(fence.Get(),signals),"queue chain");++switches;}
@@ -89,7 +96,7 @@ int wmain(int argc,wchar_t **argv){try{
     unsigned messages{};for(UINT64 i=0;i<info->GetNumStoredMessages();++i){SIZE_T n{};hr(info->GetMessage(i,nullptr,&n),"message size");std::vector<std::byte> b(n);
         auto *m=reinterpret_cast<D3D12_MESSAGE *>(b.data());hr(info->GetMessage(i,m,&n),"message");if(m->Severity<=D3D12_MESSAGE_SEVERITY_WARNING){std::cerr<<m->pDescription<<'\n';++messages;}}
     require(!messages,"GPU warnings/errors");std::ofstream log(out);log<<"{\"accepted\":true,\"frames\":64,\"pixels\":"<<pixels<<",\"signals\":"<<signals
-        <<",\"queue_switches\":"<<switches<<",\"consumer_recorded_first\":true,\"hoisted_frames\":48,\"states\":[4,64,128,192],\"frames_per_state\":16,\"adapter_luid\":["<<ad.AdapterLuid.HighPart<<','<<ad.AdapterLuid.LowPart
+        <<",\"queue_switches\":"<<switches<<",\"consumer_recorded_first\":true,\"hoisted_frames\":64,\"states\":[4,64,128,192,1024,128],\"whole_copy_kinds\":[4,5],\"frames_per_state\":16,\"adapter_luid\":["<<ad.AdapterLuid.HighPart<<','<<ad.AdapterLuid.LowPart
         <<"],\"vendor\":"<<ad.VendorId<<",\"gpu_warnings_errors\":0,\"retention\":";pins.write(log,fence->GetCompletedValue());log<<"}\n";
-    require(bool(log),"report");std::cout<<"PASS 64 reversed-recording frames; 524288 exact depth pixels; four states; 7 queue switches; GPU validation and retirement\n";return 0;
+    require(bool(log),"report");std::cout<<"PASS 96 reversed-recording frames; 786432 exact depth pixels; six writer/state kinds (two whole-copy); "<<switches<<" queue switches; GPU validation and retirement\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

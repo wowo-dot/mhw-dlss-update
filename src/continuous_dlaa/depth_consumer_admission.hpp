@@ -13,10 +13,12 @@ namespace mhw::continuous_dlaa {
 // draw, whose span transitions 12 -> 0x100 (RENDER_TARGET) at the writer.
 // Whole copy (render scale 1.0, v0.19.3): the opcode-10 executor takes the
 // whole-copy path (a native CopyResource, no child draw). Its span is the outer
-// writer's own; it ends in COPY_DEST (native 2048), its transition may be
-// hoisted before the writer, and the next span's COPY_DEST -> read transition
-// must have executed between the writer and the consumer (game-75 survey:
-// 12 -> 2048 at the writer, one hoisted 2048 -> 8 node before the TAA).
+// writer's own; it ends in COPY_DEST (native 2048) and its transition may be
+// hoisted before the writer. At the consumer the depth is in COPY_DEST, or in
+// the next span's read state when that transition was hoisted between writer
+// and consumer (game-75: hoisted 2048 -> 8 before the TAA; game-76: none, the
+// span starts after the TAA). As in the scaled mode, a span that starts at or
+// before the consumer without its transition rejects.
 class DepthConsumerAdmission {
     static constexpr unsigned native_copy_destination=2048;  // converter 0x259ba50: COPY_DEST
     using Tracker=NativeStateTrace::Tracker;
@@ -198,9 +200,6 @@ class DepthConsumerAdmission {
         // but only after the preceding span's last use and only into reads.
         s.detail[0]=43;
         if((!whole&&writer_nodes!=1)||(current_span+1<t.count&&s.starts[current_span+1]<=s.consumer_index))return 6;
-        // Whole copy: the consumer reads the depth, so its COPY_DEST span must
-        // have ended in a read transition before it.
-        if(whole&&current_span==s.span_index)return 6;
         s.detail[0]=50;
         std::uintptr_t array{};unsigned count{};std::uint64_t epoch{};Owner again;CopyPacket packet;
         if(!field(r,s.renderer,0x7af18,array)||array!=s.array||!field(r,s.renderer,0x7af28,count)||count!=s.count||

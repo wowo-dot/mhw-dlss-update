@@ -405,6 +405,36 @@ evaluations. All 16 surveys completed (reason 0), and the first 8 match the
   - a scaled writer in whole mode (1);
   - all earlier scaled cases unchanged.
 
+## game-76 (v0.19.3): the proof was too strict (frame generation off)
+
+- **The run:** every identity evaluation (1,647) was rejected with reason 6,
+  detail 43, state 1024. So DLSS never evaluated, and frame generation had no
+  ready frame for the whole session. Fail-closed held: the game rendered
+  natively, with no crash.
+- **The schedule this time:** writer 1079 and TAA dispatch 1139. The next
+  span, 2048 → 8, starts at 1142, and there is no depth node between writer
+  and consumer. Unlike game-75, the planner did not hoist the read
+  transition ahead of the TAA. So the depth is in COPY_DEST there.
+- **The error:** v0.19.3 required a read state at the consumer, reasoning
+  that the TAA reads the depth. The native schedule says otherwise for these
+  frames: the first read starts after the TAA dispatch. The proof must follow
+  the schedule, as the scaled mode does when no read transition has run yet
+  (state RENDER_TARGET).
+- **v0.19.4:**
+  - whole-copy mode accepts no executed read transition, giving state
+    COPY_DEST;
+  - a span that has started at or before the consumer without its
+    transition still rejects (6/43);
+  - `depth_copy_state` admits COPY_DEST, and `record_consumer_depth`
+    transitions COPY_DEST → COPY_SOURCE → COPY_DEST around the private copy;
+    the game's own later 2048 → read transition then runs unchanged.
+- **Tests:**
+  - `depth_consumer`: the read after the consumer gives 1024; a read span
+    started before the consumer without its transition gives 0.
+  - `depth_consumer_gpu`: six writer/state kinds, two of them whole copy
+    (COPY_DEST, and COPY_DEST then a hoisted read); 96 frames and 786,432
+    exact pixels on the RTX and WARP, with GPU validation clean.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy

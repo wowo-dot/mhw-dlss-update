@@ -85,7 +85,9 @@ int main(){
     whole("whole-copy-compute-read",[](F &f){f.whole_copy(4);},64);
     whole("whole-copy-read-at-consumer",[](F &f){f.whole_copy(8,F::consumer_index);},128);
     whole("whole-copy-writer-transition-on-writer",[](F &f){f.m.put(F::packets+1*0x100+8,std::uintptr_t{});f.m.put(F::writer_object+8,F::nodes);},128);
-    whole("whole-copy-read-after-consumer",[](F &f){f.whole_copy(8,F::next_index);},0);
+    // game-76: the read span starts after the TAA dispatch; the depth is still COPY_DEST there.
+    whole("whole-copy-read-after-consumer",[](F &f){f.whole_copy(8,F::next_index);},1024);
+    whole("whole-copy-read-span-started-untransitioned",[](F &f){f.whole_copy(8,F::next_index);f.m.put(F::spans+0x28,F::packets+40*0x100);},0);
     whole("whole-copy-read-at-writer",[](F &f){f.whole_copy(8,F::writer_index);},0);
     whole("whole-copy-scaled-mode",[](F &){},0,false);
     whole("whole-copy-subrectangle",[](F &f){f.source.rectangle={0,0,2560,1438};},0);
