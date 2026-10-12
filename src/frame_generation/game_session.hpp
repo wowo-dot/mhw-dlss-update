@@ -42,8 +42,10 @@ bool inputs_settled() noexcept;
 // Worker, after inputs_settled() and a queue barrier past every earlier
 // submission (continuous_dlaa::change_mode): drop the render-size images
 // (slot and staging depth/motion) so the next stage() and record() create
-// them at the new size. Disarmed only; arm(true) then resumes.
-bool release_inputs() noexcept;
+// them at the new size; with `scene` (a live aspect change, configure()
+// next) the scene-size HUD-less pass and images too. Disarmed only;
+// arm(true) then resumes.
+bool release_inputs(bool scene = false) noexcept;
 // Any thread. Total frame multiplier (2 = ordinary FG), applied at the next
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;

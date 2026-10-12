@@ -133,6 +133,31 @@ int main(){
         check(rr::applied_visits()==1&&rr::input_stamp(view.p,stamp)&&stamp.render_width==1280,"and back");
         rr::stop();check(!rr::retarget(2.F/3.F,why)&&why=="render scale not active","a stopped override refuses a retarget");rr::requested=true;
     }
+    {   // The game's own aspect switch (game-84): 64:27 in the 2560x1440 window
+        // gives a 2560x1080 scene. The override yields instead of faulting,
+        // and rebase() resumes it on the new scene.
+        rr::discovered.window_width=2560;rr::discovered.window_height=1440;
+        put(config.p+0x2cda,static_cast<unsigned char>(1));put(config.p+0x2cd0,2560U);put(config.p+0x2cd4,1440U);
+        put(renderer.p+0x1f448,2560U);put(renderer.p+0x1f44c,1440U);put(renderer.p+0x7b440,1U);put(renderer.p+0x7b43c,1U);
+        step();check(rr::fault==0&&rr::requested&&!rr::scene_changed(),"16:9 runs");
+        put(renderer.p+0x7b440,2U);put(renderer.p+0x7b43c,2U);put(renderer.p+0x19c,1080U);
+        step();check(rr::fault==0&&!rr::requested&&rr::scene_changed(),"the aspect switch yields instead of faulting");
+        step();check(rr::fault==0&&rr::scene_changed()&&!rr::input_stamp(view.p,stamp),"and stays yielded, stamps closed");
+        std::string why;
+        check(!rr::retarget(.5F,why),"a yielded override refuses a retarget");
+        check(rr::rebase({2560,1080},2560,.5F,why)&&rr::target.render==rr::Extent{1280,540}&&!rr::scene_changed()&&rr::requested,"rebase on the new scene");
+        step();step();
+        check(rr::input_stamp(view.p,stamp)&&stamp.render_width==1280&&stamp.render_height==540,"stamps follow the new scene");
+        put(renderer.p+0x7b440,1U);put(renderer.p+0x7b43c,1U);put(renderer.p+0x19c,1440U);
+        step();check(rr::fault==0&&rr::scene_changed(),"the way back yields too");
+        check(rr::rebase({2560,1440},2560,.5F,why),"rebase back");step();step();
+        check(rr::input_stamp(view.p,stamp)&&stamp.render_height==720,"16:9 again");
+        check(!rr::rebase({2560,1440},2560,.5F,why)&&why=="no scene change pending","rebase needs a pending change");
+        // A refused scene that is not the game's fit of the window still faults.
+        put(renderer.p+0x19c,1000U);step();check(rr::fault==4,"another scene size faults");
+        put(renderer.p+0x19c,1440U);rr::fault=0;rr::requested=true;step();step();
+        check(rr::input_stamp(view.p,stamp)&&stamp.render_height==720,"fixture restored");
+    }
     check(get<float>(renderer.p+0x200)==1.F&&get<float>(renderer.p+0x204)==1.F&&rr::reduced.depth_width==2560,"allocation scale unchanged");
     action=2;step();action=0;check(rr::ownership.native==.75F,"native updater new request retained");
     step();rr::stop();step();check(!rr::ownership.owned&&!rr::restored&&get<float>(renderer.p+0x1f0)==.75F,"stop restores latest native request");

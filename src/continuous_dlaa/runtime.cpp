@@ -956,8 +956,12 @@ template<class F> bool observed_true(F &&idle,std::uint64_t ms){
 }
 }
 bool live_modes() noexcept{return live_installed.load()&&healthy();}
-ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
-    ModeChange r;
+namespace {
+// change_mode() and change_scene(): the same rebuild. A scene change also
+// rediscovers the scene, reallocates the scene-size copies and resumes the
+// render-scale override with rebase() instead of retarget().
+ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
+    ModeChange r;r.scene=scene;
     LARGE_INTEGER began{},frequency{};QueryPerformanceCounter(&began);QueryPerformanceFrequency(&frequency);
     const auto mark=[&](unsigned phase){LARGE_INTEGER now{};QueryPerformanceCounter(&now);r.phase=phase;
         r.us[phase]=frequency.QuadPart>0?static_cast<std::uint64_t>((now.QuadPart-began.QuadPart)*1000000/frequency.QuadPart):0;};
@@ -970,15 +974,29 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
     bool changed=false;
     try{
         if(!live_modes()||!pass||!spatial||reconstruction.failed()){r.reason="DLSS is not running";return r;}
-        const unsigned basis=runtime.scene_override?runtime.window_width:runtime.width;
-        const auto planned=render_resolution::plan({runtime.width,runtime.height},basis,dlss_sdk::requested_scale(requested));
-        if(!planned.valid){r.reason="extent plan";return r;}
+        // The scene: the current one, or the game's new one (rediscovered;
+        // the device, swap chain and window must be the same).
+        pb::Runtime found=runtime;
+        if(scene){
+            if(!render_resolution::scene_changed()){r.reason="no scene change pending";return r;}
+            std::string why;
+            if(!pb::discover(cfg.image,found,why)){r.reason="discovery: "+why;r.retry=true;return r;}
+            if(found.device!=runtime.device||found.backend!=runtime.backend||found.swapchain!=runtime.swapchain||
+               found.window_width!=runtime.window_width||found.window_height!=runtime.window_height||found.format!=runtime.format)
+                throw std::runtime_error("the window or swap chain changed");
+        }else if(render_resolution::scene_changed()){r.reason="the screen layout is changing";r.retry=true;return r;}
+        r.scene_width=found.width;r.scene_height=found.height;
+        const unsigned basis=found.scene_override?found.window_width:found.width;
+        const auto planned=render_resolution::plan({found.width,found.height},basis,dlss_sdk::requested_scale(requested));
+        if(!planned.valid){
+            if(scene)throw std::runtime_error("extent plan");
+            r.reason="extent plan";return r;}
         // As install(): a 100% plan just below the scene runs as Quality.
         auto mode=requested;
-        if(mode==dlss_sdk::ReconstructionMode::dlaa&&(planned.render.width!=runtime.width||planned.render.height!=runtime.height))
+        if(mode==dlss_sdk::ReconstructionMode::dlaa&&(planned.render.width!=found.width||planned.render.height!=found.height))
             mode=dlss_sdk::ReconstructionMode::quality;
         r.mode=mode;r.render_width=planned.render.width;r.render_height=planned.render.height;
-        if(mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
+        if(!scene&&mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
             configured_mode=requested;r.ok=r.unchanged=true;return r;}
         // 1 pause.
         accepting.store(false);sr::stop();mark(1);
@@ -990,9 +1008,9 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
             sr::collect(completed);
             return !publishing.load()&&!projection_busy.test()&&!lease.list&&completed>=signal_value&&sr::idle();
         };
-        if(!wait_for(drained,3000))return resume("drain timeout (is the game rendering?)");
-        if(!observed_zero(pending,2000)||!observed_true(sr::callbacks_idle,2000))return resume("callbacks still running");
-        if(!drained())return resume("drain changed");
+        if(!wait_for(drained,3000)){r.retry=true;return resume("drain timeout (is the game rendering?)");}
+        if(!observed_zero(pending,2000)||!observed_true(sr::callbacks_idle,2000)){r.retry=true;return resume("callbacks still running");}
+        if(!drained()){r.retry=true;return resume("drain changed");}
         mark(2);
         // 3 queue barrier.
         {
@@ -1000,16 +1018,21 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
             {Lock lock;queue=last_queue;if(queue)r.barrier=++signal_value;}
             if(queue&&FAILED(queue->Signal(fence.Get(),r.barrier)))return resume("queue barrier signal");
         }
-        if(r.barrier&&!wait_for([&]{const auto v=fence->GetCompletedValue();return v!=UINT64_MAX&&v>=r.barrier;},2000))
-            return resume("queue barrier timeout");
+        if(r.barrier&&!wait_for([&]{const auto v=fence->GetCompletedValue();return v!=UINT64_MAX&&v>=r.barrier;},2000)){
+            r.retry=true;return resume("queue barrier timeout");}
         mark(3);
-        // 4 retarget. From here a failure stops the runtime.
-        if(std::string why;!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))return resume(("render scale: "+why).c_str());
+        // 4 the render scale: retarget, or rebase on the new scene. From here
+        // a failure stops the runtime.
+        if(scene){
+            if(std::string why;!render_resolution::rebase({found.width,found.height},basis,dlss_sdk::requested_scale(requested),why))
+                throw std::runtime_error("render scale: "+why);
+        }else if(std::string why;!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))
+            return resume(("render scale: "+why).c_str());
         changed=true;
         if(!wait_for([]{return render_resolution::applied_visits()>=4;},3000))throw std::runtime_error("the game did not apply the render scale");
         mark(4);
-        // 5 rebuild. Nothing records with the old feature, output or route
-        // effects any more, and the barrier proved their GPU work complete.
+        // 5 rebuild. Nothing records with the old feature, output, copies or
+        // route effects any more, and the barrier proved their GPU work done.
         auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
         const auto *initialization=ngx_startup::borrowed_initialization();
         if(!initialization)throw std::runtime_error("NGX startup ownership");
@@ -1018,15 +1041,25 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
             if(spatial->recorded()&&!spatial->retired())spatial->retire(fence.Get(),r.barrier,true);
             pass->retire(fence.Get(),r.barrier);
         }
-        const dlss_sdk::Geometry geometry{{runtime.width,runtime.height},{planned.render.width,planned.render.height},{runtime.width,runtime.height},mode};
-        auto fresh=std::make_unique<dlss_sdk::InlineFrame>(device,geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},
+        // The private copies of the game's inputs are scene-sized.
+        std::array<ComPtr<ID3D12Resource>,3> copies{raw[0],raw[1],raw[2]};
+        if(found.width!=runtime.width||found.height!=runtime.height){
+            constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R32_FLOAT,DXGI_FORMAT_R32_UINT};
+            for(unsigned i=0;i<3;++i){D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;desc.Width=found.width;desc.Height=found.height;
+                desc.DepthOrArraySize=desc.MipLevels=1;desc.Format=formats[i];desc.SampleDesc.Count=1;D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+                copies[i].Reset();
+                if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&copies[i]))))
+                    throw std::runtime_error("continuous raw allocation");}
+        }
+        const dlss_sdk::Geometry geometry{{found.width,found.height},{planned.render.width,planned.render.height},{found.width,found.height},mode};
+        auto fresh=std::make_unique<dlss_sdk::InlineFrame>(device,geometry,std::array<ID3D12Resource *,3>{copies[0].Get(),copies[1].Get(),copies[2].Get()},
             sdk_runtime,*initialization,true,true,false);
-        auto fresh_spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,
-            planned.render.width,planned.render.height},runtime.width,runtime.height,true,true);
-        if(!sr::resize(planned.render.width,planned.render.height,r.reason))throw std::runtime_error(r.reason);
+        auto fresh_spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{found.width,found.height,
+            planned.render.width,planned.render.height},found.width,found.height,true,true);
+        if(!sr::resize(planned.render.width,planned.render.height,found.width,found.height,r.reason))throw std::runtime_error(r.reason);
         {
             Lock lock;
-            pass=std::move(fresh);spatial=std::move(fresh_spatial);
+            pass=std::move(fresh);spatial=std::move(fresh_spatial);raw=copies;runtime=found;
             scaled_render={planned.render.width,planned.render.height};
             edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
             edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);
@@ -1042,10 +1075,13 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
         // 6 resume.
         sr::begin();accepting.store(true);mark(6);r.ok=true;return r;
     }catch(const std::exception &e){r.reason=e.what();}
-    catch(...){r.reason="mode change";}
-    if(!changed&&!fault.load()){const std::string why=r.reason.empty()?"mode change":r.reason;return resume(why.c_str());}
-    fail(47);stop();return r;
+    catch(...){r.reason="rebuild";}
+    if(!changed&&!scene&&!fault.load()){const std::string why=r.reason.empty()?"mode change":r.reason;return resume(why.c_str());}
+    r.retry=false;fail(scene?48:47);stop();return r;
 }
+}
+ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{return rebuild(requested,false);}
+ModeChange change_scene() noexcept{return rebuild(configured_mode,true);}
 void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept{if(!pass)configured_mode=m;}
 // Worker: the mode DLSS runs (after install; it may differ from the configured
 // one, see install) or will run.
@@ -1053,6 +1089,7 @@ dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_g
 #else
 bool live_modes() noexcept{return false;}
 ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept{ModeChange r;r.reason="unscaled build";return r;}
+ModeChange change_scene() noexcept{ModeChange r;r.reason="unscaled build";return r;}
 // The unscaled build always runs DLAA.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}

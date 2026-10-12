@@ -1511,12 +1511,14 @@ bool idle_locked() noexcept{
 }
 }
 bool idle() noexcept{Lock lock;return idle_locked();}
-bool resize(unsigned rw,unsigned rh,std::string &reason) noexcept{
+bool resize(unsigned rw,unsigned rh,unsigned w,unsigned h,std::string &reason) noexcept{
  try{
   Lock lock;
   if(!idle_locked()){reason="stream route not idle";return false;}
-  if(!valid_filter_geometry({rw,rh,width,height})){reason="stream extent";return false;}
-  render_w=rw;render_h=rh;
+  if(!valid_filter_geometry({rw,rh,w,h})){reason="stream extent";return false;}
+  // The diagnostic depth readbacks are sized for the output at prepare.
+  if(w!=width||h!=height)for(auto &capture:compute_depth_pixels)capture.disable();
+  render_w=rw;render_h=rh;width=w;height=h;
   for(auto &p:pipelines)p={};
   for(auto &p:dependency_pipelines)p={};
   for(auto &p:silhouette_pipelines)p={};

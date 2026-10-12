@@ -3,6 +3,7 @@
 #include <iosfwd>
 #include <string>
 #include <d3d12.h>
+#include "control.hpp"
 namespace mhw::render_resolution {
 struct InputStamp {
     std::uint64_t frame{};std::uintptr_t view{};
@@ -31,6 +32,14 @@ std::uint64_t applied_visits() noexcept;
 // `partial`, also one still filling), as "aspect_capture" events. Returns how
 // many it wrote. Research for the live aspect change (part B).
 unsigned write_captures(std::ostream &,bool partial=false);
+// The live aspect change (live-aspect.md). The game changed its scene size
+// with its aspect option: the override yielded (the game renders at its own
+// scale; input stamps refuse) instead of faulting. Any thread.
+bool scene_changed() noexcept;
+// Worker, after rediscovering the scene: plan `scale` on the new scene and
+// basis and resume the override. False (still yielded) if no change is
+// pending, after a fault, or for an invalid plan.
+bool rebase(Extent display,unsigned basis,float scale,std::string &reason);
 bool input_stamp(std::uintptr_t view,InputStamp &) noexcept;
 void stop() noexcept;
 bool healthy() noexcept;

@@ -357,7 +357,7 @@ bool inputs_settled() noexcept {
         return false;
     }
 }
-bool release_inputs() noexcept {
+bool release_inputs(bool scene) noexcept {
     auto &s = session;
     try {
         std::lock_guard lock(s.mutex);
@@ -370,8 +370,16 @@ bool release_inputs() noexcept {
         s.staged = {};
         s.slot_hudless = {};
         s.depth_desc = s.motion_desc = {};
+        if (scene) {
+            // A new scene size (configure() follows): the HUD-less pass and
+            // images go too, and are created again at the new size.
+            s.hudless.reset();
+            for (auto &i : s.images) i.hudless.Reset();
+            s.hudless_failed = false;
+            s.capture_window.store(false);
+        }
         // The next record() creates the depth/motion images at the new size
-        // (the HUD-less pass and images are scene-sized and stay).
+        // (without `scene`, the scene-sized HUD-less pass and images stay).
         s.created = s.create_failed = false;
         ++s.input_releases;
         return true;

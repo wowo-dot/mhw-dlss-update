@@ -67,3 +67,83 @@ Names are Fexty's where they exist. Offsets are in `sRender` (the renderer,
   DLSS fault (waiting up to 3 s), and in the post-fault loop.
 - **The switch still stops DLSS** (fault 4), but since v0.22.0 the game then
   renders natively at its own scale.
+
+## game-84 (v0.22.1, 2026-10-13): the switch, visit by visit
+
+The run used DLAA, a 2560x1440 window and 16:9 → 21:9 from the game's
+options. Capture 0 holds 256 visits:
+- **Visits 0-15:** 16:9 running: scene 2560x1440, aspect [1,1], flags 0,
+  scales 1.
+- **Visit 16 (frame 6862):** aspect [2,1], the request pending; nothing else
+  has changed yet.
+- **Visit 17 (frame 6863), 119 ms later:**
+  - aspect [2,2], scene 2560x1080, window still 2560x1440;
+  - refused with check 15: the scene differs from our plan;
+  - flags 0 (set and consumed between our visits);
+  - sizing 0; content scales 1; override 1, basis 2560x1440.
+
+  The 119 ms is the game recreating its targets (the "stop" frame-stats
+  window's maximum interval is 119,199 µs).
+- **From visit 18 on:** the same, every visit.
+
+**Other results:**
+- **No second capture:** the post-fault windows show no second stall, so
+  there was probably no switch back.
+- **Fault 4 stopped DLSS; FG stopped (`temporal_unhealthy`).** The game ran on
+  at its own scale (the player saw a clear image; at DLAA the scale was 1
+  anyway).
+- **The rectangle read 0:** `pb::read` reads scalars only, so v0.23.0 reads
+  it as four ints. The depth size reads 0 because the snapshot stops before
+  the depth read at check 15.
+
+## The recovery (v0.23.0)
+
+1. **`render_resolution` yields.** A refused snapshot with check 15 is the
+   game's own aspect switch when four things hold:
+   - the requested aspect equals the applied one;
+   - not mid-resize;
+   - the window is the discovered one;
+   - the scene is exactly the window fitted to the applied ratio, the way
+     `0x229ef20` computes it (16.F/9.F or 64.F/27.F).
+
+   Then the override stops (`requested` false) without a fault, and
+   `scene_changed()` reports it. That refused visit wrote nothing, so the
+   game renders at its own scale from there. Input stamps refuse, so DLSS
+   skips frames without a fault. Any other check-15 refusal still faults.
+2. **The worker runs `change_scene()`** when it sees the change, retried
+   every 500 ms while not ready, up to 40 times. Frame generation is paused
+   and settled as for a preset change.
+3. **`continuous_dlaa::change_scene()`** is the preset rebuild (`rebuild()`)
+   with the scene:
+   - it rediscovers the scene (`pb::discover`; the device, swap chain, window
+     and format must be the same; discovery refuses mid-resize, which counts
+     as "not ready");
+   - it pauses, drains and raises the queue barrier as for a preset change;
+   - `render_resolution::rebase()` plans the configured preset on the new
+     scene and basis, then resumes the override;
+   - it retires the DLSS feature and the spatial output;
+   - it reallocates the three scene-size copies;
+   - it creates the feature and output at the new scene;
+   - `sr::resize()` takes the new render and output extents (the diagnostic
+     depth readbacks are disabled when the output changes);
+   - `runtime` becomes the rediscovered scene.
+4. **Frame generation:** `release_inputs(true)` also drops the HUD-less pass
+   and images; `configure()` takes the new scene rectangle, centred in the
+   window; it is then armed again.
+5. **Failures:**
+   - before the rebase: retried;
+   - from it on: fault 48 and `stop()`, so the game keeps its own rendering;
+   - 40 tries without success: DLSS stays off (`stop()`).
+
+`dlss_scene_change` events log each attempt whose reason differs from the
+last, and the final one. They give the scene, render size, phase times
+(`phase_us`), the barrier and the FG steps.
+
+**Tests (`render_resolution_contract`):**
+- a 64:27 switch in the 2560x1440 window yields without a fault and closes
+  the stamps;
+- a yielded override refuses a retarget;
+- `rebase()` resumes on 2560x1080 with stamps at 1280x540;
+- the way back yields again;
+- rebase needs a pending change;
+- a refused scene that is not the game's fit still faults.

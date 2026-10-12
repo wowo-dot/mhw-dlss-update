@@ -79,10 +79,11 @@ void stop() noexcept;
 // awaiting submission: nothing of the route can still record.
 bool idle() noexcept;
 // With idle() true and every route submission complete on the GPU: adopt a
-// new render extent, drop the effect and silhouette pipelines built for the
-// old one (their geometry is baked in) and the plans not prepared. begin()
-// then resumes. False (extent unchanged) if not idle or the extent is invalid.
-bool resize(unsigned render_width,unsigned render_height,std::string &reason) noexcept;
+// new render extent, and for a live aspect change a new output (scene)
+// extent, drop the effect and silhouette pipelines built for the old ones
+// (their geometry is baked in) and the plans not prepared. begin() then
+// resumes. False (extents unchanged) if not idle or the extents are invalid.
+bool resize(unsigned render_width,unsigned render_height,unsigned width,unsigned height,std::string &reason) noexcept;
 bool queue_disable() noexcept;
 void disabled(bool) noexcept;
 // AL: the CopyTextureRegion detour with the storage AL fills; it runs

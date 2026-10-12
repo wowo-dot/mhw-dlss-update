@@ -36,14 +36,23 @@ bool live_modes() noexcept;
 // stops (fail closed: the game's own rendering at its own scale returns).
 struct ModeChange {
     bool ok{}, resumed{}, unchanged{};
+    bool scene{};   // change_scene()
+    bool retry{};   // not ready yet (discovery, drain): the worker tries again
     unsigned phase{};  // the last phase reached (above)
     std::string reason;
     std::array<std::uint64_t, 7> us{};  // microseconds from the start at the end of each phase
     std::uint64_t barrier{};  // the queue barrier's fence value
     dlss_sdk::ReconstructionMode mode{};  // the mode DLSS runs afterwards
-    unsigned render_width{}, render_height{};
+    unsigned render_width{}, render_height{}, scene_width{}, scene_height{};
 };
 ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept;
+// Worker, the live aspect change (docs/research/live-aspect.md): after
+// render_resolution::scene_changed(), the same rebuild for the game's new
+// scene: rediscovered (same device, swap chain and window), the scene-size
+// copies reallocated, the render scale rebased on it. Until it succeeds the
+// game renders at its own scale. A failure before anything changed is
+// retried (`retry`); after, the runtime stops (fault 48).
+ModeChange change_scene() noexcept;
 bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
 // install()'s qualification of the game (renderer discovery, code gates and,
 // for the scaled build, the native sizing admission) without side effects.

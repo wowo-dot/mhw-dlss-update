@@ -84,6 +84,24 @@ struct Capture {std::array<Visit,visits_before+visits_after> visits{};unsigned c
 std::array<Visit,visits_before> recent_visits{};unsigned recent_count{};
 std::array<Capture,capture_slots> captures{};unsigned capture_index{};bool capturing{};
 Snapshot previous_visit{};bool previous_valid{};
+// The game changed its scene size with its aspect option (game-84: one visit
+// shows the request pending, the next the new scene, about 120 ms later after
+// the game recreated its targets). The override yields to the game's own
+// scale until the worker rebases it on the new scene (live-aspect.md).
+bool scene_pending{};std::atomic<bool> scene_flag{};std::uint64_t scene_changes{};
+// Whether a refused snapshot shows the game's own aspect switch: the aspect
+// applied as requested, not mid-resize, and the scene exactly the window
+// fitted to it the way 0x229ef20 does (16:9 or 64:27; 0 is the window).
+bool aspect_fit(const Snapshot &s) noexcept {
+    if(s.aspect_requested!=s.aspect_applied||s.aspect_applied>2||(s.sizing&1)||!s.window_width||!s.window_height)return false;
+    int w=static_cast<int>(s.window_width),h=static_cast<int>(s.window_height);
+    if(s.aspect_applied){
+        const float ratio=s.aspect_applied==2?64.F/27.F:16.F/9.F,fw=static_cast<float>(w),fh=static_cast<float>(h);
+        if(fw/fh>ratio)w=static_cast<int>(fh*ratio);else if(fw/fh<ratio)h=static_cast<int>(fw/ratio);
+    }
+    return static_cast<unsigned>(w)==s.width&&static_cast<unsigned>(h)==s.height&&
+           s.window_width==discovered.window_width&&s.window_height==discovered.window_height;
+}
 // Under the lock, every visit.
 void note_visit(const Snapshot &s) noexcept {
     LARGE_INTEGER now{};QueryPerformanceCounter(&now);const Visit v{now.QuadPart,s};
@@ -132,7 +150,7 @@ bool snapshot(Snapshot &s,const Plan &t) noexcept {
     // Diagnostics only (the aspect capture); a failed read leaves zeros.
     pb::read(renderer+0x1f448,s.window_width);pb::read(renderer+0x1f44c,s.window_height);
     pb::read(renderer+0x7b440,s.aspect_requested);pb::read(renderer+0x7b43c,s.aspect_applied);
-    pb::read(renderer+0x1f548,s.flags);pb::read(renderer+0x188,s.rect);
+    pb::read(renderer+0x1f548,s.flags);for(unsigned i=0;i<4;++i)pb::read(renderer+0x188+4*i,s.rect[i]);
     if(!pb::read(renderer+0x1f210,s.frame)||!pb::read(renderer+0x198,s.width)||!pb::read(renderer+0x19c,s.height)||
        !pb::read(renderer+0x1f0,s.desired)||!pb::read(renderer+0x1f4,s.applied)||!pb::read(renderer+0x1f8,s.previous)||
        !pb::read(renderer+0x200,s.content_desired)||!pb::read(renderer+0x204,s.content)||!pb::read(renderer+0x208,s.combined)||
@@ -182,7 +200,14 @@ void update(pb::Frame *f) {
     }
     mhw_binding_forward(original,f);
     Snapshot s{};
-    if(!snapshot(s,t)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;note_visit(s);if(overrides)fail(4);return;}
+    if(!snapshot(s,t)){
+        Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;note_visit(s);
+        if(s.check==15&&requested.load()&&!fault.load()&&aspect_fit(s)){
+            // This visit wrote nothing: the game's own scale stays from here.
+            requested=false;scene_pending=true;scene_flag=true;++scene_changes;
+        }else if(overrides&&!scene_pending)fail(4);
+        return;
+    }
     {
     Lock lock;
     ++visits;last=s;note_visit(s);
@@ -307,6 +332,14 @@ bool retarget(float scale,std::string &reason) {
     target=planned;scaled_observed=0;return true;
 }
 std::uint64_t applied_visits() noexcept {Lock lock;return scaled_observed;}
+bool scene_changed() noexcept {return scene_flag.load();}
+bool rebase(Extent display,unsigned basis,float scale,std::string &reason) {
+    Lock lock;
+    if(!image||!scene_pending||fault.load()){reason="no scene change pending";return false;}
+    const auto planned=plan(display,basis,scale);
+    if(!planned.valid){reason="extent plan";return false;}
+    target=planned;basis_width=basis;scaled_observed=0;scene_pending=false;scene_flag=false;requested=true;return true;
+}
 unsigned write_captures(std::ostream &out,bool partial) {
     Lock lock;unsigned written=0;
     for(unsigned i=0;i<capture_slots;++i){auto &c=captures[i];
@@ -354,6 +387,7 @@ void write(std::ostream &out) {
        <<",\"display\":["<<target.display.width<<','<<target.display.height<<"],\"render\":["<<target.render.width<<','<<target.render.height<<"],\"requested_scale\":"<<target.requested<<",\"quantized_scale\":"<<target.quantized
        <<",\"swapchain_format\":"<<discovered.format<<",\"adapter_luid\":["<<discovered.luid_high<<','<<discovered.luid_low<<"],\"render_thread\":"<<render_thread
        <<",\"shared_viewport\":"<<shared_viewport<<",\"owned_hooks\":"<<(shared_viewport?1:2)
+       <<",\"scene_changes\":"<<scene_changes<<",\"scene_pending\":"<<scene_pending
        <<",\"viewport_counts\":["<<viewport_counts[0]<<','<<viewport_counts[1]<<','<<viewport_counts[2]<<"],\"viewport_unreadable\":"<<viewport_unreadable
        <<",\"baseline\":";write_snapshot(out,baseline);out<<",\"reduced\":";write_snapshot(out,reduced);out<<",\"last\":";write_snapshot(out,last);out<<",\"restoration\":";write_snapshot(out,restoration);
     out<<",\"startup\":";write_snapshot(out,startup);out<<",\"first_unqualified\":";write_snapshot(out,first_unqualified);

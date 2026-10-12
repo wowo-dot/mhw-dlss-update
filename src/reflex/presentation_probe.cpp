@@ -237,9 +237,64 @@ void change_dlss_mode(mhw::dlss_sdk::ReconstructionMode wanted,DlssRetry &retry)
         mhw::alpha::status::dlss_sizes(rw,rh,sw,sh);
         mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
         retry={};
-    }else if(r.resumed&&retry.count<15){retry.at=GetTickCount64()+2000;retry.mode=wanted;++retry.count;}
+    }else if((r.resumed||r.retry)&&retry.count<15){retry.at=GetTickCount64()+2000;retry.mode=wanted;++retry.count;}
     else retry={};
     if(generation&&!released)mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped,"mode-change-inputs");
+}
+// The live aspect change: tried every 500 ms while not ready (the game
+// mid-resize, a drain), up to 40 times; the game renders at its own scale
+// meanwhile. A failure after the rebuild began stops DLSS (fault 48).
+struct SceneRetry {std::uint64_t at{};unsigned count{};std::string reason;};
+// Worker: the game changed its scene size with its aspect option
+// (render_resolution yielded; continuous_dlaa::change_scene). Frame
+// generation pauses as for a preset change and takes the new scene rectangle.
+void change_dlss_scene(SceneRetry &retry){
+    namespace fg=mhw::frame_generation::game;namespace cd=mhw::continuous_dlaa;
+    const auto began=GetTickCount64();
+    const bool generation=fg::status().armed;
+    bool settled=true;
+    if(generation){
+        fg::arm(false);
+        while(!(settled=fg::inputs_settled())&&GetTickCount64()-began<3000)Sleep(1);
+    }
+    cd::ModeChange r;
+    if(settled)r=cd::change_scene();
+    else{r.reason="frame generation inputs did not settle";r.retry=true;}
+    bool released=true,configured=false;
+    if(generation&&r.ok){
+        released=fg::release_inputs(true);
+        unsigned sw{},sh{},ww{},wh{};mhw::reflex::temporal::scene_extent(sw,sh,ww,wh);
+        const auto chain=presentation->snapshot();
+        configured=released&&sw&&sh&&sw<=chain.width&&sh<=chain.height&&ww==chain.width&&wh==chain.height;
+        if(configured){
+            fg::configure(sdk,chain.width,chain.height,{(chain.width-sw)/2,(chain.height-sh)/2,sw,sh});
+            fg::arm(true);
+        }else mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");
+    }else if(generation&&r.retry)fg::arm(true);
+    const bool last=!r.ok&&r.retry&&retry.count+1>=40;
+    if(r.ok||!r.retry||last||!retry.count||r.reason!=retry.reason){
+        log<<"{\"event\":\"dlss_scene_change\",\"ok\":"<<r.ok<<",\"retry\":"<<r.retry<<",\"attempt\":"<<retry.count+1
+           <<",\"phase\":"<<r.phase<<",\"reason\":"<<quoted(r.reason)<<",\"scene\":["<<r.scene_width<<','<<r.scene_height
+           <<"],\"render\":["<<r.render_width<<','<<r.render_height<<"],\"mode\":"<<quoted(mhw::alpha::dlss_mode_value(r.mode))
+           <<",\"barrier\":"<<r.barrier<<",\"phase_us\":[";
+        for(unsigned i=1;i<r.us.size();++i)log<<(i>1?",":"")<<r.us[i];
+        log<<"],\"frame_generation\":{\"paused\":"<<generation<<",\"settled\":"<<settled<<",\"released\":"<<released
+           <<",\"configured\":"<<configured<<"},\"total_ms\":"<<GetTickCount64()-began<<"}\n"<<std::flush;
+    }
+    if(r.ok){
+        unsigned rw{},rh{},sw{},sh{},ww{},wh{};
+        mhw::reflex::temporal::render_extent(rw,rh);mhw::reflex::temporal::scene_extent(sw,sh,ww,wh);
+        mhw::alpha::status::dlss_sizes(rw,rh,sw,sh);
+        mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
+        retry={};
+    }else if(r.retry&&!last){retry.at=GetTickCount64()+500;++retry.count;retry.reason=r.reason;}
+    else{
+        // Not ready after 40 tries, or failed: DLSS stays off; the game renders
+        // at its own scale (a failure also stopped the runtime).
+        retry.at=UINT64_MAX;
+        if(r.retry)cd::stop();
+        mhw::alpha::status::dlss(mhw::alpha::status::Stage::off,"scene-change");
+    }
 }
 #endif
 #endif
@@ -1042,7 +1097,7 @@ DWORD WINAPI worker(void*) noexcept {
                 // After a live mode change: the sleep count at which the driver is
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
-                DlssRetry dlss_retry;
+                DlssRetry dlss_retry;SceneRetry scene_retry;
 #endif
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
@@ -1088,6 +1143,8 @@ DWORD WINAPI worker(void*) noexcept {
                         require(driver_mode("live",reflex_applied.load()!=0),"driver-live-mode");
                     }
                     mhw::render_resolution::write_captures(log);
+                    // The game's own aspect switch (render_resolution yielded).
+                    if(mhw::render_resolution::scene_changed()&&GetTickCount64()>=scene_retry.at)change_dlss_scene(scene_retry);
                     {   // A live preset change from the menu, or its retry.
                         mhw::dlss_sdk::ReconstructionMode wanted{};
                         if(mhw::continuous_dlaa::requested_mode(wanted)){dlss_retry={};change_dlss_mode(wanted,dlss_retry);}
