@@ -59,6 +59,14 @@ symptom of a draw left at the 1280 x 720 viewport.
   draw in the same list and reads the same view, and the predicate executes
   exactly one of them. The game's own lifetime guarantee covers it.
 
+**game-60 (v0.16.3): confirmed by the user ("looks fixed").**
+- The shield sits on the hunter.
+- Rejection 8 is 0.
+- Only two kinds of draw stay native, 11,670 each (one a frame):
+  - the eye draws, which write nothing;
+  - `Simple_Mt_AlphaTest`, with no visible artefact reported.
+- DLSS ran without faults, and there was no crash.
+
 The list of rejections and fixes continues:
    - `Simple_Mt_AlphaTest` stays native. Redrawing a lit forward material at
      output size is a separate adaptation: its tiled lights are indexed in
