@@ -201,6 +201,45 @@ bool apply_reflex_mode(bool fg_loaded) {
     if(result==sl::Result::eOk){reflex_applied.store(requested);mhw::alpha::status::reflex_mode(reflex_mode_name(requested));return true;}
     reflex_requested.store(reflex_applied.load());return false;
 }
+// A live preset change the game did not render through (paused, minimized):
+// retried every 2 s, up to 15 times, unless the menu asks for another mode.
+struct DlssRetry {std::uint64_t at{};mhw::dlss_sdk::ReconstructionMode mode{};unsigned count{};};
+// Worker: a live preset change (continuous_dlaa::change_mode). Frame
+// generation pauses for it: Off with its inputs settled before, its
+// render-size images released after, then armed again.
+void change_dlss_mode(mhw::dlss_sdk::ReconstructionMode wanted,DlssRetry &retry){
+    namespace fg=mhw::frame_generation::game;namespace cd=mhw::continuous_dlaa;
+    const auto began=GetTickCount64();const auto from=cd::reconstruction_mode();
+    const bool generation=fg::status().armed;
+    bool settled=true;
+    if(generation){
+        fg::arm(false);
+        while(!(settled=fg::inputs_settled())&&GetTickCount64()-began<3000)Sleep(1);
+    }
+    const auto fg_ms=GetTickCount64()-began;
+    cd::ModeChange r;
+    if(settled)r=cd::change_mode(wanted);
+    else{r.reason="frame generation inputs did not settle";r.resumed=true;}
+    bool released=true;
+    if(generation&&r.ok&&!r.unchanged)released=fg::release_inputs();
+    if(generation&&(r.ok||r.resumed)&&released)fg::arm(true);
+    log<<"{\"event\":\"dlss_mode_change\",\"from\":"<<quoted(mhw::alpha::dlss_mode_value(from))
+       <<",\"requested\":"<<quoted(mhw::alpha::dlss_mode_value(wanted))<<",\"mode\":"<<quoted(mhw::alpha::dlss_mode_value(r.mode))
+       <<",\"ok\":"<<r.ok<<",\"unchanged\":"<<r.unchanged<<",\"resumed\":"<<r.resumed<<",\"phase\":"<<r.phase
+       <<",\"reason\":"<<quoted(r.reason)<<",\"render\":["<<r.render_width<<','<<r.render_height<<"],\"barrier\":"<<r.barrier<<",\"phase_ms\":[";
+    for(unsigned i=1;i<r.ms.size();++i)log<<(i>1?",":"")<<r.ms[i];
+    log<<"],\"frame_generation\":{\"paused\":"<<generation<<",\"settle_ms\":"<<fg_ms<<",\"settled\":"<<settled<<",\"released\":"<<released
+       <<"},\"total_ms\":"<<GetTickCount64()-began<<",\"retry\":"<<retry.count<<"}\n"<<std::flush;
+    if(r.ok){
+        unsigned rw{},rh{},sw{},sh{},ww{},wh{};
+        mhw::reflex::temporal::render_extent(rw,rh);mhw::reflex::temporal::scene_extent(sw,sh,ww,wh);
+        mhw::alpha::status::dlss_sizes(rw,rh,sw,sh);
+        mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
+        retry={};
+    }else if(r.resumed&&retry.count<15){retry.at=GetTickCount64()+2000;retry.mode=wanted;++retry.count;}
+    else retry={};
+    if(generation&&!released)mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped,"mode-change-inputs");
+}
 #endif
 #endif
 bool close_sdk() noexcept {
@@ -1006,6 +1045,7 @@ DWORD WINAPI worker(void*) noexcept {
                 // After a live mode change: the sleep count at which the driver is
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
+                DlssRetry dlss_retry;
 #endif
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
@@ -1049,6 +1089,11 @@ DWORD WINAPI worker(void*) noexcept {
                         // As at the first heartbeat: low latency on for On and Boost, off for Off.
                         live_check_sleeps=0;
                         require(driver_mode("live",reflex_applied.load()!=0),"driver-live-mode");
+                    }
+                    {   // A live preset change from the menu, or its retry.
+                        mhw::dlss_sdk::ReconstructionMode wanted{};
+                        if(mhw::continuous_dlaa::requested_mode(wanted)){dlss_retry={};change_dlss_mode(wanted,dlss_retry);}
+                        else if(dlss_retry.at&&GetTickCount64()>=dlss_retry.at){dlss_retry.at=0;change_dlss_mode(dlss_retry.mode,dlss_retry);}
                     }
 #endif
 #ifdef MHW_FG_SCENE_PROBE
@@ -1162,6 +1207,11 @@ DWORD WINAPI worker(void*) noexcept {
             mhw::frame_generation::game::arm(false);
             const auto fg_off_began=GetTickCount64();
             while(mhw::frame_generation::game::frame_generation_on() && GetTickCount64()-fg_off_began<3000)Sleep(10);
+#ifdef MHW_ALPHA
+            // A DLSS fault: the game's own rendering returns, at its own render
+            // scale and anti-aliasing, instead of the reduced scale DLSS asked for.
+            if(stop_reason==std::string_view("temporal_unhealthy"))mhw::continuous_dlaa::stop();
+#endif
             const auto frames=live_frames->snapshot();
             if(stop_reason==std::string_view("duration")&&std::filesystem::exists(stop_file))stop_reason="stop_request";
             log_lifecycle(log);

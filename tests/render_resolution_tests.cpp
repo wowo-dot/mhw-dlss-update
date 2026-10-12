@@ -91,24 +91,24 @@ int main(){
     for(auto offset:{0x6b0,0x6b4,0x6b8})put(view.p+offset,1.F);
     put(view.p+0x628,depth.p);put(depth.p+0xa0,texture.p);put(texture.p+0x88,2560U|(1440U<<16));
     rr::Snapshot captured{};
-    check(rr::snapshot(captured)&&captured.width_override==0&&captured.basis_width==2560,"display width route admitted");
-    check(rr::planned_view_scale(.5F)&&!rr::planned_view_scale(.49F)&&rr::truncated_ratio()==.5F,"2:1 scenes plan exactly half");
+    check(rr::snapshot(captured,rr::target)&&captured.width_override==0&&captured.basis_width==2560,"display width route admitted");
+    check(rr::planned_view_scale(rr::target,.5F)&&!rr::planned_view_scale(rr::target,.49F)&&rr::truncated_ratio(rr::target)==.5F,"2:1 scenes plan exactly half");
     put(config.p+0x2cda,static_cast<unsigned char>(1));put(config.p+0x2cd0,2560U);put(config.p+0x2cd4,1440U);
-    check(rr::snapshot(captured)&&captured.width_override==1&&captured.basis_width==2560,"live-shaped config width route admitted");
-    put(config.p+0x2cd0,1920U);check(!rr::snapshot(captured),"reject alternate width mismatch");put(config.p+0x2cd0,2560U);
-    put(config.p+0x2cd4,1080U);check(!rr::snapshot(captured),"reject alternate height mismatch");put(config.p+0x2cd4,1440U);
-    put(config.p+0x2cda,static_cast<unsigned char>(2));check(!rr::snapshot(captured),"reject unknown override flag");put(config.p+0x2cda,static_cast<unsigned char>(1));
+    check(rr::snapshot(captured,rr::target)&&captured.width_override==1&&captured.basis_width==2560,"live-shaped config width route admitted");
+    put(config.p+0x2cd0,1920U);check(!rr::snapshot(captured,rr::target),"reject alternate width mismatch");put(config.p+0x2cd0,2560U);
+    put(config.p+0x2cd4,1080U);check(!rr::snapshot(captured,rr::target),"reject alternate height mismatch");put(config.p+0x2cd4,1440U);
+    put(config.p+0x2cda,static_cast<unsigned char>(2));check(!rr::snapshot(captured,rr::target),"reject unknown override flag");put(config.p+0x2cda,static_cast<unsigned char>(1));
     {   // 21:9 pillarboxed in a 5120x1440 window: a view holding the truncated
         // ratio 1706/3413 is admitted (game-22); anything lower is not.
         const auto saved=rr::target;rr::target=pillar;rr::discovered.window_width=5120;rr::discovered.window_height=1440;
         put(renderer.p+0x198,3413U);put(config.p+0x2cd0,5120U);
-        put(view.p+0x6b0,1706.F/3413.F);check(rr::snapshot(captured)&&captured.basis_width==5120,"truncated view ratio admitted");
-        check(rr::planned_view_scale(1706.F/3413.F)&&rr::planned_view_scale(.5F)&&!rr::planned_view_scale(1705.F/3413.F),"truncated ratio is the planned view scale");
-        put(view.p+0x6b0,1705.F/3413.F);check(!rr::snapshot(captured)&&captured.check==17,"view scale below the truncated ratio refused");
-        rr::target=p;check(!rr::snapshot(captured)&&captured.check==15,"pillarbox snapshot needs its own plan");
+        put(view.p+0x6b0,1706.F/3413.F);check(rr::snapshot(captured,rr::target)&&captured.basis_width==5120,"truncated view ratio admitted");
+        check(rr::planned_view_scale(rr::target,1706.F/3413.F)&&rr::planned_view_scale(rr::target,.5F)&&!rr::planned_view_scale(rr::target,1705.F/3413.F),"truncated ratio is the planned view scale");
+        put(view.p+0x6b0,1705.F/3413.F);check(!rr::snapshot(captured,rr::target)&&captured.check==17,"view scale below the truncated ratio refused");
+        rr::target=p;check(!rr::snapshot(captured,rr::target)&&captured.check==15,"pillarbox snapshot needs its own plan");
         put(view.p+0x6b0,1.F);put(renderer.p+0x198,2560U);put(config.p+0x2cd0,2560U);rr::target=saved;
         rr::discovered.window_width=rr::discovered.window_height=0;
-        check(rr::snapshot(captured),"16:9 snapshot restored");
+        check(rr::snapshot(captured,rr::target),"16:9 snapshot restored");
     }
     using Call=std::uint64_t(*)(std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t);
     check(reinterpret_cast<Call>(mhw_resolution_entry)(renderer.p,2,3,4)==answer,"production ASM forwards unmatched caller");
@@ -119,6 +119,20 @@ int main(){
     rr::InputStamp stamp{};
     check(rr::active_ready()&&rr::input_stamp(view.p,stamp)&&stamp.render_width==1280&&stamp.render_height==720&&stamp.active_scale==.5F&&stamp.content_scale==1.F,"temporal capture sees applied scale");
     check(!rr::input_stamp(view.p+8,stamp),"temporal stamp rejects different view");
+    {   // Live preset change: the next visit writes the new plan; stamps close
+        // until the game shows it applied, then follow it.
+        rr::basis_width=2560;std::string why;
+        check(!rr::retarget(.4F,why)&&why=="extent plan"&&rr::target.quantized==.5F,"an invalid retarget keeps the plan");
+        check(rr::retarget(2.F/3.F,why)&&rr::target.render==rr::Extent{1696,954}&&rr::applied_visits()==0,"retarget plans Quality");
+        check(!rr::active_ready()&&!rr::input_stamp(view.p,stamp),"old stamps close at a retarget");
+        const auto before=rr::overrides;
+        step();check(rr::overrides==before+1&&get<float>(renderer.p+0x1f0)==q.quantized&&rr::applied_visits()==0,"the next visit writes the new scale");
+        step();check(rr::applied_visits()==1&&rr::fault==0,"the visit after observes it applied");
+        check(rr::input_stamp(view.p,stamp)&&stamp.render_width==1696&&stamp.render_height==954&&stamp.active_scale==q.quantized,"stamps follow the new plan");
+        check(rr::retarget(.5F,why),"back to Performance");step();step();
+        check(rr::applied_visits()==1&&rr::input_stamp(view.p,stamp)&&stamp.render_width==1280,"and back");
+        rr::stop();check(!rr::retarget(2.F/3.F,why)&&why=="render scale not active","a stopped override refuses a retarget");rr::requested=true;
+    }
     check(get<float>(renderer.p+0x200)==1.F&&get<float>(renderer.p+0x204)==1.F&&rr::reduced.depth_width==2560,"allocation scale unchanged");
     action=2;step();action=0;check(rr::ownership.native==.75F,"native updater new request retained");
     step();rr::stop();step();check(!rr::ownership.owned&&!rr::restored&&get<float>(renderer.p+0x1f0)==.75F,"stop restores latest native request");

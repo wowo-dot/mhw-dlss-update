@@ -252,7 +252,11 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
         if (id == dlss_mode_row) {
             if (!mm::mode_at(value->i, s.dlss_mode)) return CMFM_ERROR;
             state.dirty = state.mode_dirty = true;
-            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_mode_value(s.dlss_mode) + " (from the next start)");
+            // Live while DLSS runs (the worker rebuilds it at the new scale).
+            const bool now = continuous_dlaa::live_modes();
+            if (now) continuous_dlaa::request_mode(s.dlss_mode);
+            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_mode_value(s.dlss_mode) +
+                                 (now ? " (applied now)" : " (from the next start)"));
             return CMFM_OK;
         }
         if (id == reflex_setting_row) {
@@ -453,8 +457,7 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
             row(dlss_mode_row, CMFM_TYPE_CHOICE, label_text("DLSS mode"),
                 help_text("DLAA renders at full resolution; Quality, Balanced and Performance render at 67%, 58% and 50% and "
-                          "upscale. Lower is faster."),
-                CMFM_FLAG_RESTART),
+                          "upscale. Lower is faster. Applies at once; the picture pauses for a moment.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
                 help_text("DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics card."),

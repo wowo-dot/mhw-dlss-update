@@ -28,7 +28,10 @@ std::array<std::uintptr_t,2> targets{};
 void *original{};
 Viewport original_viewport{};
 Setter setter{};
+// The planned extent. The worker replaces it (install, retarget) under the
+// lock; the render thread and the input checks take one copy per use.
 Plan target;
+unsigned basis_width{};  // the plan's basis: the scene width, or the window's (aspect option)
 Ownership ownership;
 std::atomic<bool> requested{},restored{},hooks_disabled{true};
 std::atomic<unsigned> pending{},fault{};
@@ -58,10 +61,10 @@ Snapshot startup{},first_unqualified{},last_unqualified{};
 // keeps it (game-22, game-23) while rendering the same 1706x720 viewport, so it
 // counts as the planned scale; the input checks still verify the rectangle.
 std::uint64_t truncated_views{};Snapshot first_truncated{};
-float truncated_ratio() noexcept {return static_cast<float>(target.render.width)/static_cast<float>(target.display.width);}
+float truncated_ratio(const Plan &t) noexcept {return static_cast<float>(t.render.width)/static_cast<float>(t.display.width);}
 // The view scale of the planned extent: the quantized request, or its
 // truncated ratio (identical, 0.5, for 2:1 scenes).
-bool planned_view_scale(float value) noexcept {return value==target.quantized||value==truncated_ratio();}
+bool planned_view_scale(const Plan &t,float value) noexcept {return value==t.quantized||value==truncated_ratio(t);}
 struct ViewportSample {std::uint64_t tick{};std::uintptr_t caller{};std::array<float,6> values{};};
 ViewportSample first_reduced_viewport{},last_reduced_viewport{};
 void fail(unsigned reason) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,reason);requested=false;}
@@ -69,7 +72,7 @@ bool write_request(float value) noexcept {
     __try {*reinterpret_cast<volatile float *>(renderer+0x1f0)=value;return true;}
     __except(EXCEPTION_EXECUTE_HANDLER){return false;}
 }
-bool snapshot(Snapshot &s) noexcept {
+bool snapshot(Snapshot &s,const Plan &t) noexcept {
     // Every value is read before any is judged, so a refused snapshot still
     // records what the renderer reported. Checks: 1 renderer, 2 API, 3 backend,
     // 4 view, 5 sizing word, 6 backend wrapper, 7 config, 8 renderer/view
@@ -101,11 +104,11 @@ bool snapshot(Snapshot &s) noexcept {
     if(override_width>1)return stop(12);
     if(!matching_basis({s.width,s.height},s.width_override,{s.basis_width,s.basis_height},{discovered.window_width,discovered.window_height}))return stop(13);
     for(float value:{s.desired,s.applied,s.previous,s.content_desired,s.content,s.combined,s.view_scale,s.view_content,s.view_combined})if(!std::isfinite(value))return stop(14);
-    if(s.width!=target.display.width||s.height!=target.display.height)return stop(15);
+    if(s.width!=t.display.width||s.height!=t.display.height)return stop(15);
     if(s.content_desired!=1.F||s.content!=1.F||s.view_content!=1.F)return stop(16);
     // A view may hold the truncated ratio of the planned render extent, just
     // under 0.5 for an odd scene; 2:1 scenes keep the 0.5 floor exactly.
-    const float view_floor=std::min(.5F,truncated_ratio());
+    const float view_floor=std::min(.5F,truncated_ratio(t));
     if(s.desired<.5F||s.desired>1.F||s.applied<.5F||s.applied>1.F||s.view_scale<view_floor||s.view_scale>1.F)return stop(17);
     if(s.view_flags&0x840000)return stop(18);
     std::uintptr_t container{},texture{};unsigned packed{};
@@ -121,7 +124,8 @@ void update(pb::Frame *f) {
     const bool matching=f->caller==expected_return&&f->gpr[1]==renderer;
     if(!matching){mhw_binding_forward(original,f);return;}
     const auto thread=GetCurrentThreadId();
-    {Lock lock;if(!render_thread)render_thread=thread;}
+    Plan t;
+    {Lock lock;if(!render_thread)render_thread=thread;t=target;}
     if(render_thread!=thread){fail(1);mhw_binding_forward(original,f);return;}
     // This is inside the original renderer's update invocation. No worker writes.
     bool read_ok=current_renderer();float current{},restore_value{};
@@ -137,12 +141,13 @@ void update(pb::Frame *f) {
     }
     mhw_binding_forward(original,f);
     Snapshot s{};
-    if(!snapshot(s)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;if(overrides)fail(4);return;}
+    if(!snapshot(s,t)){Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;if(overrides)fail(4);return;}
     {
     Lock lock;
     ++visits;last=s;
     if(s.view_scale<.5F){if(!truncated_views++)first_truncated=s;}
-    if(s.applied==target.quantized&&planned_view_scale(s.view_scale)&&s.combined==target.quantized&&s.view_combined==target.quantized){
+    // A retarget during this visit leaves its count for the next one.
+    if(t.quantized==target.quantized&&s.applied==t.quantized&&planned_view_scale(t,s.view_scale)&&s.combined==t.quantized&&s.view_combined==t.quantized){
         ++scaled_observed;reduced=s;
     }
     if(!requested.load()){
@@ -156,13 +161,13 @@ void update(pb::Frame *f) {
         if(s.desired!=1.F||s.applied!=1.F||s.view_scale!=1.F||s.combined!=1.F||s.view_combined!=1.F){fail(5);return;}
         baseline=s;return;
     }
-    ownership.after(s.desired,target.quantized);
+    ownership.after(s.desired,t.quantized);
     }
     // Do not hold the telemetry lock across engine code: SEH must be able to
     // unwind without leaving a lock owned by the interrupted render callback.
-    setter(renderer,target.requested);
+    setter(renderer,t.requested);
     float written{};
-    if(!pb::read(renderer+0x1f0,written)||written!=target.quantized){fail(6);return;}
+    if(!pb::read(renderer+0x1f0,written)||written!=t.quantized){fail(6);return;}
     {Lock lock;++overrides;}
 }
 void viewport_observation(ID3D12GraphicsCommandList *list,UINT count,const D3D12_VIEWPORT *views,std::uintptr_t caller) {
@@ -174,9 +179,10 @@ void viewport_observation(ID3D12GraphicsCommandList *list,UINT count,const D3D12
     if(address>UINTPTR_MAX-sizeof(D3D12_VIEWPORT))return;
     for(unsigned i=0;i<6;++i)if(!pb::read(address+4*i,sample.values[i])||!std::isfinite(sample.values[i])){Lock lock;++viewport_unreadable;return;}
     const auto &v=sample.values;unsigned kind=2;
-    if(v[0]==0&&v[1]==0&&v[2]==static_cast<float>(target.display.width)&&v[3]==static_cast<float>(target.display.height))kind=0;
-    else if(v[0]==0&&v[1]==0&&v[2]==static_cast<float>(target.render.width)&&v[3]==static_cast<float>(target.render.height))kind=1;
-    Lock lock;if(!overrides)return;++viewport_counts[kind];
+    Lock lock;const auto &t=target;
+    if(v[0]==0&&v[1]==0&&v[2]==static_cast<float>(t.display.width)&&v[3]==static_cast<float>(t.display.height))kind=0;
+    else if(v[0]==0&&v[1]==0&&v[2]==static_cast<float>(t.render.width)&&v[3]==static_cast<float>(t.render.height))kind=1;
+    if(!overrides)return;++viewport_counts[kind];
     if(kind==1){if(!first_reduced_viewport.tick)first_reduced_viewport=sample;last_reduced_viewport=sample;}
 }
 void STDMETHODCALLTYPE viewport_call(ID3D12GraphicsCommandList *list,UINT count,const D3D12_VIEWPORT *views) {
@@ -225,8 +231,8 @@ bool ready(std::uintptr_t base,float scale,std::string &reason) {
     std::uintptr_t root{};if(!pb::read(base+0x51c4480,root)||!root||root>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     // snapshot() reads this module state. No hook exists before install(), so
     // nothing else reads it while it is set for the check.
-    image=base;renderer=root;discovered=probe;target=planned;Snapshot s{};const bool admitted=snapshot(s);
-    image=0;renderer=0;discovered={};target={};
+    image=base;renderer=root;discovered=probe;Snapshot s{};const bool admitted=snapshot(s,planned);
+    image=0;renderer=0;discovered={};
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     return true;
 }
@@ -235,12 +241,13 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     shared_viewport=shared;
     if(!pb::discover(base,discovered,reason))return false;
     // A pillarboxed scene quantizes its scale against the window (config basis).
-    target=plan({discovered.width,discovered.height},discovered.scene_override?discovered.window_width:discovered.width,scale);
+    basis_width=discovered.scene_override?discovered.window_width:discovered.width;
+    target=plan({discovered.width,discovered.height},basis_width,scale);
     if(!target.valid){reason="extent plan";return false;}
     if(!sizing_code(base)){reason="native sizing code gate";return false;}
     if(!pb::read(base+0x51c4480,renderer)||!renderer||renderer>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     image=base;expected_return=base+0x22982e7;setter=reinterpret_cast<Setter>(base+0x229bd70);
-    Snapshot s{};const bool admitted=snapshot(s);{Lock lock;startup=s;}
+    Snapshot s{};const bool admitted=snapshot(s,target);{Lock lock;startup=s;}
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     targets={base+0x229ed30,discovered.targets[pb::viewport]};
     if(MH_CreateHook(reinterpret_cast<void *>(targets[0]),reinterpret_cast<void *>(mhw_resolution_entry),&original)!=MH_OK||
@@ -251,11 +258,19 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     return true;
 }
 void stop() noexcept {requested=false;}
+bool retarget(float scale,std::string &reason) {
+    Lock lock;
+    if(!image||!requested.load()||fault.load()){reason="render scale not active";return false;}
+    const auto planned=plan(target.display,basis_width,scale);
+    if(!planned.valid){reason="extent plan";return false;}
+    target=planned;scaled_observed=0;return true;
+}
+std::uint64_t applied_visits() noexcept {Lock lock;return scaled_observed;}
 bool active_ready() noexcept {Lock lock;return requested.load()&&!fault.load()&&scaled_observed>=32;}
 bool input_stamp(std::uintptr_t view,InputStamp &out) noexcept {
     Lock lock;Snapshot s{};
-    if(!requested.load()||fault.load()||!snapshot(s)||s.view!=view||
-       s.applied!=target.quantized||!planned_view_scale(s.view_scale)||s.combined!=target.quantized||s.view_combined!=target.quantized)return false;
+    if(!requested.load()||fault.load()||!snapshot(s,target)||s.view!=view||
+       s.applied!=target.quantized||!planned_view_scale(target,s.view_scale)||s.combined!=target.quantized||s.view_combined!=target.quantized)return false;
     out={s.frame,s.view,s.width,s.height,target.render.width,target.render.height,s.applied,s.content};return true;
 }
 bool healthy() noexcept {return fault.load()==0;}

@@ -49,6 +49,13 @@ public:
     // serialize GPU use and restore these states after diagnostic copies.
     std::array<ID3D12Resource *,5> private_images() const noexcept;
     void finish(ID3D12Fence *,std::uint64_t,bool all_recordings_retired);
+    // Live rebuild (continuous_dlaa::change_mode): releases the SDK feature
+    // and parameters, with or without a successful evaluation, once the
+    // caller proved every recording that used this frame complete: `fence`
+    // reached `value`, signalled after them on their queue. The destructor
+    // then frees the images instead of keeping them for the process.
+    void retire(ID3D12Fence *,std::uint64_t value);
+    bool released() const noexcept;
     // Converted color/depth/motion, SDK RGBA32 output, native packed output.
     std::array<std::vector<std::byte>,5> collect(ID3D12Fence *,std::uint64_t,bool recording_retired);
     void write(std::ostream &) const;

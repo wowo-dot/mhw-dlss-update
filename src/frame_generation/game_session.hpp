@@ -35,6 +35,15 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 // at the next Present (Streamline itself stays alive until process exit).
 void arm(bool armed) noexcept;
 bool frame_generation_on() noexcept;
+// Worker, live preset change: disarmed, Off at the last Present, and no
+// input slot holding a copy on a list not yet submitted or one the SDK may
+// still read.
+bool inputs_settled() noexcept;
+// Worker, after inputs_settled() and a queue barrier past every earlier
+// submission (continuous_dlaa::change_mode): drop the render-size images
+// (slot and staging depth/motion) so the next stage() and record() create
+// them at the new size. Disarmed only; arm(true) then resumes.
+bool release_inputs() noexcept;
 // Any thread. Total frame multiplier (2 = ordinary FG), applied at the next
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;

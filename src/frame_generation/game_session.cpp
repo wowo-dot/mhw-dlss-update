@@ -134,6 +134,7 @@ struct Session {
     unsigned since_switch{~0U}, since_long{~0U};
     bool long_matched{};
     std::uint64_t count_switches{}, long_presents{}, long_near_switch{};
+    std::uint64_t input_releases{};  // live preset changes (release_inputs())
     // Tagged frames with reset: all, and those whose DLSS history was reset
     // (the rest had no consecutive predecessor). DLSS-G presents no generated
     // frame for a reset.
@@ -176,9 +177,10 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
     s.depth_desc = depth->GetDesc();
     s.motion_desc = motion->GetDesc();
     const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
-    // HUD-less is optional: any failure here leaves depth/motion-only FG.
+    // HUD-less is optional: any failure here leaves depth/motion-only FG. It is
+    // scene-sized, so a live preset change keeps it (release_inputs()).
     const auto scene_desc = scene->GetDesc();
-    try {
+    if (!s.hudless && !s.hudless_failed) try {
         // The HUD-less image covers exactly the scene rectangle.
         if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
             throw std::runtime_error("hudless scene extent");
@@ -340,6 +342,43 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
 bool frame_generation_on() noexcept { return session.on.load(); }
+bool inputs_settled() noexcept {
+    auto &s = session;
+    try {
+        std::lock_guard lock(s.mutex);
+        if (s.armed.load() || s.on.load() || s.pending != none) return false;
+        if (s.fence) {
+            const auto completed = s.fence->GetCompletedValue();
+            if (completed == UINT64_MAX) return false;
+            s.ring.reclaim(completed);
+        }
+        return s.ring.settled();
+    } catch (...) {
+        return false;
+    }
+}
+bool release_inputs() noexcept {
+    auto &s = session;
+    try {
+        std::lock_guard lock(s.mutex);
+        if (s.armed.load() || s.on.load() || s.pending != none || !s.ring.settled()) return false;
+        s.ring.release_all();
+        for (auto &i : s.images) i.depth.Reset(), i.motion.Reset();
+        for (auto &c : s.staging) c = {};
+        s.staging_failed = false;
+        s.queue.clear();
+        s.staged = {};
+        s.slot_hudless = {};
+        s.depth_desc = s.motion_desc = {};
+        // The next record() creates the depth/motion images at the new size
+        // (the HUD-less pass and images are scene-sized and stay).
+        s.created = s.create_failed = false;
+        ++s.input_releases;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 void multiplier(unsigned total) noexcept {
     if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
 }
@@ -870,7 +909,8 @@ void write(std::ostream &o) {
       << s.present_delta[3] << "],\"ring\":{\"acquired\":" << r.acquired << ",\"starved\":" << r.starved << ",\"duplicates\":"
       << r.duplicates << ",\"abandoned\":" << r.abandoned << ",\"submitted\":" << r.submitted << ",\"discarded\":" << r.discarded
       << ",\"taken\":" << r.taken << ",\"stale\":" << r.stale << ",\"no_ready\":" << r.no_ready << ",\"consumed\":" << r.consumed
-      << ",\"reclaimed\":" << r.reclaimed << ",\"unconfirmed\":" << r.unconfirmed << "},\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
+      << ",\"reclaimed\":" << r.reclaimed << ",\"unconfirmed\":" << r.unconfirmed << ",\"released\":" << r.released
+      << "},\"input_releases\":" << s.input_releases << ",\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
       << static_cast<unsigned>(s.state.status) << ",\"min_width_or_height\":" << s.state.minWidthOrHeight
       << ",\"frames_presented\":" << s.state.numFramesActuallyPresented << ",\"max_generated\":" << s.state.numFramesToGenerateMax
       << ",\"dynamic_supported\":" << static_cast<int>(s.state.bIsDynamicMFGSupported)

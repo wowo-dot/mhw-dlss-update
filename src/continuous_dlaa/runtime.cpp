@@ -103,10 +103,15 @@ NativeStateAdmission state_admission;
 DepthEligibilityTrace depth_eligibility;
 DepthDestinationTrace depth_destination;
 struct List {ComPtr<ID3D12GraphicsCommandList> value;std::uint64_t generation{},injected_generation{},signal{};bool closed{},submitted{};};
+// Keeps native Execute and our fence signals in one CPU order (execute_hook),
+// and orders the live rebuild's queue barrier with them (change_mode).
+SRWLOCK submission_lock=SRWLOCK_INIT;
+struct SubmissionGuard {SubmissionGuard(){AcquireSRWLockExclusive(&submission_lock);}~SubmissionGuard(){ReleaseSRWLockExclusive(&submission_lock);}};
 std::array<List,128> lists;unsigned list_count{};std::uint64_t generation{},sequence{},signal_value{};
 ComPtr<ID3D12CommandQueue> last_queue;ComPtr<ID3D12Fence> fence;
 std::array<ComPtr<ID3D12Resource>,3> raw;
 std::unique_ptr<dlss_sdk::InlineFrame> pass;
+std::filesystem::path sdk_runtime;  // install()'s NGX runtime folder
 struct Lease {ID3D12GraphicsCommandList *list{};std::uint64_t generation{},frame{};bool depth{},evaluated{};} lease;
 HistoryStamp previous;
 // Keep the previous depth identity alive across comparisons, so freeing old
@@ -794,8 +799,7 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
     // Keep native Execute and both completion signals in the same CPU order.
     // Reserving a fence value under Lock alone cannot prevent two submitters
     // from publishing the larger value first after leaving that lock.
-    static SRWLOCK submission_lock=SRWLOCK_INIT;
-    struct SubmissionGuard {SRWLOCK *lock;explicit SubmissionGuard(SRWLOCK *p):lock(p){AcquireSRWLockExclusive(lock);}~SubmissionGuard(){ReleaseSRWLockExclusive(lock);}} submission_guard(&submission_lock);
+    SubmissionGuard submission_guard;
     Guard guard;std::array<ID3D12CommandList *,128> copy{};
     bool selected=false,signal_requested=false;ID3D12GraphicsCommandList *selected_list{};std::uint64_t value{};
     UnfilteredLifetime::Submission unfiltered_submission;bool unfiltered_valid=false;
@@ -920,12 +924,133 @@ void native_seh(unsigned kind,NativeFrame *f){
 }
 }
 void native(unsigned kind,NativeFrame *f){pending.fetch_add(1);__try{native_seh(kind,f);}__finally{pending.fetch_sub(1);}}
+namespace {
+// A pending live preset request: the mode's value, or -1.
+std::atomic<int> mode_request{-1};
+// Set once install() completed (any thread reads it; the worker owns pass).
+std::atomic<bool> live_installed{};
+}
+void request_mode(dlss_sdk::ReconstructionMode m) noexcept{mode_request.store(static_cast<int>(m));}
+bool requested_mode(dlss_sdk::ReconstructionMode &m) noexcept{
+    const int v=mode_request.exchange(-1);if(v<0)return false;m=static_cast<dlss_sdk::ReconstructionMode>(v);return true;}
 #ifdef MHW_CONTINUOUS_SCALED
+namespace {
+// Polls `done` until true or `ms` pass; Sleep(1) between polls.
+template<class F> bool wait_for(F &&done,std::uint64_t ms){
+    const auto end=GetTickCount64()+ms;
+    while(!done()){if(GetTickCount64()>=end)return false;Sleep(1);}
+    return true;
+}
+// Observes `count` at zero once within `ms`. Every hook counts itself before
+// it reads `accepting`, so after a stop one zero proves that no callback that
+// could still have seen the runtime accepting is running.
+bool observed_zero(const std::atomic<unsigned> &count,std::uint64_t ms){
+    const auto end=GetTickCount64()+ms;
+    while(count.load()){if(GetTickCount64()>=end)return false;SwitchToThread();}
+    return true;
+}
+template<class F> bool observed_true(F &&idle,std::uint64_t ms){
+    const auto end=GetTickCount64()+ms;
+    while(!idle()){if(GetTickCount64()>=end)return false;SwitchToThread();}
+    return true;
+}
+}
+bool live_modes() noexcept{return live_installed.load()&&healthy();}
+ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
+    ModeChange r;const auto began=GetTickCount64();
+    const auto mark=[&](unsigned phase){r.phase=phase;r.ms[phase]=GetTickCount64()-began;};
+    // Nothing changed: admit frames again, unless a fault arrived meanwhile.
+    const auto resume=[&](const char *why){
+        r.reason=why;
+        if(!healthy()){stop();return r;}
+        sr::begin();accepting.store(true);r.resumed=true;return r;
+    };
+    bool changed=false;
+    try{
+        if(!live_modes()||!pass||!spatial||reconstruction.failed()){r.reason="DLSS is not running";return r;}
+        const unsigned basis=runtime.scene_override?runtime.window_width:runtime.width;
+        const auto planned=render_resolution::plan({runtime.width,runtime.height},basis,dlss_sdk::requested_scale(requested));
+        if(!planned.valid){r.reason="extent plan";return r;}
+        // As install(): a 100% plan just below the scene runs as Quality.
+        auto mode=requested;
+        if(mode==dlss_sdk::ReconstructionMode::dlaa&&(planned.render.width!=runtime.width||planned.render.height!=runtime.height))
+            mode=dlss_sdk::ReconstructionMode::quality;
+        r.mode=mode;r.render_width=planned.render.width;r.render_height=planned.render.height;
+        if(mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
+            configured_mode=requested;r.ok=r.unchanged=true;return r;}
+        // 1 pause.
+        accepting.store(false);sr::stop();mark(1);
+        // 2 drain.
+        const auto drained=[&]{
+            Lock lock;
+            const auto completed=fence?fence->GetCompletedValue():0;
+            if(completed==UINT64_MAX)return false;
+            sr::collect(completed);
+            return !publishing.load()&&!projection_busy.test()&&!lease.list&&completed>=signal_value&&sr::idle();
+        };
+        if(!wait_for(drained,3000))return resume("drain timeout (is the game rendering?)");
+        if(!observed_zero(pending,2000)||!observed_true(sr::callbacks_idle,2000))return resume("callbacks still running");
+        if(!drained())return resume("drain changed");
+        mark(2);
+        // 3 queue barrier.
+        {
+            SubmissionGuard guard;ComPtr<ID3D12CommandQueue> queue;
+            {Lock lock;queue=last_queue;if(queue)r.barrier=++signal_value;}
+            if(queue&&FAILED(queue->Signal(fence.Get(),r.barrier)))return resume("queue barrier signal");
+        }
+        if(r.barrier&&!wait_for([&]{const auto v=fence->GetCompletedValue();return v!=UINT64_MAX&&v>=r.barrier;},2000))
+            return resume("queue barrier timeout");
+        mark(3);
+        // 4 retarget. From here a failure stops the runtime.
+        if(std::string why;!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))return resume(("render scale: "+why).c_str());
+        changed=true;
+        if(!wait_for([]{return render_resolution::applied_visits()>=4;},3000))throw std::runtime_error("the game did not apply the render scale");
+        mark(4);
+        // 5 rebuild. Nothing records with the old feature, output or route
+        // effects any more, and the barrier proved their GPU work complete.
+        auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
+        const auto *initialization=ngx_startup::borrowed_initialization();
+        if(!initialization)throw std::runtime_error("NGX startup ownership");
+        {
+            Lock lock;
+            if(spatial->recorded()&&!spatial->retired())spatial->retire(fence.Get(),r.barrier,true);
+            pass->retire(fence.Get(),r.barrier);
+        }
+        const dlss_sdk::Geometry geometry{{runtime.width,runtime.height},{planned.render.width,planned.render.height},{runtime.width,runtime.height},mode};
+        auto fresh=std::make_unique<dlss_sdk::InlineFrame>(device,geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},
+            sdk_runtime,*initialization,true,true,false);
+        auto fresh_spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,
+            planned.render.width,planned.render.height},runtime.width,runtime.height,true,true);
+        if(!sr::resize(planned.render.width,planned.render.height,r.reason))throw std::runtime_error(r.reason);
+        {
+            Lock lock;
+            pass=std::move(fresh);spatial=std::move(fresh_spatial);
+            scaled_render={planned.render.width,planned.render.height};
+            edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
+            edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);
+            scaled_geometry=geometry;configured_mode=requested;
+            // Published requests, depths and projections belong to frames at
+            // the old extent; none is consumed now. The next frame resets.
+            for(auto &x:requests)x={};
+            for(auto &x:depths)x={};
+            for(auto &x:projections)x={};
+            previous={};history_depth.Reset();
+        }
+        mark(5);
+        // 6 resume.
+        sr::begin();accepting.store(true);mark(6);r.ok=true;return r;
+    }catch(const std::exception &e){r.reason=e.what();}
+    catch(...){r.reason="mode change";}
+    if(!changed&&!fault.load()){const std::string why=r.reason.empty()?"mode change":r.reason;return resume(why.c_str());}
+    fail(47);stop();return r;
+}
 void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept{if(!pass)configured_mode=m;}
 // Worker: the mode DLSS runs (after install; it may differ from the configured
 // one, see install) or will run.
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_geometry.mode:configured_mode;}
 #else
+bool live_modes() noexcept{return false;}
+ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept{ModeChange r;r.reason="unscaled build";return r;}
 // The unscaled build always runs DLAA.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
@@ -975,6 +1100,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
             if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&raw[i]))))throw std::runtime_error("continuous raw allocation");}
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
+        sdk_runtime=sdk;
         #ifdef MHW_CONTINUOUS_SCALED
         {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,
              dlss_sdk::requested_scale(configured_mode));
@@ -1032,6 +1158,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         sr::begin();
 #endif
         accepting.store(true);if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
+#ifdef MHW_CONTINUOUS_SCALED
+        live_installed.store(true);
+#endif
         if(astera::active()){chain_live.store(true,std::memory_order_release);
 #ifdef MHW_CONTINUOUS_SCALED
             sr::chains_live(true);

@@ -74,6 +74,15 @@ void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,un
 // Requires stopped admission and no route callback; this is not retirement.
 bool abandon() noexcept;
 void stop() noexcept;
+// Live preset change (continuous_dlaa::change_mode). Stopped, not faulted,
+// no route list active, no plan prepared or running DOF, no depth capture
+// awaiting submission: nothing of the route can still record.
+bool idle() noexcept;
+// With idle() true and every route submission complete on the GPU: adopt a
+// new render extent, drop the effect and silhouette pipelines built for the
+// old one (their geometry is baked in) and the plans not prepared. begin()
+// then resumes. False (extent unchanged) if not idle or the extent is invalid.
+bool resize(unsigned render_width,unsigned render_height,std::string &reason) noexcept;
 bool queue_disable() noexcept;
 void disabled(bool) noexcept;
 // AL: the CopyTextureRegion detour with the storage AL fills; it runs

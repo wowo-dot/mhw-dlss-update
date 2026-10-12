@@ -206,6 +206,17 @@ void InlineFrame::finish(ID3D12Fence *fence,std::uint64_t value,bool retired){
     p.release_result=NVSDK_NGX_D3D12_ReleaseFeature(p.feature);require(p.release_result==1,"stream ReleaseFeature");p.feature=nullptr;
     p.destroy_result=NVSDK_NGX_D3D12_DestroyParameters(p.parameters);require(p.destroy_result==1,"stream DestroyParameters");p.parameters=nullptr;p.released=true;
 }
+void InlineFrame::retire(ID3D12Fence *fence,std::uint64_t value){
+    auto &p=*impl_;require(p.creation_completed&&!p.released&&fence&&value!=UINT64_MAX,"inline retire contract");
+    same_device(fence,p.device.Get());const auto completed=fence->GetCompletedValue();
+    require(completed!=UINT64_MAX&&completed>=value,"inline retire incomplete fence");hr(p.device->GetDeviceRemovedReason(),"inline retire device");
+    // The handoff was recorded only into submissions the fence covers.
+    if(p.handoff->recorded()&&!p.handoff->retired()){require(value!=0,"inline retire handoff fence");p.handoff->retire(fence,value,true);}
+    p.completion_fence=reinterpret_cast<std::uintptr_t>(fence);p.completion_value=value;
+    p.release_result=NVSDK_NGX_D3D12_ReleaseFeature(p.feature);require(p.release_result==1,"inline retire ReleaseFeature");p.feature=nullptr;
+    p.destroy_result=NVSDK_NGX_D3D12_DestroyParameters(p.parameters);require(p.destroy_result==1,"inline retire DestroyParameters");p.parameters=nullptr;p.released=true;
+}
+bool InlineFrame::released() const noexcept{return impl_->released;}
 bool InlineFrame::recorded() const noexcept{return impl_->copied&&impl_->restored;}
 RecordAttempt InlineFrame::last_attempt() const noexcept{return impl_->last;}
 Geometry InlineFrame::geometry() const noexcept{return impl_->geometry;}

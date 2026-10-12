@@ -25,7 +25,7 @@ public:
     };
     struct Counters {
         std::uint64_t acquired{}, starved{}, duplicates{}, abandoned{}, submitted{}, discarded{}, taken{},
-            stale{}, no_ready{}, consumed{}, reclaimed{}, unconfirmed{};
+            stale{}, no_ready{}, consumed{}, reclaimed{}, unconfirmed{}, released{};
     };
 
 private:
@@ -141,6 +141,24 @@ public:
             if (s.state == State::consuming && s.fence <= completed_fence) {
                 s = {};
                 ++counters_.reclaimed;
+            }
+    }
+    // Live preset change (after reclaim()): no slot holds a copy on a list not
+    // yet submitted, or one the SDK may still read.
+    bool settled() const noexcept {
+        for (const auto &s : slots_)
+            if (s.state == State::recording || s.state == State::recorded || s.state == State::tagged ||
+                s.state == State::consuming)
+                return false;
+        return true;
+    }
+    // After settled() and a queue barrier past every earlier submission: the
+    // ready slots' copies are complete and their images are being replaced.
+    void release_all() noexcept {
+        for (auto &s : slots_)
+            if (s.state == State::ready) {
+                s = {};
+                ++counters_.released;
             }
     }
     const Slot &slot(unsigned i) const noexcept { return slots_[i]; }

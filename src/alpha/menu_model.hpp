@@ -7,7 +7,8 @@
 #include "config.hpp"
 
 // The settings CMFM's "Settings" page shows, as the ini holds them (alpha).
-// - "DLSS mode" needs a restart: the pipeline is sized at start.
+// - "DLSS mode" changes at once while DLSS runs: the worker rebuilds the
+//   pipeline at the new render scale (continuous_dlaa::change_mode).
 // - "Frame generation" Off/On needs a restart: DLSS-G loads only at start.
 // - "Multiplier" changes at once while frame generation runs: 2x to 6x, or
 //   Dynamic (DLSS-G picks the count toward "Target frame rate").

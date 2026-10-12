@@ -167,6 +167,27 @@ void ring_tests() {
     ring.abandon(f);
     require(ring.slot(f).state == Ring::State::free && ring.counters().abandoned == 1, "abandon");
     require(ring.take(20, 10) == Ring::none && ring.counters().no_ready >= 1, "no ready");
+
+    // Live preset change: settled only once nothing is unsubmitted or still
+    // read by the SDK; release_all() then frees the submitted copies.
+    Ring live;
+    require(live.settled(), "an empty ring is settled");
+    const auto u = live.acquire(31, 41, 0);
+    live.recorded(u, 201, 1);
+    live.submitted(201, 1, 12);
+    require(live.take(32, 5) == u && !live.settled(), "a tagged slot is not");
+    live.presented(u, 77);
+    require(!live.settled(), "one the SDK may still read is not");
+    live.reclaim(77);
+    require(live.settled(), "until its fence completes");
+    const auto r = live.acquire(40, 50, 77);
+    require(!live.settled(), "a slot being recorded is not");
+    live.recorded(r, 200, 1);
+    require(!live.settled(), "an unsubmitted slot is not");
+    live.submitted(200, 1, 11);
+    require(live.settled(), "a submitted, untagged slot is");
+    live.release_all();
+    require(live.slot(r).state == Ring::State::free && live.counters().released == 1 && live.settled(), "release frees ready slots");
 }
 
 void screen_tests() {

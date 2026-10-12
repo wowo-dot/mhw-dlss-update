@@ -1502,6 +1502,32 @@ bool abandon() noexcept{
  active={};abandoned=true;return true;
 }
 void stop() noexcept{accepting=false;}
+namespace {
+bool idle_locked() noexcept{
+ if(accepting.load()||fault.load()||abandoned||active.list||dof_active())return false;
+ for(const auto &capture:compute_depth_pixels)if(capture.pending_submission())return false;
+ for(const auto &p:plans)if(p.prepared)return false;
+ return true;
+}
+}
+bool idle() noexcept{Lock lock;return idle_locked();}
+bool resize(unsigned rw,unsigned rh,std::string &reason) noexcept{
+ try{
+  Lock lock;
+  if(!idle_locked()){reason="stream route not idle";return false;}
+  if(!valid_filter_geometry({rw,rh,width,height})){reason="stream extent";return false;}
+  render_w=rw;render_h=rh;
+  for(auto &p:pipelines)p={};
+  for(auto &p:dependency_pipelines)p={};
+  for(auto &p:silhouette_pipelines)p={};
+  // Built but never prepared plans hold the old geometry; publish() would
+  // replace them anyway. A pooled selector stays with its slot.
+  for(unsigned i=0;i<plans.size();++i){auto &p=plans[i];unwatch(i);
+   auto selector=std::move(p.selector);std::destroy_at(&p);std::construct_at(&p);p.selector=std::move(selector);}
+  vertex_missed=rect_missed=final_missed=copy_missed=false;
+  return true;
+ }catch(...){reason="stream resize";return false;}
+}
 bool queue_disable() noexcept{for(unsigned i=0;i<targets.size();++i)if(enabled[i]&&!(astera::active()&&i==api_hook)&&MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)return false;return true;}
 void chains_live(bool yes) noexcept{chain_live.store(yes,std::memory_order_release);}
 void disabled(bool yes) noexcept{if(yes){chain_live.store(false,std::memory_order_release);Lock lock;enabled.fill(false);recording_states.clear();compute_gpu_states.stop();for(auto &s:compute_gpu_samples)for(auto &r:s.resources)r.hold.Reset();for(auto &c:compute_depth_pixels)c.disable();}}
