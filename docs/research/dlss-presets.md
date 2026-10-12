@@ -211,7 +211,34 @@ DLSS skipped those frames, so frame generation paused for the whole DOF shot.
   `no_ready` count did not move. Before v0.19.0 it paused for the whole shot.
 - The session ended with `game_exit` (`exit_gate` true) and no Reflex fault,
   which confirms v0.18.6 in game.
-- Balanced (1472x828) has not run in game yet.
+**game-73 (v0.19.0, Balanced 1472x828): the same.**
+
+| | |
+|---|---|
+| DLSS frames | 13,886, with 3 skips |
+| Complete DOF sequences | 6,593 (6,594 qualified) |
+| Rejections, failures | 0, 0 |
+
+- NGX accepted 1472x828 for Balanced, so the extent is inside the mode's
+  range.
+- Frame generation ran through the DOF windows (`no_ready` flat).
+- The session ended with `game_exit`.
+
+**Open (seen in game-62, game-72 and game-73): render submission of about
+7.5 ms on one low-simulation screen.**
+- That screen has simulation of 0.8–0.9 ms; in game-73 the player sat on it
+  for the first minute.
+- The Reflex submit span (Publish to Submit's return) sat at 7.5–7.6 ms.
+  GPU time was 3.4 ms, the interval 8.6 ms, and the game ran at about
+  110 fps rendered.
+- Elsewhere at the title it is 0.8 ms (DLAA, v0.18) or 2.5 ms (Quality,
+  v0.17); gameplay and cutscenes show 0.4–4 ms.
+- game-62 (v0.17.1) shows the same 7.5 ms, so it is not a v0.19.0
+  regression.
+- Two things are unknown: which screen it is, and whether the time is the
+  game's or ours. The route counters do not differ (one plan per frame, no
+  DOF, no silhouette draws).
+- In the same stretch, DLSS-G presented 422 frames without a generated one.
 
 ## Not yet proven (hypotheses until the in-game runs)
 
