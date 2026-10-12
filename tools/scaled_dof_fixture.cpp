@@ -17,8 +17,14 @@ struct Fixture : Gpu {
     }
     // Reference runs the unmodified shader with expanded t2 storage and
     // independently transformed constants. No adapter is used in the oracle.
+    // Modes 4 and 5 (any scale, vignette off): the reference (4) draws the
+    // native shader at output size with fScreenInverseSize scaled by
+    // render/output, so its CoC/Image/Neighbor/alpha lookups land at each
+    // output pixel's render-space position, as the adapter's (5) do; a uniform
+    // scene makes the reconstructed-colour lookup position immaterial. Mode 6
+    // is the native shader with unscaled constants (negative control).
     std::vector<float> draw(sf::FilterGeometry g,unsigned scenario,unsigned mode,bool packed=false){
-        const unsigned w=g.output_width,h=g.output_height,scale=w/g.render_width;const bool reference=mode==0,production=mode==3;
+        const unsigned w=g.output_width,h=g.output_height,scale=w/g.render_width;const bool reference=mode==0,production=mode==3,uniform=mode>=4;
         hr(allocator->Reset(),"allocator reset");hr(list->Reset(allocator.Get(),nullptr),"list reset");
         D3D12_DESCRIPTOR_HEAP_DESC hd{};hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;hd.NumDescriptors=5;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ComPtr<ID3D12DescriptorHeap> heap,rtv;hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&heap)),"SRVs");hd.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;hd.NumDescriptors=1;hd.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&rtv)),"RTV");
@@ -28,7 +34,7 @@ struct Fixture : Gpu {
             std::vector<float> data(std::size_t(tw)*th*4,std::numeric_limits<float>::quiet_NaN());
             for(unsigned y=0;y<th;++y)for(unsigned x=0;x<tw;++x){if(t==2&&(x>=w||y>=h))continue;
                 auto p=data.data()+(std::size_t(y)*tw+x)*4;
-                for(unsigned k=0;k<4;++k)p[k]=.1F+.8F*float((x*7+y*13+k*5+t*3)%29)/28.F;
+                for(unsigned k=0;k<4;++k)p[k]=t==2&&uniform?.3F+.2F*float(k):.1F+.8F*float((x*7+y*13+k*5+t*3)%29)/28.F;
                 if(t==0)p[0]=scenario==0?0.F:.2F;
                 if(t==3)p[1]=scenario==0?0.F:scenario==1?2.F:.7F;
                 if(t==4)p[0]=scenario==1?1.F:.4F;
@@ -40,13 +46,14 @@ struct Fixture : Gpu {
         auto od=texture(w,h,packed?DXGI_FORMAT_R11G11B10_FLOAT:DXGI_FORMAT_R32G32B32A32_FLOAT);od.Flags=D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;auto output=resource(device.Get(),od,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_RENDER_TARGET);
         device->CreateRenderTargetView(output.Get(),nullptr,rtv->GetCPUDescriptorHandleForHeapStart());Pixels readback(device.Get(),od,D3D12_HEAP_TYPE_READBACK);
         std::array<float,128> constants{};const float ratio=reference?1.F/scale:1.F;
-        constants[6]=ratio/w;constants[7]=ratio/h;constants[12]=scenario>=3?3.F/ratio:0;constants[13]=scenario>=3?2.F/ratio:0;
+        constants[6]=ratio/w;constants[7]=ratio/h;
+        if(mode==4){constants[6]*=float(g.render_width)/w;constants[7]*=float(g.render_height)/h;}constants[12]=scenario>=3?3.F/ratio:0;constants[13]=scenario>=3?2.F/ratio:0;
         constants[14]=float(g.render_width)/ratio;constants[15]=float(g.render_height)/ratio;constants[16]=ratio/g.render_width;constants[17]=ratio/g.render_height;constants[26]=std::bit_cast<float>(scenario&1U);
         auto blur=constants.data()+64;blur[2]=.8F;blur[9]=2.F;blur[15]=.15F;blur[16]=1.6F;blur[17]=std::bit_cast<float>(scenario>=2?1U:0U);blur[18]=.6F;blur[20]=.2F;blur[21]=.3F;blur[22]=.4F;
         auto cb=buffer(device.Get(),sizeof(constants),D3D12_HEAP_TYPE_UPLOAD);void *mapped{};D3D12_RANGE none{};hr(cb->Map(0,&none,&mapped),"CB map");std::memcpy(mapped,constants.data(),sizeof(constants));cb->Unmap(0,nullptr);
         const auto vertices=sf::dependency_vertices(g,false);auto vb=buffer(device.Get(),sizeof(vertices),D3D12_HEAP_TYPE_UPLOAD);hr(vb->Map(0,&none,&mapped),"VB map");std::memcpy(mapped,vertices.data(),sizeof(vertices));vb->Unmap(0,nullptr);
         const std::array<D3D12_INPUT_ELEMENT_DESC,4> layout{{{"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},{"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},{"TEXCOORD",1,DXGI_FORMAT_R32G32_FLOAT,0,16,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},{"COLOR",0,DXGI_FORMAT_R8G8B8A8_UNORM,0,24,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0}}};
-        auto pixel=mode==1?sf::make_dof_shader(ps,g):ps;
+        auto pixel=mode==1||mode==5?sf::make_dof_shader(ps,g):ps;
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};d.pRootSignature=root.Get();d.VS={vs.data(),vs.size()};d.PS={pixel.data(),pixel.size()};d.InputLayout={layout.data(),4};d.SampleMask=UINT_MAX;d.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;d.NumRenderTargets=1;d.RTVFormats[0]=od.Format;d.SampleDesc.Count=1;
         d.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID;d.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;d.RasterizerState.FrontCounterClockwise=TRUE;
         d.BlendState.IndependentBlendEnable=TRUE;for(auto &b:d.BlendState.RenderTarget){b.SrcBlend=b.SrcBlendAlpha=D3D12_BLEND_ONE;b.DestBlend=b.DestBlendAlpha=D3D12_BLEND_ZERO;b.BlendOp=b.BlendOpAlpha=D3D12_BLEND_OP_ADD;b.RenderTargetWriteMask=15;}
@@ -74,8 +81,18 @@ int wmain(int argc,wchar_t **argv){try{
         const auto packed=f.draw(g,scenario,0,true),production=f.draw(g,scenario,3,true);require(packed==production,"production packed pixels differ");
         if(scale==2&&scenario>0){const auto bad=f.draw(g,scenario,2);require(difference(native,bad)>.01,"negative control sensitivity");++negative;}++cases;
     }
+    // Fractional render scales (Quality 2/3, Balanced-like 0.575): the DOF
+    // lookups follow each output pixel's render-space position.
+    unsigned fractional=0;
+    for(const sf::FilterGeometry g:{sf::FilterGeometry{64,48,96,72},sf::FilterGeometry{92,52,160,90}})for(unsigned scenario=0;scenario<2;++scenario){
+        const auto native=f.draw(g,scenario,4),adapted=f.draw(g,scenario,5);const auto delta=difference(native,adapted);
+        std::cout<<"fractional "<<g.render_width<<'x'<<g.render_height<<"->"<<g.output_width<<'x'<<g.output_height<<':'<<scenario<<" delta="<<delta<<std::endl;
+        require(delta<0.00001,"fractional native reference mismatch");maximum=(std::max)(maximum,delta);++fractional;
+        // Negative control: the native lookups left at output positions (6).
+        if(scenario){require(difference(adapted,f.draw(g,scenario,6))>.01,"fractional negative control sensitivity");++negative;}
+    }
     auto adapted=sf::make_dof_shader(f.ps,{48,32,96,64});reflection(f.ps,adapted);save(out/L"adapted.dxbc",adapted);disassemble(out/L"adapted.asm",adapted);
     auto bad=f.ps;bad.back()^=std::byte{1};rejects([&]{sf::make_dof_shader(bad,{48,32,96,64});});rejects([&]{sf::make_dof_shader(f.ps,{47,32,96,64});});
-    std::ofstream report(out/L"result.json");report<<"{\"accepted\":true,\"cases\":"<<cases<<",\"negative_controls\":"<<negative<<",\"maximum_delta\":"<<maximum<<",\"production_packed_equal\":true,\"gpu_validation\":true,\"vendor\":"<<f.vendor<<"}";
+    std::ofstream report(out/L"result.json");report<<"{\"accepted\":true,\"cases\":"<<cases<<",\"fractional_cases\":"<<fractional<<",\"negative_controls\":"<<negative<<",\"maximum_delta\":"<<maximum<<",\"production_packed_equal\":true,\"gpu_validation\":true,\"vendor\":"<<f.vendor<<"}";
     require(bool(report),"report");std::cout<<"PASS "<<cases<<" DOF oracle/production cases, "<<negative<<" negative controls, delta "<<maximum<<'\n';return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

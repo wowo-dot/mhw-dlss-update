@@ -1,6 +1,7 @@
 #pragma once
 #include "output_dependencies.hpp"
 #include "dof_compute_shader.hpp"
+#include "../dlss_sdk/geometry.hpp"
 #include <bit>
 #include <cstring>
 
@@ -76,24 +77,25 @@ struct DofNativeSequence {
  void note(unsigned check,unsigned index,unsigned observed,unsigned expected){
   if(miss_count<misses.size())misses[miss_count]={check,index,observed,expected};++miss_count;}
  // width/height: the output (the DOF textures' allocation); render_w/render_h:
- // the game's view. The adapted passes 0 and 3 average a 2x2 box of output
- // colour per render texel, so they are exact only at 2:1 (truncated per axis
- // for an odd scene). At identity (DLAA) the native passes already read full
- // size and run unchanged. Other render scales are rejected (96): the frame's
- // DLSS evaluation is skipped while depth of field is active.
+ // the game's view. The native DOF runs inside the render-scaled region of its
+ // half-output textures, as the game does at any render scale. Adapted pass 3
+ // reads each render texel's colour as the area average of its output
+ // footprint, so every single render scale qualifies (DLSS's own rule,
+ // dlss_sdk::single_scale: Performance's 2:1 including an odd scene's
+ // truncated half, Quality, Balanced). At identity (DLAA) the native passes
+ // already read full size and run unchanged.
  bool qualify(unsigned width,unsigned height,unsigned render_w,unsigned render_h,std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
   failed_at=miss_count=flagged=0;misses={};
   // Structural codes: 1 shape, 10+p pass recipe, 20+p dispatch order, 30+p
   // owners, 40+p binding ids, 50+p binding register/role/views, 60+p texture
   // owner/format, 70+p role conflict, 80+p constants, 90 missing texture,
   // 91 shared texture, 92 composition inputs, 93 scene/constants, 94 screen
-  // zero words, 95 blur constants, 96 render scale neither 2:1 nor identity.
+  // zero words, 95 blur constants, 96 render extent that no single scale gives.
   const auto bad=[&](unsigned code){failed_at=code;return false;};
   // An odd scene (3413x1440 pillarboxed) takes the truncated half; the size
   // and constant checks below record the game's actual sizes if it differs.
   if(count!=6||!scene_owner||!width||!height)return bad(1);
-  const bool half=render_w==width/2&&render_h==height/2,identity=render_w==width&&render_h==height;
-  if(!half&&!identity)return bad(96);
+  if(!dlss_sdk::single_scale(render_w,render_h,width,height))return bad(96);
   layout=dof_layout(width,height);
   textures={};
   std::array<const OutputDependencies::Constant *,4> constants{};

@@ -128,6 +128,76 @@ extents. v0.17.1 lets it run at identity; every adaptation then uses scale 1.
   - The wait loop logs `alpha_waiting` with its current reason after 15 s,
     so a game that never qualifies no longer leaves a silent log.
 
+## v0.19.0: depth of field at every preset
+
+Before this, Quality and Balanced refused the cutscene depth of field (96).
+DLSS skipped those frames, so frame generation paused for the whole DOF shot.
+
+**How the native DOF scales (from the pass-3 and composite DXBC).**
+- The DOF works inside the render-scaled region of textures sized to half
+  the output. That is how the game runs it at any render scale of its own.
+- Pass 3 (preparation, `b7afd17a…`): thread t reads the scene at the render
+  texels r0 + {0,1}², where r0 = min(2t, iViewSize - 2). It gathers depth at
+  `(r0 + 1) * fScreenInverseSize`.
+- The composite (`9f04832c…`) samples CoC, Image, Neighbor and alpha at
+  `pixel * fScreenInverseSize`, in render space.
+- In the scaled pipeline the scene is the reconstructed output-size image.
+  Only pass 3's four colour loads and the composite's scene lookup have to
+  change. Everything else keeps its native render-space coordinates.
+
+**The general pass-3 adapter (`dof_compute_shader.cpp`).**
+- Render texel c covers output `[c*S/s, (c+1)*S/s)` per axis:
+  - S is the output size, `fScreenSize` (cb1[1].xy);
+  - s is the render size, `iViewSize` (cb1[2].zw).
+- Each colour load becomes the area-weighted average of the output texels in
+  that interval:
+  - the overlaps are exact integers in units of 1/s, divided by S;
+  - two nested loops, bounded to 4 texels per axis.
+- At 2:1 this is exactly the old 2x2 box. Quality and Balanced touch two or
+  three texels per axis. The truncated half of an odd scene (3413 → 1706)
+  touches up to four.
+- No geometry is baked in, so one pipeline serves every preset.
+- New temporaries r6..r12 (`dcl_temps` 6 → 13). The CBScreen declaration
+  (`CB1[3]`) is checked before its fields are read.
+- **The qualification:** `dlss_sdk::single_scale` replaces "2:1 or identity".
+  Code 96 now means an extent that no single scale gives.
+- **The composite (`dof_shader.cpp`)** already used the actual
+  render/output ratios.
+
+**Verification (offline, GPU validation on, RTX and WARP).**
+- **`dof_prepare_scale_fixture` (new).** Pass 3 alone, at:
+  - 2560x1440 from 1280x720 (Performance), 1696x954 (Quality) and 1472x828
+    (Balanced);
+  - 1920x1080 from 1280x720;
+  - 3413x1440 from 1706x720.
+
+  | Comparison | Result |
+  |---|---|
+  | Against a double-precision CPU area oracle | Performance exact; the rest at most 8.3e-8 |
+  | Against the native shader fed a CPU area downsample in the render region (how the game feeds it) | within 8.9e-8 |
+  | CoC writer | bit-identical |
+  | Native shader on the output scene (negative control) | off by 0.19–0.28 |
+
+  A hostile 1x1 `iViewSize` dispatch completes, so the loop bound holds.
+- **`scaled_dof_fixture`: new fractional cases** at 2/3 (64x48 → 96x72) and
+  0.575 (92x52 → 160x90).
+  - The reference is the native composite drawn at output size, with
+    `fScreenInverseSize` scaled by render/output and a uniform scene. Its
+    DOF lookups then land at each output pixel's render-space position.
+  - Result: delta 0 in both scenarios.
+  - The negative control (unscaled constants) differs.
+  - The chosen extents keep output pixel centres off DOF texel boundaries,
+    so point sampling cannot tie.
+- **`dof_native_route_fixture`** (the production six-pass route on the
+  captured Performance constants and depth): output delta 0, as before.
+  `dof_pipeline_fixture` with captured constants: delta 0.
+- **`dof_native_route_fixture.hpp`:** a 2/3 extent now passes the scale gate
+  and fails only on the capture's 2:1 CBScreen (check 3). A mixed-scale
+  extent is refused (96).
+
+**Not yet seen:** the game's real DOF at Quality and Balanced in a cutscene
+(game-71 onwards).
+
 ## Not yet proven (hypotheses until the in-game runs)
 
 - The shader adapters were verified on the GPU at 2:1 and at identity (and at
