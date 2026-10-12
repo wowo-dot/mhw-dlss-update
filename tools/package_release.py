@@ -44,7 +44,7 @@ INI = """# MHW DLSS / Frame Generation (alpha) configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 dlss_mode = performance    ; dlaa, quality, balanced, performance (applies from the next start)
 frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)
-reflex = on                ; on (off is not available yet)
+reflex = on                ; on, boost, off (off only with frame_generation = off)
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
 log_dir = logs             ; one log file per launch
 """

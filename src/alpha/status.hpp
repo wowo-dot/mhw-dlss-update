@@ -21,6 +21,7 @@ struct View {
     Loader loader = Loader::active;
     std::string loader_reason;
     std::string dlss_mode = "Performance";  // as players read it
+    std::string reflex_mode = "On";         // the mode applied: On, Boost or Off
     Stage dlss = Stage::starting, reflex = Stage::starting;
     std::string dlss_reason, reflex_reason;
     unsigned render_width{}, render_height{}, scene_width{}, scene_height{};
@@ -40,6 +41,7 @@ void reflex(Stage, std::string_view reason = {}) noexcept;
 void generation(Generation, std::string_view reason = {}) noexcept;
 void dlss_sizes(unsigned render_width, unsigned render_height, unsigned scene_width, unsigned scene_height) noexcept;
 void dlss_mode(std::string_view name) noexcept;
+void reflex_mode(std::string_view name) noexcept;
 // The worker stopped on `reason`: what had not started yet is off.
 void worker_failed(std::string_view reason) noexcept;
 // Menu thread.
@@ -105,9 +107,12 @@ inline std::string dlss_line(const View &v) {
     return v.dlss_mode + ", " + size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
 }
 
+// A failure is "Off: why"; the player's own Off is plain "Off" (not degraded).
 inline std::string reflex_line(const View &v) {
     if (v.reflex == Stage::starting) return "Starting";
     if (v.reflex == Stage::off) return with_reason("Off", reason_text(v.reflex_reason));
+    if (v.reflex_mode == "Off") return "Off";
+    if (v.reflex_mode == "Boost") return "Boost (low latency, GPU clocks kept up)";
     return "On (low latency)";
 }
 

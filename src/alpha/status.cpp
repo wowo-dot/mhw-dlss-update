@@ -38,6 +38,9 @@ void dlss_sizes(unsigned render_width, unsigned render_height, unsigned scene_wi
 void dlss_mode(std::string_view name) noexcept {
     change([&](View &v) { v.dlss_mode = name; });
 }
+void reflex_mode(std::string_view name) noexcept {
+    change([&](View &v) { v.reflex_mode = name; });
+}
 void worker_failed(std::string_view reason) noexcept {
     change([&](View &v) {
         if (v.dlss == Stage::starting) { v.dlss = Stage::off; v.dlss_reason = reason; }

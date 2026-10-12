@@ -86,6 +86,16 @@ void settings_model() {
     check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3, "mode choices, best first");
     ReconstructionMode mode{};
     check(m::mode_at(1, mode) && mode == ReconstructionMode::quality && !m::mode_at(4, mode) && !m::mode_at(-1, mode), "mode at index");
+    using mhw::alpha::ReflexMode;
+    check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 && m::choice_of(ReflexMode::off) == 2, "reflex choices, on first");
+    ReflexMode reflex{};
+    check(m::reflex_at(2, reflex) && reflex == ReflexMode::off && !m::reflex_at(3, reflex) && !m::reflex_at(-1, reflex), "reflex at index");
+    why.clear();
+    check(m::reflex_allowed(ReflexMode::boost, true, why) && m::reflex_allowed(ReflexMode::off, false, why) && why.empty(), "off without frame generation");
+    check(!m::reflex_allowed(ReflexMode::off, true, why) && why == "Frame generation needs Reflex; turn frame generation off first.",
+          "off refused with frame generation");
+    check(m::reflex_sdk_value(ReflexMode::off) == 0 && m::reflex_sdk_value(ReflexMode::on) == 1 && m::reflex_sdk_value(ReflexMode::boost) == 2,
+          "sl::ReflexMode values");
 }
 
 void status_lines() {
@@ -116,6 +126,16 @@ void status_lines() {
         check(s::dlss_line(q) == "DLAA, 2560x1440", "DLAA line");
     }
     check(s::reflex_line(v) == "On (low latency)", "reflex on");
+    {
+        auto r = v;
+        r.reflex_mode = "Boost";
+        check(s::reflex_line(r) == "Boost (low latency, GPU clocks kept up)", "reflex boost");
+        r.reflex_mode = "Off";
+        check(s::reflex_line(r) == "Off" && s::mod_line(r) == "Active", "the player's Off is not a failure");
+        r.reflex = s::Stage::off;
+        r.reflex_reason = "reflex_frames";
+        check(s::reflex_line(r) == "Off: the frame hooks stopped" && s::mod_line(r) == "Degraded: Reflex is off", "a failure still is");
+    }
 
     v.generation = s::Generation::armed;
     v.requested = 2;

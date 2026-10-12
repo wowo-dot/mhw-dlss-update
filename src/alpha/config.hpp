@@ -14,17 +14,21 @@ namespace mhw::alpha {
 //
 //   dlss_mode = performance ; dlaa, quality, balanced, performance
 //   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x (DLSS-G not loaded when off)
-//   reflex = on             ; on (off is not available yet)
+//   reflex = on             ; on, boost, off (off only with frame_generation = off)
 //   runtime_dir = .         ; Streamline and NVIDIA DLSS DLLs
 //   log_dir = logs          ; log files of each launch
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
+// Reflex: NVIDIA Reflex Low Latency (on), the same with Boost (the GPU keeps
+// its clocks up when the CPU is the limit), or off. DLSS Frame Generation
+// needs Reflex, so off applies only while frame generation is off.
+enum class ReflexMode : unsigned { off, on, boost };
 struct Config {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
     bool frame_generation = true;
     unsigned multiplier = 2;
-    bool reflex = true;
+    ReflexMode reflex = ReflexMode::on;
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -56,6 +60,22 @@ inline const char *dlss_mode_name(dlss_sdk::ReconstructionMode m) {
     case dlss_sdk::ReconstructionMode::performance: break;
     }
     return "Performance";
+}
+// The ini value of a Reflex mode, the name players read, and the mode of an ini
+// value (false if unknown).
+inline const char *reflex_value(ReflexMode m) {
+    return m == ReflexMode::off ? "off" : m == ReflexMode::boost ? "boost" : "on";
+}
+inline const char *reflex_name(ReflexMode m) {
+    return m == ReflexMode::off ? "Off" : m == ReflexMode::boost ? "Boost" : "On";
+}
+inline bool parse_reflex(std::string_view value, ReflexMode &m) {
+    for (const auto candidate : {ReflexMode::off, ReflexMode::on, ReflexMode::boost})
+        if (value == reflex_value(candidate)) {
+            m = candidate;
+            return true;
+        }
+    return false;
 }
 inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode &m) {
     for (const auto candidate : {dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality,
@@ -96,8 +116,7 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 c.multiplier = static_cast<unsigned>(value[0] - '0');
             } else c.warnings.push_back(where + "frame_generation must be off, 2x, 3x, 4x or 6x");
         } else if (key == "reflex") {
-            if (value == "off") c.warnings.push_back(where + "reflex = off is not available yet; using on");
-            else if (value != "on") c.warnings.push_back(where + "reflex must be on");
+            if (!parse_reflex(value, c.reflex)) c.warnings.push_back(where + "reflex must be on, boost or off");
         } else if (key == "runtime_dir" || key == "log_dir") {
             // Folder names keep their case; only surrounding spaces and quotes go.
             std::string folder(raw);
@@ -110,6 +129,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else {
             c.warnings.push_back(where + "unknown key " + key);
         }
+    }
+    // The keys may come in any order, so this is decided once all are read.
+    if (c.reflex == ReflexMode::off && c.frame_generation) {
+        c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
+        c.reflex = ReflexMode::on;
     }
     const auto resolve = [&](const std::string &folder) {
         const std::filesystem::path p(std::u8string(folder.begin(), folder.end()));  // the file is UTF-8
@@ -156,5 +180,8 @@ inline std::string with_value(std::string_view text, std::string_view key, std::
 }
 inline std::string with_frame_generation(std::string_view text, std::string_view value) {
     return with_value(text, "frame_generation", value);
+}
+inline std::string with_reflex(std::string_view text, ReflexMode mode) {
+    return with_value(text, "reflex", reflex_value(mode));
 }
 }  // namespace mhw::alpha

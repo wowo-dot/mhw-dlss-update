@@ -2,6 +2,7 @@
 #include <array>
 #include <string>
 #include "../dlss_sdk/geometry.hpp"
+#include "config.hpp"
 
 // The settings CMFM's "Settings" page shows, as the ini holds them (alpha).
 // - "DLSS mode" needs a restart: the pipeline is sized at start.
@@ -9,6 +10,8 @@
 // - "Multiplier" changes at once while frame generation runs.
 // - One ini key holds both: Off writes "off", On writes the multiplier. While
 //   frame generation is Off the multiplier is kept in memory, so On restores it.
+// - "Reflex" changes at once. Off only while frame generation is off (DLSS-G
+//   needs Reflex); turning frame generation on turns Reflex on again.
 // Pure (tests/alpha_menu_tests.cpp).
 namespace mhw::alpha::menu_model {
 
@@ -16,6 +19,7 @@ struct Settings {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
     bool frame_generation = true;
     unsigned multiplier = 2;
+    ReflexMode reflex = ReflexMode::on;
 };
 
 // "DLSS mode" choices, highest quality first.
@@ -34,6 +38,33 @@ constexpr bool mode_at(int index, dlss_sdk::ReconstructionMode &mode) {
     if (index < 0 || index >= static_cast<int>(modes.size())) return false;
     mode = modes[static_cast<unsigned>(index)];
     return true;
+}
+
+// "Reflex" choices, the default first.
+inline constexpr std::array<ReflexMode, 3> reflex_modes{ReflexMode::on, ReflexMode::boost, ReflexMode::off};
+inline constexpr const char *reflex_names[]{"On", "Boost", "Off"};
+static_assert(std::size(reflex_names) == reflex_modes.size());
+constexpr int choice_of(ReflexMode mode) {
+    for (unsigned i = 0; i < reflex_modes.size(); ++i)
+        if (reflex_modes[i] == mode) return static_cast<int>(i);
+    return 0;
+}
+// The mode at a CHOICE index; false outside the list.
+constexpr bool reflex_at(int index, ReflexMode &mode) {
+    if (index < 0 || index >= static_cast<int>(reflex_modes.size())) return false;
+    mode = reflex_modes[static_cast<unsigned>(index)];
+    return true;
+}
+// Whether `mode` can be chosen while the frame generation setting is
+// `generation`; if not, the reason for the help line.
+inline bool reflex_allowed(ReflexMode mode, bool generation, std::string &why) {
+    if (mode != ReflexMode::off || !generation) return true;
+    why = "Frame generation needs Reflex; turn frame generation off first.";
+    return false;
+}
+// The sl::ReflexMode value (reflex_mode.hpp): 0 off, 1 low latency, 2 boost.
+constexpr unsigned reflex_sdk_value(ReflexMode mode) {
+    return mode == ReflexMode::off ? 0U : mode == ReflexMode::boost ? 2U : 1U;
 }
 
 inline constexpr std::array<unsigned, 4> multipliers{2, 3, 4, 6};

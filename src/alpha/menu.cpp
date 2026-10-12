@@ -11,6 +11,7 @@
 #include "version.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../frame_generation/game_session.hpp"
+#include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
 
 namespace mhw::alpha::menu {
@@ -22,8 +23,10 @@ enum Row : std::uint32_t {
     frame_generation_row = 1,
     multiplier_row,
     dlss_mode_row,
+    reflex_setting_row,
     upscaling_section = 20,
     generation_section,
+    latency_section,
     mod_row = 10,
     dlss_row,
     reflex_row,
@@ -39,7 +42,7 @@ struct State {
     std::filesystem::path folder, ini;
     mm::Settings settings;  // what the ini holds, or will hold once saved
     bool dirty{};           // changed since the last save
-    bool mode_dirty{}, generation_dirty{};  // which keys
+    bool mode_dirty{}, generation_dirty{}, reflex_dirty{};  // which keys
     bool fg_loaded{};       // DLSS-G loaded at start: the multiplier applies live
 };
 State state;
@@ -118,15 +121,18 @@ void save() {
     const auto &s = state.settings;
     const auto value = frame_generation_value(s.frame_generation, s.multiplier);
     const std::string mode = dlss_mode_value(s.dlss_mode);
+    const std::string reflex = reflex_value(s.reflex);
     auto updated = text;
     if (state.mode_dirty) updated = with_value(updated, "dlss_mode", mode);
     if (state.generation_dirty) updated = with_frame_generation(updated, value);
+    if (state.reflex_dirty) updated = with_reflex(updated, s.reflex);
     const auto check = parse_config(updated, state.folder);
     if ((state.mode_dirty && check.dlss_mode != s.dlss_mode) ||
         (state.generation_dirty && (check.frame_generation != s.frame_generation ||
-                                    (check.frame_generation && check.multiplier != s.multiplier)))) {
+                                    (check.frame_generation && check.multiplier != s.multiplier))) ||
+        (state.reflex_dirty && check.reflex != s.reflex)) {
         log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", frame_generation = " + value +
-                              " would not read back; not written");
+                              ", reflex = " + reflex + " would not read back; not written");
         return;
     }
     std::string why;
@@ -134,8 +140,8 @@ void save() {
         log(AL_LOG_WARNING, "menu: mhw_dlss.ini not written: " + why);
         return;
     }
-    state.dirty = state.mode_dirty = state.generation_dirty = false;
-    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", frame_generation = " + value);
+    state.dirty = state.mode_dirty = state.generation_dirty = state.reflex_dirty = false;
+    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", frame_generation = " + value + ", reflex = " + reflex);
 }
 
 // Page opened: the ini as it is now (players may edit it while the game runs),
@@ -147,6 +153,7 @@ void reload() {
     state.settings.dlss_mode = c.dlss_mode;
     state.settings.frame_generation = c.frame_generation;
     if (c.frame_generation) state.settings.multiplier = c.multiplier;
+    state.settings.reflex = c.reflex;
 }
 
 cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
@@ -155,6 +162,7 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
         if (id == frame_generation_row) value->i = state.settings.frame_generation ? 1 : 0;
         else if (id == multiplier_row) value->i = mm::choice_of(state.settings.multiplier);
         else if (id == dlss_mode_row) value->i = mm::choice_of(state.settings.dlss_mode);
+        else if (id == reflex_setting_row) value->i = mm::choice_of(state.settings.reflex);
         else return CMFM_ERROR;
         return CMFM_OK;
     } catch (...) {
@@ -164,6 +172,18 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
 
 cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *value, char *why, std::uint32_t why_size) {
     try {
+        if (id == reflex_setting_row) {
+            std::string reason = "Unknown Reflex mode.";
+            ReflexMode mode{};
+            bool generation{};
+            {
+                std::lock_guard lock(state.mutex);
+                generation = state.settings.frame_generation;
+            }
+            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, generation, reason)) return CMFM_OK;
+            copy(why, why_size, reason);
+            return CMFM_ERROR;
+        }
         if (id != multiplier_row) return CMFM_OK;
         std::string reason = "Unknown multiplier.";
         if (const auto m = mm::multiplier_at(value->i); m && mm::multiplier_allowed(m, fg::status().maximum, reason))
@@ -186,8 +206,28 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
             log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_mode_value(s.dlss_mode) + " (from the next start)");
             return CMFM_OK;
         }
+        if (id == reflex_setting_row) {
+            ReflexMode mode{};
+            std::string why;
+            if (!mm::reflex_at(value->i, mode) || !mm::reflex_allowed(mode, s.frame_generation, why)) return CMFM_ERROR;
+            s.reflex = mode;
+            state.dirty = state.reflex_dirty = true;
+            // DLSS-G loaded at start needs Reflex until the game closes.
+            const bool now = mode != ReflexMode::off || !state.fg_loaded;
+            if (now) reflex::request_mode(mm::reflex_sdk_value(mode));
+            log(AL_LOG_INFO, std::string("menu: reflex = ") + reflex_value(mode) +
+                                 (now ? " (applied now)" : " (from the next start; frame generation runs until then)"));
+            return CMFM_OK;
+        }
         if (id == frame_generation_row) {
             s.frame_generation = value->i != 0;
+            if (s.frame_generation && s.reflex == ReflexMode::off) {
+                // Frame generation needs Reflex: on again, at once.
+                s.reflex = ReflexMode::on;
+                state.reflex_dirty = true;
+                reflex::request_mode(mm::reflex_sdk_value(s.reflex));
+                log(AL_LOG_INFO, "menu: reflex = on (frame generation needs it)");
+            }
         } else if (id == multiplier_row) {
             const auto m = mm::multiplier_at(value->i);
             if (!m) return CMFM_ERROR;
@@ -277,7 +317,7 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.self = self;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.dlss_mode, config.frame_generation, config.multiplier};
+            state.settings = {config.dlss_mode, config.frame_generation, config.multiplier, config.reflex};
             state.fg_loaded = fg_loaded;
         }
         cmfm_setting_t settings[]{
@@ -293,6 +333,11 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             row(multiplier_row, CMFM_TYPE_CHOICE, "Multiplier",
                 "Frames shown for each rendered frame; 3x and up need an RTX 50. A change applies at once while frame "
                 "generation runs."),
+            row(latency_section, CMFM_TYPE_SECTION, "Latency", nullptr),
+            row(reflex_setting_row, CMFM_TYPE_CHOICE, "Reflex",
+                "NVIDIA Reflex Low Latency keeps the frame queue short. Boost also keeps the graphics card's clocks up "
+                "when the processor is the limit. Off only while frame generation is off: frame generation needs "
+                "Reflex. A change applies at once."),
         };
         settings[1].choices = mm::mode_names;
         settings[1].choice_count = static_cast<std::uint32_t>(mm::modes.size());
@@ -301,10 +346,13 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
         settings[4].choices = mm::multiplier_names;
         settings[4].choice_count = static_cast<std::uint32_t>(mm::multipliers.size());
         settings[4].default_value.i = mm::choice_of(2);
+        settings[6].choices = mm::reflex_names;
+        settings[6].choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
+        settings[6].default_value.i = mm::choice_of(ReflexMode::on);
         const cmfm_setting_t lines[]{
             row(mod_row, CMFM_TYPE_TEXT, "Mod", "The mod's state, as Astera Loader shows it.", CMFM_FLAG_LIVE),
             row(dlss_row, CMFM_TYPE_TEXT, "DLSS", "The DLSS mode and the render and output resolutions.", CMFM_FLAG_LIVE),
-            row(reflex_row, CMFM_TYPE_TEXT, "Reflex", "NVIDIA Reflex Low Latency, always on.", CMFM_FLAG_LIVE),
+            row(reflex_row, CMFM_TYPE_TEXT, "Reflex", "NVIDIA Reflex, as chosen in Settings.", CMFM_FLAG_LIVE),
             row(generation_row, CMFM_TYPE_TEXT, "Frame generation", "Frames shown for each rendered frame right now.",
                 CMFM_FLAG_LIVE),
             row(generated_row, CMFM_TYPE_TEXT, "Generated frames", "Generated frames shown since the game started.",

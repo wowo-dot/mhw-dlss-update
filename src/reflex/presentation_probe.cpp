@@ -28,6 +28,7 @@
 #include "../alpha/menu.hpp"
 #include "../alpha/status.hpp"
 #include "../alpha/version.hpp"
+#include "reflex_mode.hpp"
 #include "../../third_party/al/al_plugin.h"
 #include "../temporal_present/observer.hpp"
 #include "../continuous_dlaa/runtime.hpp"
@@ -123,6 +124,9 @@ bool finish_temporal() noexcept {
 #endif
 bool mode_change_attempted{}, mode_restored{};
 constexpr auto capture_mode = sl::ReflexMode::eLowLatency;
+// The player's Reflex mode (reflex_mode.hpp): requested by the ini and the
+// menu, applied by the worker. Research builds always use capture_mode.
+std::atomic<unsigned> reflex_requested{static_cast<unsigned>(capture_mode)}, reflex_applied{3};
 constexpr unsigned capture_seconds = 600;
 #endif
 bool initialized{}, device_checked{}, success{};
@@ -171,8 +175,28 @@ bool driver_mode(const char* phase, bool expected, bool enforce=true) {
 void mode_options(const char* phase, sl::ReflexMode mode, sl::Result result) {
     log << "{\"event\":\"mode_options\",\"phase\":" << quoted(phase) << ",\"mode\":" << static_cast<unsigned>(mode)
         << ",\"result\":" << static_cast<unsigned>(result)
-        << ",\"frame_limit_us\":0,\"use_markers_to_optimize\":false,\"boost_requested\":false}\n" << std::flush;
+        << ",\"frame_limit_us\":0,\"use_markers_to_optimize\":false,\"boost_requested\":" << (mode==sl::ReflexMode::eLowLatencyWithBoost) << "}\n" << std::flush;
 }
+#ifdef MHW_ALPHA
+const char* reflex_mode_name(unsigned mode) noexcept {
+    return mode==0?"Off":mode==2?"Boost":"On";
+}
+// The worker, under sdk_mutex: applies the requested mode if it changed. Off
+// is refused while DLSS-G is loaded (it needs Reflex); the menu already keeps
+// players from asking for that.
+void apply_reflex_mode(bool fg_loaded) {
+    const auto requested=reflex_requested.load();
+    if(requested==reflex_applied.load()||requested>2)return;
+    if(requested==0&&fg_loaded){
+        log << "{\"event\":\"reflex_mode_refused\",\"mode\":0,\"reason\":\"frame generation needs Reflex\"}\n" << std::flush;
+        reflex_requested.store(reflex_applied.load());return;
+    }
+    const auto mode=static_cast<sl::ReflexMode>(requested);
+    const auto result=sdk.options(mode);mode_options("live",mode,result);
+    if(result==sl::Result::eOk){reflex_applied.store(requested);mhw::alpha::status::reflex_mode(reflex_mode_name(requested));}
+    else reflex_requested.store(reflex_applied.load());
+}
+#endif
 #endif
 bool close_sdk() noexcept {
 #ifdef MHW_REFLEX_TEMPORAL
@@ -661,6 +685,8 @@ DWORD WINAPI worker(void*) noexcept {
             mhw::continuous_dlaa::reconstruction_mode(alpha_config.dlss_mode);
             mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(alpha_config.dlss_mode));
             mhw::perf::toggles.store(mhw::perf::all_toggles);
+            reflex_requested.store(alpha_config.reflex==mhw::alpha::ReflexMode::off?0U:alpha_config.reflex==mhw::alpha::ReflexMode::boost?2U:1U);
+            mhw::alpha::status::reflex_mode(mhw::alpha::reflex_name(alpha_config.reflex));
             mhw::reflex::sdk_verbose_log = false;
         }
 #else
@@ -753,7 +779,7 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_ALPHA
         log << "{\"event\":\"alpha_config\",\"dlss_mode\":\"" << mhw::alpha::dlss_mode_value(alpha_config.dlss_mode)
             << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
-            << ",\"reflex\":" << alpha_config.reflex << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
+            << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
         log << "]}\n" << std::flush;
@@ -900,20 +926,27 @@ DWORD WINAPI worker(void*) noexcept {
                 }
 #endif
 #endif
+                // The alpha arms the player's mode (Off only without DLSS-G).
+                auto arm_mode=capture_mode;
+#ifdef MHW_ALPHA
+                arm_mode=static_cast<sl::ReflexMode>(reflex_requested.load());
+                if(arm_mode==sl::ReflexMode::eOff&&fg_plugin)arm_mode=capture_mode;
+#endif
                 {
                     std::lock_guard lock(sdk_mutex);
                     mode_change_attempted=true;
-                    const auto result=sdk.options(capture_mode);
-                    mode_options("activate_on",capture_mode,result);api(result,"Reflex-On");
+                    const auto result=sdk.options(arm_mode);
+                    mode_options("activate_on",arm_mode,result);api(result,"Reflex-On");
+                    reflex_applied.store(static_cast<unsigned>(arm_mode));reflex_requested.store(static_cast<unsigned>(arm_mode));
                     // Owned runs report Off immediately and after frame 8, On
-                    // by frame 32. Keep this observation, require On at the
-                    // first five-second checkpoint and again after drain.
-                    require(driver_mode("requested_on",true,false),"driver-On-query");
+                    // by frame 32. Keep this observation, require the mode at
+                    // the first five-second checkpoint and again after drain.
+                    require(driver_mode("requested_on",arm_mode!=sl::ReflexMode::eOff,false),"driver-On-query");
                 }
                 live_frames=new mhw::reflex::LiveFrames(sdk);
                 presentation->observe(live_frames->observer());
-                live_frames->install(image,reinterpret_cast<std::uintptr_t>(device_pin.Get()),log);live_frames->describe(log,static_cast<unsigned>(capture_mode));
-                log << "{\"event\":\"frames_armed\",\"mode\":1,\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n" << std::flush;
+                live_frames->install(image,reinterpret_cast<std::uintptr_t>(device_pin.Get()),log);live_frames->describe(log,static_cast<unsigned>(arm_mode));
+                log << "{\"event\":\"frames_armed\",\"mode\":" << static_cast<unsigned>(arm_mode) << ",\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n" << std::flush;
 #ifdef MHW_ALPHA
                 mhw::alpha::status::reflex(mhw::alpha::status::Stage::running);
 #endif
@@ -987,6 +1020,9 @@ DWORD WINAPI worker(void*) noexcept {
                     if(!stats.routing || stats.faults){stop_reason="presentation";break;}
 #endif
                     if(!frames.running || frames.faults || !stats.routing || stats.faults)break;
+#ifdef MHW_ALPHA
+                    if(reflex_requested.load()!=reflex_applied.load()){std::lock_guard lock(sdk_mutex);apply_reflex_mode(fg_plugin);}
+#endif
 #ifdef MHW_FG_SCENE_PROBE
                     if(frames.completed&&scene_requested<4) {
                         const unsigned request=scene_requested+1;
@@ -1047,7 +1083,7 @@ DWORD WINAPI worker(void*) noexcept {
                         log_frames(log, "armed");log_latency(log);mhw::perf::sampler::write(log);
 #endif
 #endif
-                        if(last==started)require(driver_mode("running_on",true),"driver-On-not-enabled");
+                        if(last==started)require(driver_mode("running_on",reflex_applied.load()!=0),"driver-On-not-enabled");
                         log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed << ",\"tokens\":" << frames.tokens
                             << ",\"sleeps\":" << frames.sleeps << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults
                             << ",\"owner\":" << frames.owner << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents << "}\n" << std::flush;
@@ -1327,6 +1363,12 @@ extern "C" __declspec(dllexport) al_result_t AL_CALL al_plugin_init(const al_api
     if (!api || !init || !init->self || api->size < offsetof(al_api_t, publish_interface)) return AL_ERROR;
     loader_api = api; loader_self = init->self;
     try { return start(api, init); } catch (...) { loader_status(AL_STATUS_DISABLED, "start-up exception"); return AL_ERROR; }
+}
+#endif
+#ifdef MHW_ALPHA
+namespace mhw::reflex {
+void request_mode(unsigned mode) noexcept { if(mode<=2)reflex_requested.store(mode); }
+unsigned applied_mode() noexcept { return reflex_applied.load(); }
 }
 #endif
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
