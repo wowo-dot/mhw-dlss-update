@@ -23,6 +23,7 @@
 #include "depth_eligibility.hpp"
 #include "depth_destination.hpp"
 #include "depth_lease.hpp"
+#include "identity_depth_survey.hpp"
 #include "../temporal_present/unfiltered.hpp"
 #include "../temporal_bindings/depth_routes.hpp"
 #include "../temporal_bindings/shader.hpp"
@@ -126,6 +127,7 @@ struct Depth {dr::Stamp stamp;dr::CopyPacket packet;tb::Owner source,destination
 ScaledDepthTrace scaled_depth_trace;
 DepthScheduleTrace depth_schedule_trace;
 DepthConsumerAdmission depth_consumer_admission;
+IdentityDepthSurvey identity_depth_survey;
 SRWLOCK depth_trace_mutex=SRWLOCK_INIT;
 struct DepthTraceLock {DepthTraceLock(){AcquireSRWLockExclusive(&depth_trace_mutex);}~DepthTraceLock(){ReleaseSRWLockExclusive(&depth_trace_mutex);}};
 void note_depth(unsigned stage,unsigned reason,const Depth &d,ScaledDepthTrace::Values values={}) noexcept {
@@ -637,6 +639,12 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
         consumer.sequence,reinterpret_cast<std::uintptr_t>(list),l->generation,consumer.packet.object,GetTickCount64(),
         lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated,std::span(barriers).first(barrier_count));
     #endif
+    #ifdef MHW_CONTINUOUS_SCALED
+    // Render scale 1.0: record the native depth schedule (observation only).
+    if(identity_extent())identity_depth_survey.observe(reader,s,consumer.depth.texture,consumer.depth_object,consumer.depth_packet,
+        consumer.packet.object,consumer.sequence,consumer.depth_sequence,reinterpret_cast<std::uintptr_t>(list),l->generation,GetTickCount64(),
+        lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated);
+    #endif
     if(lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated){
         #ifdef MHW_CONTINUOUS_SCALED
         {DepthTraceLock trace_lock;scaled_depth_trace.missing({GetTickCount64(),s.frame,s.epoch,consumer.sequence,consumer.depth_sequence,
@@ -1141,6 +1149,7 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     // and the depth producer/consumer trace by stage and reason.
     out<<",\"consumer_depth\":";depth_consumer_admission.write(out);
     out<<",\"depth_capture\":";{DepthTraceLock trace_lock;scaled_depth_trace.write(out);}
+    out<<",\"identity_depth\":";identity_depth_survey.write(out);
     out<<",\"route\":";sr::write_summary(out);
 #endif
     out<<'}';

@@ -299,6 +299,49 @@ identical copies), gameplay, each stamp field, destination, retired and
 forwarded requests, and the unscaled rule. The in-game check is game-74
 (DLAA).
 
+## game-74 (v0.19.1): fewer misses, and the real cause
+
+- **Depth missing over the session: 748**, against 1,100–2,700 before.
+  - The first window (the title) had none: 596 frames, all leased.
+  - The other windows (menus and some gameplay) had 100–300 each.
+- **The remaining misses have no lease at all.** In the first missing frame
+  (7351):
+  - copies 20830–20832 were produced, and the request chose 20832;
+  - before the evaluation, only 20830's consumer ran, on list 2014888304, and
+    it failed the copy checks (code 8);
+  - the evaluation ran on list 2013933520.
+- **Correction to the v0.19.1 diagnosis.** Re-read with the list identities,
+  game-70's misses had the same cause:
+  - 9506's lease was on list 1991235504, the evaluation on 1991241440;
+  - the request's own copy 9515 was recorded on 1991235504 as well, not on
+    the evaluation's list.
+  - So the cause is a **depth copy recorded on another command list than
+    the TAA dispatch**, not the choice of copy. The lease design needs both
+    on one list, because the private depth copy rides on the native copy's
+    list.
+  - v0.19.1's rule is still the right one (the request's own copy), and it
+    stays.
+- **The proper fix: copy at the TAA dispatch, on its own list.** This is what
+  the scaled presets do (`DepthConsumerAdmission` with
+  `record_consumer_depth`):
+  - the game orders its own copy before its own TAA reads that texture;
+  - so a copy made at the dispatch is correct whichever list the native copy
+    used, provided the depth's D3D state there is proven from the native
+    schedule;
+  - that proof exists for the scaled nested draw (writer 12 → 0x100, then a
+    read state), but not for the 100% plain copy (opcode 10, whole-copy
+    path).
+- **v0.19.2 (diagnostics only):** `IdentityDepthSurvey`. At render scale 1.0,
+  on the first 8 evaluations and on 8 missing frames, it records:
+  - the writer's copy path and kind;
+  - the depth tracker's spans (packet role, last use, native before and
+    after states, first-use flag);
+  - the writer's and the TAA dispatch's schedule positions;
+  - every depth state node between them, nested child draws included.
+
+  The result is logged as `identity_depth` in `dlss_summary`. The proof
+  will be written from that data.
+
 ## What true DLAA needs (design)
 
 - **The final anchor.** At identity the stream route takes the opcode-13 copy
