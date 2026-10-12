@@ -114,6 +114,20 @@ extents. v0.17.1 lets it run at identity; every adaptation then uses scale 1.
     frames while DOF is active and resumes afterwards.
   - A resampling DOF adaptation for those scales is open work.
 
+## game-63 (v0.17.2): DLAA never armed
+
+- **What happened:** the log stopped at `temporal_coexistence` "prepared"
+  with no `alpha_arm`. The worker waited for the game to qualify for the
+  whole session, so there was no DLSS and no frame generation.
+- **Cause:** `render_resolution::ready` and `install` refused scale 1.0
+  ("reduced extent plan"). They were written only to reduce the extent.
+  The runtime still needs the module at 1.0: its per-frame input stamps prove
+  which extent each frame rendered.
+- **v0.17.3:**
+  - Scale 1.0 is allowed. The override then holds the game's own full scale.
+  - The wait loop logs `alpha_waiting` with its current reason after 15 s,
+    so a game that never qualifies no longer leaves a silent log.
+
 ## Not yet proven (hypotheses until the in-game runs)
 
 - The shader adapters were verified on the GPU at 2:1 and at identity (and at

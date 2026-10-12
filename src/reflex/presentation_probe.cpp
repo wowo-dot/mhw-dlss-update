@@ -839,7 +839,7 @@ DWORD WINAPI worker(void*) noexcept {
             bool arm_now=false;
             {
                 auto stats=presentation->snapshot();auto stable_since=GetTickCount64();unsigned attempts{};
-                std::string not_ready,first_reason;
+                std::string not_ready,first_reason;bool waiting_logged=false;
                 while(stats.routing && !stats.faults) {
                     Sleep(250);
                     const auto now_stats=presentation->snapshot();
@@ -850,6 +850,11 @@ DWORD WINAPI worker(void*) noexcept {
                     not_ready.clear();
                     if(mhw::reflex::temporal::ready(not_ready)){arm_now=true;break;}
                     if(!attempts++)first_reason=not_ready;
+                    // A game that never qualifies would otherwise leave no reason
+                    // in the log until the session ends (game-63).
+                    if(!waiting_logged&&GetTickCount64()-wait_start>=15000){waiting_logged=true;
+                        log << "{\"event\":\"alpha_waiting\",\"attempts\":" << attempts << ",\"waited_ms\":" << GetTickCount64()-wait_start
+                            << ",\"reason\":" << quoted(not_ready) << "}\n" << std::flush;}
                 }
                 log << "{\"event\":\"alpha_arm\",\"ready\":" << arm_now << ",\"attempts\":" << attempts << ",\"waited_ms\":"
                     << GetTickCount64()-wait_start << ",\"first_reason\":" << quoted(first_reason) << ",\"last_reason\":" << quoted(not_ready)

@@ -218,7 +218,9 @@ bool ready(std::uintptr_t base,float scale,std::string &reason) {
     if(image){reason="already prepared";return false;}
     pb::Runtime probe;if(!pb::discover(base,probe,reason))return false;
     const auto planned=plan({probe.width,probe.height},probe.scene_override?probe.window_width:probe.width,scale);
-    if(!planned.valid||scale==1.F){reason="reduced extent plan";return false;}
+    // DLAA asks for 1.0: the override then holds the game's full scale, and the
+    // per-frame input stamps still prove which extent each frame rendered.
+    if(!planned.valid){reason="extent plan";return false;}
     if(!sizing_code(base)){reason="native sizing code gate";return false;}
     std::uintptr_t root{};if(!pb::read(base+0x51c4480,root)||!root||root>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     // snapshot() reads this module state. No hook exists before install(), so
@@ -234,7 +236,7 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     if(!pb::discover(base,discovered,reason))return false;
     // A pillarboxed scene quantizes its scale against the window (config basis).
     target=plan({discovered.width,discovered.height},discovered.scene_override?discovered.window_width:discovered.width,scale);
-    if(!target.valid||scale==1.F){reason="reduced extent plan";return false;}
+    if(!target.valid){reason="extent plan";return false;}
     if(!sizing_code(base)){reason="native sizing code gate";return false;}
     if(!pb::read(base+0x51c4480,renderer)||!renderer||renderer>UINTPTR_MAX-0x7b3f5){reason="renderer";return false;}
     image=base;expected_return=base+0x22982e7;setter=reinterpret_cast<Setter>(base+0x229bd70);
