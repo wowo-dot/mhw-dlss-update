@@ -75,17 +75,25 @@ struct DofNativeSequence {
  std::array<std::array<unsigned,4>,8> misses{};
  void note(unsigned check,unsigned index,unsigned observed,unsigned expected){
   if(miss_count<misses.size())misses[miss_count]={check,index,observed,expected};++miss_count;}
- bool qualify(unsigned width,unsigned height,std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
+ // width/height: the output (the DOF textures' allocation); render_w/render_h:
+ // the game's view. The adapted passes 0 and 3 average a 2x2 box of output
+ // colour per render texel, so they are exact only at 2:1 (truncated per axis
+ // for an odd scene). At identity (DLAA) the native passes already read full
+ // size and run unchanged. Other render scales are rejected (96): the frame's
+ // DLSS evaluation is skipped while depth of field is active.
+ bool qualify(unsigned width,unsigned height,unsigned render_w,unsigned render_h,std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
   failed_at=miss_count=flagged=0;misses={};
   // Structural codes: 1 shape, 10+p pass recipe, 20+p dispatch order, 30+p
   // owners, 40+p binding ids, 50+p binding register/role/views, 60+p texture
   // owner/format, 70+p role conflict, 80+p constants, 90 missing texture,
   // 91 shared texture, 92 composition inputs, 93 scene/constants, 94 screen
-  // zero words, 95 blur constants.
+  // zero words, 95 blur constants, 96 render scale neither 2:1 nor identity.
   const auto bad=[&](unsigned code){failed_at=code;return false;};
   // An odd scene (3413x1440 pillarboxed) takes the truncated half; the size
   // and constant checks below record the game's actual sizes if it differs.
   if(count!=6||!scene_owner||!width||!height)return bad(1);
+  const bool half=render_w==width/2&&render_h==height/2,identity=render_w==width&&render_h==height;
+  if(!half&&!identity)return bad(96);
   layout=dof_layout(width,height);
   textures={};
   std::array<const OutputDependencies::Constant *,4> constants{};
@@ -123,13 +131,14 @@ struct DofNativeSequence {
   if(textures[1].fields[0]!=scene_owner||!constants[0]||!constants[1]||!constants[3])return bad(93);
   std::array<float,28> screen{};std::memcpy(screen.data(),constants[1]->bytes.data(),112);
   const auto raw=[&](unsigned i){unsigned value{};std::memcpy(&value,&screen[i],4);return value;};
-  // CBScreen: fScreenSize, its inverse, iViewSize (integers) and the half size
-  // with its inverse; the remaining checked words are zero.
-  const float w=static_cast<float>(width),h=static_cast<float>(height),hw=static_cast<float>(width/2),hh=static_cast<float>(height/2);
-  const std::array<float,8> sizes_f{w,h,1.F/w,1.F/h,hw,hh,1.F/hw,1.F/hh};constexpr unsigned at[]{4,5,6,7,14,15,16,17};
+  // CBScreen: fScreenSize and its inverse (the output), iViewSize (integers),
+  // fViewSize and fViewInverseSize (the render view); the remaining checked
+  // words are zero.
+  const float w=static_cast<float>(width),h=static_cast<float>(height),rw=static_cast<float>(render_w),rh=static_cast<float>(render_h);
+  const std::array<float,8> sizes_f{w,h,1.F/w,1.F/h,rw,rh,1.F/rw,1.F/rh};constexpr unsigned at[]{4,5,6,7,14,15,16,17};
   for(unsigned i=0;i<8;++i)if(i<2||i==4||i==5?screen[at[i]]!=sizes_f[i]:!dof_near(screen[at[i]],sizes_f[i]))note(3,at[i],raw(at[i]),std::bit_cast<unsigned>(sizes_f[i]));
-  if(raw(10)!=width/2)note(3,10,raw(10),width/2);
-  if(raw(11)!=height/2)note(3,11,raw(11),height/2);
+  if(raw(10)!=render_w)note(3,10,raw(10),render_w);
+  if(raw(11)!=render_h)note(3,11,raw(11),render_h);
   if(screen[8]||screen[9]||screen[12]||screen[13]||screen[26])return bad(94);
   if(miss_count)return false;
   std::array<unsigned,24> blur{};std::memcpy(blur.data(),constants[3]->bytes.data(),96);

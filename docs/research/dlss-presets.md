@@ -91,6 +91,29 @@ by the presets).**
 **DLAA would not have started.** The stream route's `prepare` refused identity
 extents. v0.17.1 lets it run at identity; every adaptation then uses scale 1.
 
+## game-62 (v0.17.1): Quality again
+
+- **Outline: fixed (the user confirmed).** 115,506 draws were corrected. Only
+  the eye and `Simple_Mt_AlphaTest` draws stay native.
+- **NGX's range for Quality at 2560x1440:** optimal 1707x960, minimum
+  1280x720, maximum 2560x1440. The game's 1696x954 lies inside it.
+- **The depth-of-field cause (confirmed by `route.dof`).** Every cutscene DOF
+  frame failed check 3. CBScreen's iViewSize, fViewSize and fViewInverseSize
+  were 1696x954, while the check expected width/2 (1280x720).
+  - The DOF texture layout matched: it is half the output allocation,
+    independent of the render scale.
+  - DLSS and frame generation resumed after the cutscene. All 1,100 rejected
+    frames came during it.
+- **Deeper finding.** The adapted DOF passes 0 and 3 average a 2x2 box of
+  output colour per render texel, so they are exact only at 2:1.
+- **v0.17.2:**
+  - The view constants are checked against the render size.
+  - At identity (DLAA) no pass is adapted: the native DOF already reads full
+    size.
+  - Other scales (Quality, Balanced) are rejected explicitly (96). DLSS skips
+    frames while DOF is active and resumes afterwards.
+  - A resampling DOF adaptation for those scales is open work.
+
 ## Not yet proven (hypotheses until the in-game runs)
 
 - The shader adapters were verified on the GPU at 2:1 and at identity (and at

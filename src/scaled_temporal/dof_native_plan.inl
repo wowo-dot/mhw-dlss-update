@@ -39,7 +39,7 @@ bool dof_qualify(Plan &p){
  if(matching!=1)return reject(3);
  const auto &b=p.dependency_bindings[d.stage-4];std::array<std::uint64_t,5> composite{};
  for(unsigned i=0;i<5;++i)composite[i]=b.textures[i].object;
- if(!d.qualify(width,height,p.draws[d.stage].dependency_source,composite)){dof_stats.latch(d);return reject(4);}
+ if(!d.qualify(width,height,render_w,render_h,p.draws[d.stage].dependency_source,composite)){dof_stats.latch(d);return reject(4);}
  std::uintptr_t queue{},next{};unsigned key{};
  if(!field(p.stamp.context,0x2b78,queue)||!field(queue,static_cast<unsigned>(16*(d.passes[5].index+1)),key)||key!=d.key||
     !field(queue,static_cast<unsigned>(16*(d.passes[5].index+1)+8),next)||next!=p.draws[d.stage].draw.packet)return reject(5);

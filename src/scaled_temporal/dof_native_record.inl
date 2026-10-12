@@ -26,7 +26,8 @@ bool dof_dispatch(ID3D12GraphicsCommandList *list,unsigned x,unsigned y,unsigned
      !field(dof_scope.state,0x158,packet)||packet!=recipe.packet||!obs::inspect(list,roots)||!roots.ready()||
      roots.generation!=dof_scope.generation||std::array<unsigned,3>{x,y,z}!=std::array<unsigned,3>{recipe.prefix[6],recipe.prefix[7],recipe.prefix[8]}||
      !dof_stable(recipe)||!obs::predicate_current(list,predicate)||!predicate.known||predicate.buffer)throw std::runtime_error("DOF native dispatch identity");
-  step=22;const bool adapt=pass==0||pass==3;unsigned cache=UINT_MAX;
+  // At identity (DLAA) the native passes already read full size: none is adapted.
+  step=22;const bool adapt=(pass==0||pass==3)&&!(render_w==width&&render_h==height);unsigned cache=UINT_MAX;
   if(adapt){
    cache=dof_cache(pass,recipe.shader_set);
    if(cache==UINT_MAX){

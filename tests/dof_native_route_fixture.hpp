@@ -63,7 +63,7 @@ struct Route {
   require(r::dof_qualify(p),"complete native DOF recipe/actual resources");
   require(d.flagged==(dof_formats::pooled()?0x1fcU:0U)&&!d.failed_at&&!d.miss_count,"engine extent flags and clean diagnostics");
   std::array<std::uint64_t,5> comp{};for(unsigned i=0;i<5;++i)comp[i]=owners[roles[i]];
-  const auto reject=[&]{require(!d.qualify(r::width,r::height,owners[1],comp),"malformed six-pass contract rejected");++negatives;};
+  const auto reject=[&]{require(!d.qualify(r::width,r::height,r::render_w,r::render_h,owners[1],comp),"malformed six-pass contract rejected");++negatives;};
   ++d.passes[0].prefix[6];reject();--d.passes[0].prefix[6];
   ++d.passes[2].index;reject();--d.passes[2].index;
   d.passes[3].modes[2]=1;reject();d.passes[3].modes[2]=0;
@@ -71,7 +71,10 @@ struct Route {
   d.passes[1].shader.bytes[100]^=1;reject();d.passes[1].shader.bytes[100]^=1;
   const auto old=comp[1];comp[1]=comp[0];reject();comp[1]=old;
   d.passes[4].constants[0].bytes[0]^=1;reject();d.passes[4].constants[0].bytes[0]^=1;
-  require(d.qualify(r::width,r::height,owners[1],comp),"valid contract recovers");
+  require(d.qualify(r::width,r::height,r::render_w,r::render_h,owners[1],comp),"valid contract recovers");
+  // The adapted passes average a 2x2 box: a Quality-like 2/3 render scale is refused (96).
+  require(!d.qualify(r::width,r::height,r::width*2/3,r::height*2/3,owners[1],comp)&&d.failed_at==96,"non-2:1 render scale rejected");++negatives;
+  require(d.qualify(r::width,r::height,r::render_w,r::render_h,owners[1],comp),"valid contract recovers again");
   state=a.take(0x200);executor=a.take(16);backend_context=a.take(16);
   Arena::put(state+0x20,reinterpret_cast<std::uintptr_t>(list));Arena::put(executor+8,state);Arena::put(backend_context+8,r::cfg.backend);
   p.built=true;r::watch(0,p);
