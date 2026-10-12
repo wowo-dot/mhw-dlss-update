@@ -142,6 +142,10 @@ inline std::string generation_line(const View &v) {
                      : v.display_hz ? "display refresh, " + std::to_string(v.display_hz) + " Hz"
                                     : std::string("display refresh")) +
                     ")";
+        // Dynamic never goes past its target: at 1x for a while, the game
+        // already runs above half of it (game-81: ~175 fps at 240 Hz).
+        if (v.presented_now == 1 && v.single_streak >= auto_pause_presents)
+            return line + ", showing 1x: the game is already above half the target";
         return v.presented_now ? line + ", showing " + std::to_string(v.presented_now) + "x" : line + ", generating";
     }
     const auto shown = v.generated + 1;

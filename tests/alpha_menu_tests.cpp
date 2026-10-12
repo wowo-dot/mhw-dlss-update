@@ -180,6 +180,16 @@ void status_lines() {
         check(s::generation_line(d) == "Dynamic (display refresh), showing 3x", "Dynamic to the display");
         d.display_hz = 240;
         check(s::generation_line(d) == "Dynamic (display refresh, 240 Hz), showing 3x", "Dynamic to a known display");
+        {
+            auto one = d;
+            one.presented_now = 1;
+            one.single_streak = s::auto_pause_presents - 1;
+            check(s::generation_line(one) == "Dynamic (display refresh, 240 Hz), showing 1x", "Dynamic at 1x for a moment");
+            one.single_streak = s::auto_pause_presents;
+            check(s::generation_line(one) == "Dynamic (display refresh, 240 Hz), showing 1x: the game is already above half the target",
+                  "Dynamic held at 1x by its target");
+            check(s::generation_line(one).size() < 128, "fits CMFM_MAX_TEXT");
+        }
         d.target = 240;
         check(s::generation_line(d) == "Dynamic (240 fps), showing 3x", "Dynamic to 240 fps");
         d.presented_now = 0;

@@ -463,8 +463,8 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
                 help_text("Frames shown for each rendered frame; 3x and up need an RTX 50. Dynamic picks the count itself to reach "
                           "the target frame rate (RTX 50). Applies at once.")),
             row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
-                help_text("The frame rate Dynamic aims for: the display's refresh rate or a set rate. V-Sync is not used with "
-                          "Dynamic. Applies at once.")),
+                help_text("The frame rate Dynamic aims for: the display's refresh rate or a set rate. It never goes past it, so it "
+                          "adds no frames while the game runs above half of it. Applies at once.")),
             row(auto_row, CMFM_TYPE_BOOL, label_text("Auto pause"),
                 help_text("NVIDIA's Auto mode for 2x to 6x: frame generation pauses by itself when the game would run faster "
                           "without it. Applies at once.")),
