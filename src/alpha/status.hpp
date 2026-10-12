@@ -32,7 +32,16 @@ struct View {
     bool generating{};                    // DLSS-G on at the last Present
     unsigned requested{}, generated{};    // total multiplier asked for; generated frames per rendered frame
     std::uint64_t presented_generated{};  // generated frames shown since the start
+    // The mode asked for (0 fixed, 1 Auto, 2 Dynamic) and Dynamic's target (0:
+    // display refresh); whether DLSS-G runs Dynamic now and whether the card
+    // supports it (0 not known, 1 no, 2 yes); frames shown for the last
+    // rendered frame, and Presents in a row with none generated.
+    unsigned generation_mode{}, target{}, dynamic_support{}, presented_now{}, single_streak{};
+    bool dynamic_applied{}, dynamic_refused{};
 };
+// Presents in a row without a generated frame before Auto reads as paused
+// (single ones happen at camera cuts).
+inline constexpr unsigned auto_pause_presents = 30;
 
 // Worker and plugin entry, any thread.
 void loader(Loader, std::string_view reason) noexcept;
@@ -124,10 +133,19 @@ inline std::string generation_line(const View &v) {
     case Generation::stopped: return with_reason("Off", reason_text(v.generation_reason));
     case Generation::armed: break;
     }
-    if (!v.generating) return std::to_string(v.requested) + "x, paused";
+    const bool dynamic = v.generation_mode == 2, automatic = v.generation_mode == 1;
+    if (!v.generating) return (dynamic ? std::string("Dynamic") : std::to_string(v.requested) + "x") + ", paused";
+    if (dynamic && v.dynamic_applied) {
+        auto line = "Dynamic (" + (v.target ? std::to_string(v.target) + " fps" : std::string("display refresh")) + ")";
+        return v.presented_now ? line + ", showing " + std::to_string(v.presented_now) + "x" : line + ", generating";
+    }
     const auto shown = v.generated + 1;
-    auto line = std::to_string(shown) + "x, generating";
-    if (v.requested > shown) line += " (" + std::to_string(v.requested) + "x is more than this graphics card allows)";
+    auto line = std::to_string(shown) + (automatic ? "x Auto, " : "x, ");
+    line += automatic && v.single_streak >= auto_pause_presents ? "paused (the game runs faster without it)" : "generating";
+    if (dynamic && v.dynamic_support == 1) line += " (Dynamic is not available here)";
+    else if (dynamic && v.dynamic_refused) line += " (DLSS refused Dynamic; see the log)";
+    else if (dynamic) line += " (switching to Dynamic)";
+    else if (v.requested > shown) line += " (" + std::to_string(v.requested) + "x is more than this graphics card allows)";
     return line;
 }
 

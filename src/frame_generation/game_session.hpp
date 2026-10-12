@@ -38,6 +38,15 @@ bool frame_generation_on() noexcept;
 // Any thread. Total frame multiplier (2 = ordinary FG), applied at the next
 // tagged Present and limited to the reported capability. Other values ignored.
 void multiplier(unsigned total) noexcept;
+// How the count is chosen, applied at the next tagged Present:
+// - fixed: the multiplier (DLSSGMode::eOn);
+// - automatic: the same, but DLSS-G pauses generation when the game would run
+//   faster without it (eAuto, NVIDIA's legacy mode);
+// - dynamic: DLSS-G picks the count toward `target_fps` (0: the display's
+//   refresh rate; eDynamic). Only while DLSSGState reports it supported and
+//   DLSS-G accepted it; otherwise the fixed multiplier, counted as a fallback.
+enum class Mode : unsigned { fixed, automatic, dynamic };
+void mode(Mode mode, unsigned target_fps) noexcept;
 // Any thread, lock-free: the session as status lines show it (alpha menu).
 struct Status {
     bool armed{}, on{};
@@ -45,6 +54,13 @@ struct Status {
     unsigned generated{};                 // generated frames per rendered frame now; 0 while Off
     unsigned maximum{};                   // generated frames DLSS-G allows; 0 until its state was read
     std::uint64_t presented_generated{};  // generated frames presented since the start
+    Mode mode{};                          // asked for
+    unsigned target{};                    // dynamic target asked for; 0: the display's refresh rate
+    bool dynamic_applied{};               // DLSS-G runs in eDynamic now
+    unsigned dynamic_support{};           // 0 not known yet, 1 no, 2 yes (DLSSGState)
+    bool dynamic_refused{};               // DLSS-G refused eDynamic although supported
+    unsigned presented_now{};             // frames presented for the last rendered frame
+    unsigned single_streak{};             // Presents in a row, while On, that showed no generated frame
 };
 Status status() noexcept;
 

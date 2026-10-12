@@ -54,6 +54,10 @@ std::filesystem::path alpha_base;
 // "<dll>.fg-mode": "off" runs without DLSS-G (A/B diagnostic); "2x".."8x" sets
 // the starting frame multiplier (default 2x). Live changes: "<log>.mfg-<n>".
 namespace { bool fg_plugin = true; unsigned fg_multiplier = 2; }
+#ifdef MHW_ALPHA
+// The ini's frame generation mode and dynamic target (game_session.hpp).
+namespace { mhw::frame_generation::game::Mode fg_mode{}; unsigned fg_target{}; }
+#endif
 #endif
 #ifdef MHW_REFLEX_FRAME_PROBE
 #include "live_frames.hpp"
@@ -681,6 +685,10 @@ DWORD WINAPI worker(void*) noexcept {
             output = alpha_config.log_dir; std::filesystem::create_directories(output);
             runtime = alpha_config.runtime_dir;
             fg_plugin = alpha_config.frame_generation; fg_multiplier = alpha_config.multiplier;
+            fg_mode = alpha_config.dynamic ? mhw::frame_generation::game::Mode::dynamic
+                    : alpha_config.generation_auto ? mhw::frame_generation::game::Mode::automatic
+                                                   : mhw::frame_generation::game::Mode::fixed;
+            fg_target = alpha_config.dynamic_target;
             mhw::alpha::status::generation(fg_plugin ? mhw::alpha::status::Generation::starting : mhw::alpha::status::Generation::off);
             mhw::continuous_dlaa::reconstruction_mode(alpha_config.dlss_mode);
             mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(alpha_config.dlss_mode));
@@ -779,6 +787,8 @@ DWORD WINAPI worker(void*) noexcept {
 #ifdef MHW_ALPHA
         log << "{\"event\":\"alpha_config\",\"dlss_mode\":\"" << mhw::alpha::dlss_mode_value(alpha_config.dlss_mode)
             << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
+            << ",\"dynamic\":" << alpha_config.dynamic << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
+            << ",\"frame_generation_auto\":" << alpha_config.generation_auto
             << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -972,6 +982,9 @@ DWORD WINAPI worker(void*) noexcept {
                                                                        scene_width, scene_height};
                     mhw::frame_generation::game::configure(sdk, chain.width, chain.height, scene);
                     mhw::frame_generation::game::multiplier(fg_multiplier);
+#ifdef MHW_ALPHA
+                    mhw::frame_generation::game::mode(fg_mode, fg_target);
+#endif
                     mhw::frame_generation::game::arm(true);
                     sl::DLSSGState fg_state{};
                     const auto fg_state_result = sdk.frame_generation_state(sl::ViewportHandle{0}, fg_state);

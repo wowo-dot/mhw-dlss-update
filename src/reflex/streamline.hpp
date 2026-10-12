@@ -37,6 +37,12 @@ public:
     // Valid while On to change the count; same tagging contract as above.
     sl::Result frame_generation_generate(const sl::ViewportHandle& viewport, unsigned generated_frames,
                                          bool retain = false) const;
+    // FG in `mode`, same tagging contract: eOn shows `generated_frames`; eAuto
+    // too, but DLSS-G pauses it when the game would run faster without; eDynamic
+    // picks the count itself toward `target_fps` (0: the display's refresh rate)
+    // and needs DLSSGState::bIsDynamicMFGSupported (the caller checks it).
+    sl::Result frame_generation_mode(const sl::ViewportHandle& viewport, sl::DLSSGMode mode, unsigned generated_frames,
+                                     float target_fps, bool retain = false) const;
     // Fixed-count MFG only, bounded by this viewport's reported capability.
     // State and option calls must run on the serialized presentation owner.
     sl::Result frame_generation_multi(const sl::ViewportHandle& viewport, unsigned generated_frames) const;

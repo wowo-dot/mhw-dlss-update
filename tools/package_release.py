@@ -43,8 +43,10 @@ COVERAGE = [
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 dlss_mode = performance    ; dlaa, quality, balanced, performance (applies from the next start)
-frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)
-reflex = on                ; on, boost, off (off only with frame_generation = off)
+frame_generation = 2x      ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
+dynamic_target = display   ; dynamic only: display (its refresh rate) or a frame rate from 30 to 1000
+frame_generation_auto = off ; on: 2x to 6x pause by themselves when the game would run faster without them
+reflex = on             ; on, boost, off (off only with frame_generation = off)
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
 log_dir = logs             ; one log file per launch
 """
@@ -57,8 +59,9 @@ Requirements
 - Monster Hunter: World on Steam, DirectX 12 enabled. In-game anti-aliasing
   and the game's own DLSS option off.
 - An NVIDIA GeForce RTX GPU. Frame Generation needs an RTX 40 or 50 series
-  GPU; 3x and above need an RTX 50 series GPU. On other hardware the mod
-  turns itself off and the game runs normally.
+  GPU; 3x and above need an RTX 50 series GPU, and Dynamic also needs NVIDIA
+  driver 595.41 or newer. On other hardware the mod turns itself off and the
+  game runs normally.
 - The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
   plugin setups already have.
 - Astera Loader, which loads this mod. Start the game through
@@ -73,9 +76,14 @@ Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file)
 DLSS mode (dlss_mode): DLAA renders at full resolution; Quality, Balanced and
 Performance render at 67%, 58% and 50% and upscale. The default is Performance.
 A change applies from the next start.
+Frame generation (frame_generation): a fixed multiplier (2x to 6x), or Dynamic,
+which picks the count itself to reach a target frame rate (dynamic_target: the
+display's refresh rate by default). frame_generation_auto = on lets NVIDIA's
+Auto mode pause a fixed multiplier when the game would run faster without it.
+Reflex (reflex): On, Boost, or Off while frame generation is off.
 With CMFM installed (an optional Astera Loader plugin), the game's own menus
-gain a Mods entry below Options. There, DLSS > Settings changes frame
-generation and its multiplier, and DLSS > Status shows what the mod is doing.
+gain a Mods entry below Options. There, DLSS > Settings changes these
+settings, and DLSS > Status shows what the mod is doing.
 The menu saves its changes to mhw_dlss.ini.
 
 Logs: AsteraLoader/plugins/mhw_dlss/logs, one file per launch. Please include it when

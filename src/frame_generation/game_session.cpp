@@ -108,12 +108,21 @@ struct Session {
     std::uint64_t presents{}, tagged{}, recorded{}, record_failed{}, size_mismatch{}, state_failed{}, mode_changes{},
         null_tags{}, unpresented{}, exceptions{}, lifecycle_calls{}, lifecycle_offs{};
     std::atomic<unsigned> requested_multiplier{2};
+    std::atomic<unsigned> requested_mode{static_cast<unsigned>(Mode::fixed)}, requested_target{};
     unsigned applied_generated{};  // 0 while Off
+    sl::DLSSGMode applied_mode{sl::DLSSGMode::eOff};
+    unsigned applied_target{};
+    std::atomic<bool> dynamic_refused{};  // DLSS-G refused eDynamic: the fixed multiplier from then on
     // Mirrors for status() (any thread): applied_generated, the state's
     // numFramesToGenerateMax, and generated frames presented so far.
     std::atomic<unsigned> shown_generated{}, shown_maximum{};
     std::atomic<std::uint64_t> presented_generated{};
-    std::uint64_t generated_changes{}, generated_limited{};
+    // ... the applied mode, the state's dynamic support (0 unknown, 1 no, 2 yes),
+    // frames presented for the last rendered frame, and the run of Presents
+    // while On that showed none generated (an Auto pause, a reset, a menu).
+    std::atomic<bool> shown_dynamic{};
+    std::atomic<unsigned> shown_dynamic_support{}, shown_presented{}, single_streak{};
+    std::uint64_t generated_changes{}, generated_limited{}, mode_option_changes{}, dynamic_fallbacks{};
     // Tagged frames with reset: all, and those whose DLSS history was reset
     // (the rest had no consecutive predecessor). DLSS-G presents no generated
     // frame for a reset.
@@ -222,27 +231,55 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     if (result != sl::Result::eOk) s.last_sdk_error = result;
     s.on.store(false);
     s.applied_generated = 0;
+    s.applied_mode = sl::DLSSGMode::eOff;
+    s.applied_target = 0;
     s.shown_generated.store(0);
+    s.shown_dynamic.store(false);
+    s.single_streak.store(0);
     ++s.mode_changes;
+}
+
+// The state's Dynamic MFG support for status(): 1 no, 2 yes.
+void note_state(Session &s, const sl::DLSSGState &state) {
+    s.state = state;
+    s.state_valid = true;
+    s.shown_maximum.store(state.numFramesToGenerateMax);
+    s.shown_dynamic_support.store(state.bIsDynamicMFGSupported == sl::Boolean::eTrue ? 2U : 1U);
 }
 
 // Owner thread, under the session lock: generated frames for the requested
 // multiplier. The capability comes from the last state read on this thread.
+void read_state_once(Session &s) {
+    if (s.state_valid) return;
+    sl::DLSSGState state{};
+    if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) note_state(s, state);
+}
 unsigned wanted_generated(Session &s) {
-    if (!s.state_valid) {
-        sl::DLSSGState state{};
-        if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
-            s.state = state;
-            s.state_valid = true;
-            s.shown_maximum.store(state.numFramesToGenerateMax);
-        }
-    }
+    read_state_once(s);
     const auto multiplier = s.requested_multiplier.load();
     const auto maximum = s.state_valid ? s.state.numFramesToGenerateMax : 0;
     auto generated = reflex::generated_frames_for(multiplier, maximum);
     if (!generated) generated = 1;
     if (generated + 1 != multiplier) ++s.generated_limited;
     return generated;
+}
+
+// Owner thread, under the session lock: the options for the requested mode.
+// eDynamic only with the state's support and while DLSS-G has not refused it;
+// its numFramesToGenerate is ignored by DLSS-G and set to the maximum allowed.
+struct Wanted {
+    sl::DLSSGMode mode{};
+    unsigned generated{}, target{};
+    bool fallback{};  // dynamic asked for, the fixed multiplier used
+    bool operator==(const Wanted &) const = default;
+};
+Wanted wanted_options(Session &s) {
+    read_state_once(s);
+    const auto mode = static_cast<Mode>(s.requested_mode.load());
+    if (mode == Mode::dynamic && !s.dynamic_refused.load() && s.state_valid &&
+        s.state.bIsDynamicMFGSupported == sl::Boolean::eTrue && s.state.numFramesToGenerateMax)
+        return {sl::DLSSGMode::eDynamic, s.state.numFramesToGenerateMax, s.requested_target.load(), false};
+    return {mode == Mode::automatic ? sl::DLSSGMode::eAuto : sl::DLSSGMode::eOn, wanted_generated(s), 0, mode == Mode::dynamic};
 }
 
 }  // namespace
@@ -260,10 +297,19 @@ bool frame_generation_on() noexcept { return session.on.load(); }
 void multiplier(unsigned total) noexcept {
     if (reflex::generated_frames_for(total, 0)) session.requested_multiplier.store(total);
 }
+void mode(Mode mode, unsigned target_fps) noexcept {
+    if (mode != Mode::fixed && mode != Mode::automatic && mode != Mode::dynamic) return;
+    if (target_fps > 1000) return;
+    // The target first: a Present that sees the new mode sees its target too.
+    session.requested_target.store(target_fps);
+    session.requested_mode.store(static_cast<unsigned>(mode));
+}
 Status status() noexcept {
     const auto &s = session;
     return {s.armed.load(), s.on.load(), s.requested_multiplier.load(), s.shown_generated.load(), s.shown_maximum.load(),
-            s.presented_generated.load()};
+            s.presented_generated.load(), static_cast<Mode>(s.requested_mode.load()), s.requested_target.load(),
+            s.shown_dynamic.load(), s.shown_dynamic_support.load(), s.dynamic_refused.load(), s.shown_presented.load(),
+            s.single_streak.load()};
 }
 
 void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
@@ -537,7 +583,11 @@ bool lifecycle_guard(unsigned) noexcept {
         if (result != sl::Result::eOk) s.last_sdk_error = result;
         s.on.store(false);
         s.applied_generated = 0;
+        s.applied_mode = sl::DLSSGMode::eOff;
+        s.applied_target = 0;
         s.shown_generated.store(0);
+        s.shown_dynamic.store(false);
+        s.single_streak.store(0);
         ++s.mode_changes;
         ++s.lifecycle_offs;
         return true;
@@ -641,22 +691,33 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             s.ring.untag(slot);
             return turn_off(s, token, Off::tags);
         }
-        if (const auto generated = wanted_generated(s); !s.on.load() || generated != s.applied_generated) {
-            if (const auto r = s.sdk->frame_generation_generate(viewport, generated, true); r != sl::Result::eOk) {
+        if (const auto w = wanted_options(s); !s.on.load() || w.mode != s.applied_mode || w.generated != s.applied_generated ||
+                                               w.target != s.applied_target) {
+            if (const auto r = s.sdk->frame_generation_mode(viewport, w.mode, w.generated, static_cast<float>(w.target), true);
+                r != sl::Result::eOk) {
                 s.last_sdk_error = r;
+                // eDynamic refused although reported supported: the fixed
+                // multiplier from the next Present on (fail closed).
+                if (w.mode == sl::DLSSGMode::eDynamic) s.dynamic_refused.store(true);
                 // The SDK already holds the tags for this frame; keep the slot
                 // until its consumption fence like any other tagged frame.
                 s.pending = slot;
                 ++s.off[static_cast<unsigned>(Off::options)];
                 return;
             }
-            if (s.on.load())
-                ++s.generated_changes;
-            else
+            if (!s.on.load())
                 ++s.mode_changes;
+            else if (w.mode != s.applied_mode || w.target != s.applied_target)
+                ++s.mode_option_changes;
+            else
+                ++s.generated_changes;
+            if (w.fallback) ++s.dynamic_fallbacks;
             s.on.store(true);
-            s.applied_generated = generated;
-            s.shown_generated.store(generated);
+            s.applied_generated = w.generated;
+            s.applied_mode = w.mode;
+            s.applied_target = w.target;
+            s.shown_generated.store(w.generated);
+            s.shown_dynamic.store(w.mode == sl::DLSSGMode::eDynamic);
         }
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
@@ -680,11 +741,12 @@ static void finish_pending(Session &s, bool presented) {
     if (!presented) ++s.unpresented;
     sl::DLSSGState state{};
     if (s.sdk->frame_generation_state(viewport, state) == sl::Result::eOk) {
-        s.state = state;
-        s.state_valid = true;
-        s.shown_maximum.store(state.numFramesToGenerateMax);
+        note_state(s, state);
         ++s.presented_frames[std::min<std::uint32_t>(state.numFramesActuallyPresented, 7)];
         if (state.numFramesActuallyPresented > 1) s.presented_generated.fetch_add(state.numFramesActuallyPresented - 1);
+        s.shown_presented.store(state.numFramesActuallyPresented);
+        if (s.on.load() && state.numFramesActuallyPresented <= 1) s.single_streak.store(s.single_streak.load() + 1);
+        else s.single_streak.store(0);
         s.fence = static_cast<ID3D12Fence *>(state.inputsProcessingCompletionFence);
         s.ring.presented(s.pending, state.lastPresentInputsProcessingCompletionFenceValue);
     } else {
@@ -712,6 +774,10 @@ void write(std::ostream &o) {
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
+      << ",\"mode\":{\"requested\":" << s.requested_mode.load() << ",\"target\":" << s.requested_target.load()
+      << ",\"applied\":" << static_cast<unsigned>(s.applied_mode) << ",\"applied_target\":" << s.applied_target
+      << ",\"changes\":" << s.mode_option_changes << ",\"dynamic_fallbacks\":" << s.dynamic_fallbacks
+      << ",\"dynamic_refused\":" << s.dynamic_refused.load() << ",\"single_streak\":" << s.single_streak.load() << '}'
       << ",\"hudless\":{\"available\":" << (s.hudless != nullptr) << ",\"failed\":" << s.hudless_failed
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
     for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
@@ -758,6 +824,7 @@ void write(std::ostream &o) {
       << ",\"reclaimed\":" << r.reclaimed << ",\"unconfirmed\":" << r.unconfirmed << "},\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
       << static_cast<unsigned>(s.state.status) << ",\"min_width_or_height\":" << s.state.minWidthOrHeight
       << ",\"frames_presented\":" << s.state.numFramesActuallyPresented << ",\"max_generated\":" << s.state.numFramesToGenerateMax
+      << ",\"dynamic_supported\":" << static_cast<int>(s.state.bIsDynamicMFGSupported)
       << ",\"vram\":" << s.state.estimatedVRAMUsageInBytes << ",\"fence_value\":"
       << s.state.lastPresentInputsProcessingCompletionFenceValue << "},\"samples\":[";
     for (unsigned i = 0; i < s.sample_count; ++i) {

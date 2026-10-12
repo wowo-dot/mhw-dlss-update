@@ -13,21 +13,32 @@ namespace mhw::alpha {
 // relative to the DLL's folder.
 //
 //   dlss_mode = performance ; dlaa, quality, balanced, performance
-//   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x (DLSS-G not loaded when off)
+//   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x, dynamic (DLSS-G not loaded when off)
+//   dynamic_target = display ; display (its refresh rate) or 30 to 1000 (frames per second)
+//   frame_generation_auto = off ; on: DLSS-G pauses a fixed multiplier when it would slow the game
 //   reflex = on             ; on, boost, off (off only with frame_generation = off)
 //   runtime_dir = .         ; Streamline and NVIDIA DLSS DLLs
 //   log_dir = logs          ; log files of each launch
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
+// Frame generation: a fixed multiplier, or dynamic (DLSS-G picks the count
+// toward dynamic_target; RTX 50 and driver 595.41 or newer, else the session
+// falls back to the fixed multiplier, 2x from the ini). Auto is NVIDIA's legacy
+// mode for fixed multipliers. Dynamic and Auto both turn the game's V-Sync off
+// (DLSS-G guide 22.5, 22.8).
 // Reflex: NVIDIA Reflex Low Latency (on), the same with Boost (the GPU keeps
 // its clocks up when the CPU is the limit), or off. DLSS Frame Generation
 // needs Reflex, so off applies only while frame generation is off.
 enum class ReflexMode : unsigned { off, on, boost };
+inline constexpr unsigned min_dynamic_target = 30, max_dynamic_target = 1000;
 struct Config {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
     bool frame_generation = true;
-    unsigned multiplier = 2;
+    unsigned multiplier = 2;     // the fixed multiplier (kept while dynamic or off)
+    bool dynamic{};              // frame_generation = dynamic
+    unsigned dynamic_target{};   // frames per second; 0: the display's refresh rate
+    bool generation_auto{};      // frame_generation_auto = on
     ReflexMode reflex = ReflexMode::on;
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
@@ -77,6 +88,26 @@ inline bool parse_reflex(std::string_view value, ReflexMode &m) {
         }
     return false;
 }
+// The ini value of a dynamic target ("display" for 0), and the target of an
+// ini value (false if not display or a whole number from 30 to 1000).
+inline std::string dynamic_target_value(unsigned target) {
+    return target ? std::to_string(target) : "display";
+}
+inline bool parse_dynamic_target(std::string_view value, unsigned &target) {
+    if (value == "display") {
+        target = 0;
+        return true;
+    }
+    if (value.empty() || value.size() > 4) return false;
+    unsigned n = 0;
+    for (const char c : value) {
+        if (c < '0' || c > '9') return false;
+        n = n * 10 + static_cast<unsigned>(c - '0');
+    }
+    if (n < min_dynamic_target || n > max_dynamic_target) return false;
+    target = n;
+    return true;
+}
 inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode &m) {
     for (const auto candidate : {dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality,
                                  dlss_sdk::ReconstructionMode::balanced, dlss_sdk::ReconstructionMode::performance})
@@ -110,11 +141,19 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         if (key == "dlss_mode") {
             if (!parse_dlss_mode(value, c.dlss_mode)) c.warnings.push_back(where + "dlss_mode must be dlaa, quality, balanced or performance");
         } else if (key == "frame_generation") {
-            if (value == "off") c.frame_generation = false;
+            if (value == "off") c.frame_generation = c.dynamic = false;
+            else if (value == "dynamic") c.frame_generation = c.dynamic = true;
             else if (value == "2x" || value == "3x" || value == "4x" || value == "6x") {
                 c.frame_generation = true;
+                c.dynamic = false;
                 c.multiplier = static_cast<unsigned>(value[0] - '0');
-            } else c.warnings.push_back(where + "frame_generation must be off, 2x, 3x, 4x or 6x");
+            } else c.warnings.push_back(where + "frame_generation must be off, 2x, 3x, 4x, 6x or dynamic");
+        } else if (key == "dynamic_target") {
+            if (!parse_dynamic_target(value, c.dynamic_target))
+                c.warnings.push_back(where + "dynamic_target must be display or a frame rate from 30 to 1000");
+        } else if (key == "frame_generation_auto") {
+            if (value == "on" || value == "off") c.generation_auto = value == "on";
+            else c.warnings.push_back(where + "frame_generation_auto must be on or off");
         } else if (key == "reflex") {
             if (!parse_reflex(value, c.reflex)) c.warnings.push_back(where + "reflex must be on, boost or off");
         } else if (key == "runtime_dir" || key == "log_dir") {
@@ -146,9 +185,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
     return c;
 }
 
-// The ini value of the frame generation setting: "off", or "2x" to "6x".
-inline std::string frame_generation_value(bool on, unsigned multiplier) {
-    return on ? std::to_string(multiplier) + "x" : "off";
+// The ini value of the frame generation setting: "off", "2x" to "6x", or "dynamic".
+inline std::string frame_generation_value(bool on, unsigned multiplier, bool dynamic = false) {
+    return !on ? "off" : dynamic ? "dynamic" : std::to_string(multiplier) + "x";
 }
 
 // `text` with `key` set to `value`. Only the value of the last line with that

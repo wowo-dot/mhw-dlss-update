@@ -163,9 +163,15 @@ sl::Result Streamline::frame_generation_ordinary(const sl::ViewportHandle& viewp
 }
 sl::Result Streamline::frame_generation_generate(const sl::ViewportHandle& viewport, unsigned generated_frames,
                                                  bool retain) const {
+    return frame_generation_mode(viewport, sl::DLSSGMode::eOn, generated_frames, 0.0f, retain);
+}
+sl::Result Streamline::frame_generation_mode(const sl::ViewportHandle& viewport, sl::DLSSGMode mode, unsigned generated_frames,
+                                             float target_fps, bool retain) const {
     if (!frame_generation_options_) return sl::Result::eErrorNotInitialized;
-    if (generated_frames == 0) return sl::Result::eErrorInvalidParameter;
-    sl::DLSSGOptions value{}; value.mode = sl::DLSSGMode::eOn; value.numFramesToGenerate = generated_frames;
+    const bool known = mode == sl::DLSSGMode::eOn || mode == sl::DLSSGMode::eAuto || mode == sl::DLSSGMode::eDynamic;
+    if (!known || generated_frames == 0 || !(target_fps >= 0.0f)) return sl::Result::eErrorInvalidParameter;
+    sl::DLSSGOptions value{}; value.mode = mode; value.numFramesToGenerate = generated_frames;
+    if (mode == sl::DLSSGMode::eDynamic) value.dynamicTargetFrameRate = target_fps;
     if (retain) value.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     return frame_generation_options_(viewport, value);
 }

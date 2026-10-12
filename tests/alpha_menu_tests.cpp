@@ -82,6 +82,29 @@ void settings_model() {
     check(m::multiplier_allowed(4, 3, why) && !m::multiplier_allowed(6, 3, why), "limit 3: up to 4x");
     check(why == "This graphics card shows 4x at most.", "limit 3 reason");
     check(m::multiplier_allowed(6, 5, why), "limit 5: 6x");
+    {
+        check(m::dynamic_choice == 4 && std::string_view(m::multiplier_names[4]) == "Dynamic" && m::multiplier_at(4) == 0,
+              "Dynamic is the last multiplier choice");
+        m::Settings s;
+        s.multiplier = 6;
+        check(m::generation_choice(s) == 3 && m::generation_mode(s) == 0, "fixed 6x");
+        s.generation_auto = true;
+        check(m::generation_mode(s) == 1, "Auto");
+        s.dynamic = true;
+        check(m::generation_choice(s) == 4 && m::generation_mode(s) == 2, "Dynamic wins over Auto");
+        why.clear();
+        check(m::dynamic_allowed(0, why) && m::dynamic_allowed(2, why) && why.empty(), "Dynamic: unknown or supported");
+        check(!m::dynamic_allowed(1, why) && why == "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.",
+              "Dynamic not supported");
+        const auto plain = m::target_choices(0);
+        check(plain.size() == m::targets.size() && plain.front() == 0 && m::target_index(plain, 240) == 11, "target choices");
+        const auto custom = m::target_choices(138);
+        check(custom.size() == m::targets.size() + 1 && m::target_index(custom, 138) == 7 && m::target_index(custom, 144) == 8 &&
+                  std::is_sorted(custom.begin(), custom.end()),
+              "an ini target joins the list in order");
+        check(m::target_index(plain, 138) == -1, "an unknown target has no index");
+        check(m::target_name(0) == "Display refresh" && m::target_name(240) == "240 fps", "target names");
+    }
     using mhw::dlss_sdk::ReconstructionMode;
     check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3, "mode choices, best first");
     ReconstructionMode mode{};
@@ -147,6 +170,42 @@ void status_lines() {
     v.requested = 6;
     v.generated = 3;
     check(s::generation_line(v) == "4x, generating (6x is more than this graphics card allows)", "limited by the card");
+    {
+        auto d = v;
+        d.requested = 2;
+        d.generated = 1;
+        d.generation_mode = 2;
+        d.dynamic_applied = true;
+        d.presented_now = 3;
+        check(s::generation_line(d) == "Dynamic (display refresh), showing 3x", "Dynamic to the display");
+        d.target = 240;
+        check(s::generation_line(d) == "Dynamic (240 fps), showing 3x", "Dynamic to 240 fps");
+        d.presented_now = 0;
+        check(s::generation_line(d) == "Dynamic (240 fps), generating", "Dynamic before a frame was counted");
+        d.dynamic_applied = false;
+        d.dynamic_support = 1;
+        check(s::generation_line(d) == "2x, generating (Dynamic is not available here)", "Dynamic unsupported: 2x");
+        d.dynamic_support = 2;
+        d.dynamic_refused = true;
+        check(s::generation_line(d) == "2x, generating (DLSS refused Dynamic; see the log)", "Dynamic refused");
+        d.dynamic_refused = false;
+        check(s::generation_line(d) == "2x, generating (switching to Dynamic)", "Dynamic asked for, not applied yet");
+        d.generating = false;
+        check(s::generation_line(d) == "Dynamic, paused", "Dynamic, not generating");
+
+        auto a = v;
+        a.requested = 2;
+        a.generated = 1;
+        a.generation_mode = 1;
+        check(s::generation_line(a) == "2x Auto, generating", "Auto generating");
+        a.single_streak = s::auto_pause_presents - 1;
+        check(s::generation_line(a) == "2x Auto, generating", "a short run without generated frames");
+        a.single_streak = s::auto_pause_presents;
+        check(s::generation_line(a) == "2x Auto, paused (the game runs faster without it)", "Auto paused by DLSS-G");
+        a.requested = 6;
+        a.single_streak = 0;
+        check(s::generation_line(a) == "2x Auto, generating (6x is more than this graphics card allows)", "Auto limited by the card");
+    }
 
     v.generation = s::Generation::unavailable;
     v.generation_reason = "scene_rect";
