@@ -94,6 +94,7 @@ struct SilhouetteCpu {
 struct LatePacket {
  std::array<std::uintptr_t,4> bindings{};std::array<unsigned,3> arguments{};
  std::shared_ptr<SilhouetteCpu> recipe;pb::NativePipeline native;
+ bool silent{};  // writes no colour, depth or stencil (silhouette_silent): stays native
 };
 struct Plan {
  tb::Snapshot stamp;tb::Packet temporal;std::uintptr_t copy{};
@@ -281,7 +282,7 @@ const tb::Reader reader{nullptr,read};
 #include "scene_probe.inl"
 #endif
 bool same_stamp(const tb::Snapshot &);
-std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet);
+std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet,bool &silent);
 std::uint64_t silhouette_planned{};
 #include "silhouette_probe.inl"
 bool source(Record &r){

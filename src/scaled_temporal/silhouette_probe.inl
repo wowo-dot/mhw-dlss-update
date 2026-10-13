@@ -61,7 +61,7 @@ bool silhouette_candidates(Plan &p) {
  for(unsigned i=0;i<size;++i){const auto &q=selected[i];auto &r=p.late[i];
   for(unsigned j=0;j<i;++j)if(selected[j].object==q.object)return reject(3);
   if(!field(q.object,0x10,r.bindings)||!field(q.object,0x40,r.arguments))return reject(4);
-  p.late_packets[i]=q.object;p.late_keys[i]=q.key;r.recipe=silhouette_cpu(q.object);
+  p.late_packets[i]=q.object;p.late_keys[i]=q.key;r.silent=false;r.recipe=silhouette_cpu(q.object,r.silent);
   if(r.recipe&&!pb::snapshot_native_pipeline(cfg.image,q.object,r.native))r.recipe.reset();
  }
  unsigned again{};std::uintptr_t pointer{};

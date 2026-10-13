@@ -67,18 +67,47 @@ symptom of a draw left at the 1280 x 720 viewport.
   - `Simple_Mt_AlphaTest`, with no visible artefact reported.
 - DLSS ran without faults, and there was no crash.
 
-**Open: scheduled with the long session test (the user, 2026-10-12).**
-- Rejection 0 records no state yet. Add the `Simple_Mt_AlphaTest` draw's
-  blend, write mask, depth, `fGlobalTransparency` and alpha test to the
-  diagnostics.
-- If it writes pixels, admit it. That needs its own binding admission, since
-  it binds neither CBMhMaterialGlobal nor tGBuffer1, plus a fixture
-  validation of the rule-1 adaptation.
+**Simple_Mt_AlphaTest: it writes nothing (2026-10-13, v0.24.1).**
+
+Checked offline in the vanilla RenderDoc capture (`local/renderdoc-20261006`,
+2560x1440, one gameplay frame) with `tools/rdc/shader_draws.py`. The script
+finds every draw whose pixel shader hashes to `9c5c0c85…` and records its
+state and the pixels it changes.
+
+- **Two draws:** EIDs 32709 and 32743, `DrawIndexedInstanced` with 1,416 and
+  1,758 indices, one instance. The mod sees the same two programs, once a
+  frame each.
+- **Output:** one target, the 2560x1440 R11G11B10 scene, with **write mask 0**.
+  Depth test and write are off, no depth target is bound, and stencil is off.
+- **Pixels changed: 0** for both.
+- **The program:** it declares SV_TARGET0 (rgba), SV_TARGET1 (x) and
+  SV_TARGET2 (xy), applies `bAlphaTestEnable` with `discard_nz`, and scales
+  by `fGlobalTransparency`. It declares no UAV and no atomic, so with write
+  mask 0 and no depth target it has no effect. The engine draws it anyway.
+
+**Decision.** It stays native permanently: there is nothing to correct.
+v0.24.1 classifies it properly instead of as an unknown program.
+- `silhouette_silent` reads the engine's own pipeline state (blend and
+  depth-stencil descriptions). A late draw that writes no colour (every
+  write mask 0), no depth and no stencil is classified before any shader
+  lookup.
+- It stays native with **rejection 11**, is not cached as a recipe and is not
+  reported as an unknown program.
+- The eye draws (former rejection 2: write mask 0, depth and stencil off)
+  fall in the same class.
+- **Expected in game:** `route.silhouette.rejections[11]` equals what
+  rejections 0 and 2 counted before. In game-60 that was 11,670 each over
+  11,733 frames, so about two a frame together. `unknown_programs` should be
+  0, and rejections 0 and 2 should be 0.
+- **If a program from this class ever writes:** the engine state check is
+  false, so it reappears as an unknown program (rejection 0).
+
+The late-candidates fixture (`scaled_stream_route_fixture … late-candidates`)
+checks both cases: a packet whose engine pipeline writes nothing is
+classified, and one with a colour write is not.
 
 The list of rejections and fixes continues:
-   - `Simple_Mt_AlphaTest` stays native. Redrawing a lit forward material at
-     output size is a separate adaptation: its tiled lights are indexed in
-     render space. First, find out what it draws.
+   - `Simple_Mt_AlphaTest` stays native: it writes nothing (above, v0.24.1).
 
 ## All hidden-surface variants: v0.13.10 (2026-10-08)
 

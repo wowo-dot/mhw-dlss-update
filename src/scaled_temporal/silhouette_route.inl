@@ -39,9 +39,25 @@ bool silhouette_code_stable(const SilhouetteCpu &r){
  }return true;
 }
 bool silhouette_recipe_equal(pb::NativePipeline a,pb::NativePipeline b){a.render=b.render=0;a.graphics=b.graphics=0;return a==b;}
-std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet){
+// A late draw whose pipeline writes no colour, depth or stencil leaves nothing
+// at the render viewport, so it stays native with nothing to correct
+// (rejection 11; v0.24.1). These are the eye draws (game-58: write mask 0,
+// depth and stencil off) and the two Simple_Mt_AlphaTest RenderTransparent
+// draws (PS 9c5c0c85...; RenderDoc, vanilla 2560x1440 frame: write mask 0, no
+// depth target, no pixel changed; the program declares no UAV). Checked from
+// the engine's pipeline state before any shader lookup, whatever the program.
+bool silhouette_silent(const pb::NativePipeline &n){
+ D3D12_BLEND_DESC blend{};D3D12_DEPTH_STENCIL_DESC depth{};
+ static_assert(sizeof(n.blend)>=sizeof(blend)&&sizeof(n.depth)>=sizeof(depth));
+ std::memcpy(&blend,n.blend.data(),sizeof(blend));std::memcpy(&depth,n.depth.data(),sizeof(depth));
+ for(unsigned i=0;i<(blend.IndependentBlendEnable?8U:1U);++i)if(blend.RenderTarget[i].RenderTargetWriteMask)return false;
+ return (!depth.DepthEnable||depth.DepthWriteMask==D3D12_DEPTH_WRITE_MASK_ZERO)&&(!depth.StencilEnable||!depth.StencilWriteMask);
+}
+std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet,bool &silent){
  pb::NativePipeline native;std::uintptr_t set{};
- if(!pb::snapshot_native_pipeline(cfg.image,packet,native)||!field(native.shader_handle,0,set)||!set||native.input_count>32)return {};
+ if(!pb::snapshot_native_pipeline(cfg.image,packet,native))return {};
+ if(silhouette_silent(native)){silent=true;return {};}
+ if(!field(native.shader_handle,0,set)||!set||native.input_count>32)return {};
  for(const auto &cached:silhouette_cpu_cache)if(cached&&cached->set==set&&silhouette_recipe_equal(cached->native,native)){
   if(!layout(cached->layout,true)||!silhouette_code_stable(*cached))return {};return cached;}
  {std::uintptr_t entry{},descriptor{},data{};unsigned size{};
@@ -65,12 +81,13 @@ std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet){
  silhouette_cpu_cache[empty]=r;return r;
 }
 // Late packets resolve their recipe here; a null recipe keeps the draw native
-// (rejection 0). Counts lookups that failed for a reason other than an unknown
-// pixel shader or a full cache.
-std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet){
+// (rejection 0, or 11 for a draw that writes nothing). Counts lookups that
+// failed for a reason other than an unknown pixel shader, a full cache or a
+// draw that writes nothing.
+std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet,bool &silent){
  const auto unknown=silhouette_unknown_draws,full=silhouette_cache_full;
- auto r=silhouette_cpu_lookup(packet);
- if(!r&&unknown==silhouette_unknown_draws&&full==silhouette_cache_full)++silhouette_recipe_failed;
+ auto r=silhouette_cpu_lookup(packet,silent);
+ if(!r&&!silent&&unknown==silhouette_unknown_draws&&full==silhouette_cache_full)++silhouette_recipe_failed;
  return r;
 }
 IndexedScope indexed_before(const pb::Frame &f) noexcept {
@@ -184,7 +201,7 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  const auto native=[&](unsigned reason,std::initializer_list<unsigned> detail={}){
   ++silhouette_native;++silhouette_rejections[reason];silhouette_sample(reason,r.recipe.get(),detail);completed(p);return false;};
  const auto u=[](auto v){return static_cast<unsigned>(v);};
- if(!r.recipe||!n)return native(0);
+ if(!r.recipe||!n)return native(r.silent&&n?11:0);
  pb::AttachmentSnapshot now;obs::RasterBindings raster;
  if(!pb::snapshot_attachments(cfg.image,scope.draw,now)||!pb::attachment_cache_matches(now)||now.pipeline!=r.native||
     now.color_count!=1||now.views[8].owner||now.views[0].resource!=reinterpret_cast<std::uintptr_t>(p.resources[3].Get())||

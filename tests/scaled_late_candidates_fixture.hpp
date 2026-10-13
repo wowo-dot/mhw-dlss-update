@@ -39,6 +39,30 @@ void check_late_candidates(fx::Fixture &f){
  put(renderer+0x1f210,s.frame+1);fill(5,false);
  require(!route::silhouette_candidates(p)&&route::indexed_candidate_reasons[5]==reasons[5]+1,"changed frame stays native with reason 5");
  require(route::indexed_candidates_rejected==rejected+3,"three rejected scans");
+ // v0.24.1: a late draw whose engine pipeline writes no colour, depth or
+ // stencil is classified before any shader lookup (stays native, rejection 11
+ // at record) and is not reported as an unknown program; a colour write is not.
+ {const auto engine_pipeline=[&](std::uintptr_t o,unsigned char mask){
+   const auto graphics=a.take(0x40),render=a.take(0x40),blend_owner=a.take(0xa0),blend=a.take(0x10+sizeof(D3D12_BLEND_DESC)),
+              raster_owner=a.take(0x80),raster=a.take(0x10+sizeof(D3D12_RASTERIZER_DESC));
+   put(o+0x20,graphics);put(o+0x28,render);put(render+4,static_cast<unsigned char>(0));
+   put(render+8,blend_owner);put(render+0x18,raster_owner);put(blend_owner+0x98,blend);put(raster_owner+0x68,raster);
+   D3D12_BLEND_DESC b{};b.RenderTarget[0].RenderTargetWriteMask=mask;put(blend+0x10,b);
+   put(raster+0x10,D3D12_RASTERIZER_DESC{});};
+  // The depth state comes from the renderer's current depth owner: depth and
+  // stencil off.
+  const auto owners=a.take(0x2490),owner=a.take(0x10),depth_owner=a.take(0x70),depth=a.take(0x10+sizeof(D3D12_DEPTH_STENCIL_DESC));
+  put(image.base+0x51c73d0,owners);put(owners+0x2480,owner);put(owner,depth_owner);put(depth_owner+0x60,depth);
+  put(depth+0x10,D3D12_DEPTH_STENCIL_DESC{});
+  engine_pipeline(objects[1],0);engine_pipeline(objects[2],15);put(renderer+0x1f210,s.frame);
+  const auto unknown=route::silhouette_unknown_draws,failed=route::silhouette_recipe_failed;
+  fill(5,false);require(route::silhouette_candidates(p)&&frozen(5),"five pieces with engine pipelines");
+  unsigned silent{},written{};
+  for(unsigned i=0;i<p.late_count;++i){if(p.late_packets[i]==objects[1])silent+=p.late[i].silent&&!p.late[i].recipe;
+   if(p.late_packets[i]==objects[2])written+=!p.late[i].silent;}
+  require(silent==1&&written==1,"a draw that writes nothing is classified; a colour write is not");
+  require(route::silhouette_unknown_draws==unknown&&route::silhouette_recipe_failed>failed,"no unknown program; the other pieces fail lookup");
+  for(const auto o:{objects[1],objects[2]}){put(o+0x20,std::uintptr_t{});put(o+0x28,std::uintptr_t{});}}
  std::ostringstream summary;route::write_summary(summary);
  require(summary.str().find("\"late_draws\":{\"planned\":")!=std::string::npos&&summary.str().find("\"max\":65,\"capacity\":64}")!=std::string::npos,"summary reports late draws");
  route::cfg=saved;
