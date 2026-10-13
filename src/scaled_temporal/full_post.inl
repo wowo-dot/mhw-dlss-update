@@ -22,7 +22,7 @@ thread_local FullPostState full_state;
 std::atomic<std::uint64_t> full_frame{UINT64_MAX};  // the last armed frame (plan builder)
 struct FullPostCounters {
  std::atomic<std::uint64_t> final_copies{},schedulers{},switches{},tone_map_switches{},projections{},restores{},
-  not_switched{},rect_mismatch{},stale{},declined{},no_taa{},identity_plans{};
+  not_switched{},rect_mismatch{},stale{},declined{},no_taa{},taa_unreadable{},identity_plans{};
  // The inputs' upscale (v0.25.2): slots recorded, refused (by reason),
  // planned, executed with the upscale, executed without it (by reason).
  std::atomic<std::uint64_t> slots{},slots_planned{},upscales{},slot_unverified{},slot_stale{};
@@ -153,14 +153,20 @@ void full_candidate(const pb::Frame &f,unsigned slot){
 }
 // TAA's descriptor in this frame's scheduler list (sFilterSwapchain +0x3c
 // count, +0x40 descriptors; the unit's vtable 0x351bda8, stage 15, order 2),
-// with a callback (descriptor +0x20 clear: the scheduler calls it).
-bool full_taa_registered() noexcept {
+// with a callback (descriptor +0x20 clear: the scheduler calls it). At the
+// scheduler's entry the list is in registration order, not yet sorted, and
+// endpoints without a unit (the colour grade's, (15, 0x7fffff1)) can precede
+// TAA's descriptor; they are skipped (game-120: a search that stopped at them
+// refused every frame). 0: registered; 1: the list unreadable; 2: not listed.
+unsigned full_taa_registered() noexcept {
  std::uintptr_t manager{};unsigned count{};
- if(!field(cfg.image,0x51cc238,manager)||!field(manager,0x3c,count)||count>64)return false;
+ if(!field(cfg.image,0x51cc238,manager)||!field(manager,0x3c,count)||count>64)return 1;
  for(unsigned i=0;i<count;++i){std::uintptr_t e{},unit{},type{};unsigned stage{},order{};unsigned char skipped{};
-  if(!field(manager,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,unit)||!unit||!field(unit,0,type)||!field(e,0x20,skipped))return false;
-  if(type==cfg.image+0x351bda8&&stage==15&&order==2&&!skipped)return true;}
- return false;
+  if(!field(manager,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,unit)||!field(e,0x20,skipped))return 1;
+  if(!unit||skipped||stage!=15||order!=2)continue;
+  if(!field(unit,0,type))return 1;
+  if(type==cfg.image+0x351bda8)return 0;}
+ return 2;
 }
 // At the scheduler's entry the candidate is armed: the final copy becomes the
 // game's DLAA copy (the same owners, the full rectangle), recorded in the
@@ -173,7 +179,7 @@ void full_enter(std::uintptr_t context) noexcept {
  if(!field(cfg.renderer,0x1f210,frame)||frame!=s.frame){++full_counts.stale;return;}
  ++full_counts.schedulers;
  if(!field(context,0x5c,rect)||rect!=s.render_rect){++full_counts.rect_mismatch;return;}
- if(!full_taa_registered()){++full_counts.no_taa;return;}
+ if(const auto missing=full_taa_registered()){++(missing==1?full_counts.taa_unreadable:full_counts.no_taa);return;}
  unsigned key{},order{};
  if(!field(context,0x154,key)||!field(context,0x15c,order)){++full_counts.declined;return;}
  auto *k=reinterpret_cast<volatile unsigned *>(context+0x154),*o=reinterpret_cast<volatile unsigned *>(context+0x15c);
@@ -227,7 +233,7 @@ void full_post_write(std::ostream &o){
  o<<"{\"enabled\":"<<full_post_enabled.load()<<",\"final_copies\":"<<full_counts.final_copies<<",\"schedulers\":"<<full_counts.schedulers
   <<",\"switches\":"<<full_counts.switches<<",\"tone_map_switches\":"<<full_counts.tone_map_switches<<",\"projections\":"<<full_counts.projections
   <<",\"restores\":"<<full_counts.restores<<",\"not_switched\":"<<full_counts.not_switched<<",\"rect_mismatch\":"<<full_counts.rect_mismatch
-  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"identity_plans\":"<<full_counts.identity_plans
+  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"taa_unreadable\":"<<full_counts.taa_unreadable<<",\"identity_plans\":"<<full_counts.identity_plans
   <<",\"inputs\":{\"ready\":"<<full_inputs.ready()<<",\"failure\":\""<<full_inputs_failure<<"\",\"bytes\":"<<full_inputs.bytes()<<",\"slots\":"<<full_counts.slots<<",\"planned\":"<<full_counts.slots_planned
   <<",\"upscales\":"<<full_counts.upscales<<",\"states_checked\":"<<full_counts.states_checked<<",\"states_planned\":"<<full_counts.states_planned
   <<",\"state_mismatch\":["<<full_counts.state_mismatch[0]<<','<<full_counts.state_mismatch[1]<<','<<full_counts.state_mismatch[2]<<','<<full_counts.state_mismatch[3]

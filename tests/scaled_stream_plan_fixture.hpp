@@ -154,6 +154,16 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   {const auto stale=route::full_counts.stale.load();const auto f2=candidate();put(renderer+0x1f210,f2+1);
    route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);
    require(copies.size()==1&&route::full_counts.stale.load()==stale+1,"a stale candidate refused");}
+  // At the scheduler's entry the list is in registration order: the colour
+  // grade's endpoint (no unit) before TAA's descriptor still arms (game-120).
+  // An unreadable list is counted apart from TAA's absence.
+  {put(filters+0x40,grade+0x238);put(filters+0x58,layer+0x140);const auto f2=candidate();route::full_post_enter(context);
+   require(copies.size()==2&&route::full_frame.load()==f2,"an endpoint without a unit before TAA's descriptor: armed");
+   route::full_post_taa(context);route::full_post_exit(context);require(viewports.size()==4,"switched and restored");
+   const auto unreadable=route::full_counts.taa_unreadable.load(),no_taa=route::full_counts.no_taa.load();put(filters+0x3c,65U);candidate();
+   route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);put(filters+0x3c,4U);
+   require(copies.size()==2&&route::full_counts.taa_unreadable.load()==unreadable+1&&route::full_counts.no_taa.load()==no_taa,"an unreadable list: not armed");
+   put(filters+0x40,layer+0x140);put(filters+0x58,grade+0x238);}
   // v0.25.2: the inputs' upscale slot. After TAA's callback, in its key, the
   // scheduler's context records an engine copy from TAA's output (the TAA
   // copy's source) into GBuffer5 at (15, 3); the armed frame's identity plan
