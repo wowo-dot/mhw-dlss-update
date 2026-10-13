@@ -9,6 +9,7 @@
 #include "../reflex/streamline.hpp"
 #include "../perf/toggles.hpp"
 #include "../gpu_memory/budget.hpp"
+#include <dxgi1_3.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
@@ -84,6 +85,13 @@ struct Session {
     unsigned disabled_presents{};
     bool freed{};
     std::uint64_t frees{}, free_failed{};
+    // latency_target(): the chain, the latency while off, the value found
+    // before raising it (restored when on again), and the outcomes.
+    std::uintptr_t native_swap{};
+    unsigned off_latency{};
+    UINT latency_found{}, latency_seen{};
+    bool latency_raised{};
+    std::uint64_t latency_raises{}, latency_restores{}, latency_failed{};
     InputRing<slot_count> ring;
     std::array<Images, slot_count> images;
     std::array<bool, slot_count> slot_hudless{};
@@ -281,6 +289,29 @@ bool same_image(const D3D12_RESOURCE_DESC &a, const D3D12_RESOURCE_DESC &b) {
            a.MipLevels == b.MipLevels && a.DepthOrArraySize == b.DepthOrArraySize && a.SampleDesc.Count == b.SampleDesc.Count;
 }
 
+// Owner thread, under the session lock: the chain's maximum frame latency
+// raised for the player's Off (`off`), or the found value restored.
+void frame_latency(Session &s, bool off) {
+    if (!s.native_swap || !s.off_latency || off == s.latency_raised) return;
+    Microsoft::WRL::ComPtr<IDXGISwapChain2> chain;
+    UINT now{};
+    if (FAILED(reinterpret_cast<IUnknown *>(s.native_swap)->QueryInterface(IID_PPV_ARGS(&chain))) ||
+        FAILED(chain->GetMaximumFrameLatency(&now))) {
+        ++s.latency_failed;
+        s.off_latency = 0;  // not again
+        return;
+    }
+    s.latency_seen = now;
+    if (off) s.latency_found = now;
+    if (FAILED(chain->SetMaximumFrameLatency(off ? s.off_latency : s.latency_found))) {
+        ++s.latency_failed;
+        s.off_latency = 0;
+        return;
+    }
+    s.latency_raised = off;
+    ++(off ? s.latency_raises : s.latency_restores);
+}
+
 // Owner thread, under the session lock. Null tags release SDK references.
 void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     ++s.off[static_cast<unsigned>(reason)];
@@ -395,6 +426,11 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
 void enable(bool enabled) noexcept { session.enabled.store(enabled); }
+void latency_target(std::uintptr_t native_swap, unsigned off_latency) noexcept {
+    std::lock_guard lock(session.mutex);
+    session.native_swap = native_swap;
+    session.off_latency = off_latency <= 16 ? off_latency : 0;
+}
 void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
 bool frame_generation_on() noexcept { return session.on.load(); }
 bool inputs_settled() noexcept {
@@ -805,6 +841,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         if (s.pending != none) finish_pending(s, false);
         if (!s.enabled.load()) {
             turn_off(s, token, Off::disabled);
+            frame_latency(s, true);
             // A long-term Off (guide 6.4): eOff, then slFreeResources once its
             // last On frames are surely done.
             if (!s.freed && ++s.disabled_presents >= free_after_presents) {
@@ -819,6 +856,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         }
         s.disabled_presents = 0;
         s.freed = false;
+        frame_latency(s, false);
         if (!s.armed.load()) return turn_off(s, token, Off::not_armed);
         if (!token) return turn_off(s, token, Off::no_token);
         const auto slot = s.ring.take(present_frame, static_cast<std::uint32_t>(*token));
@@ -986,6 +1024,9 @@ void write(std::ostream &o) {
     const auto &r = s.ring.counters();
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
       << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees << ",\"free_failed\":" << s.free_failed
+      << ",\"latency\":{\"off\":" << s.off_latency << ",\"found\":" << s.latency_found << ",\"seen\":" << s.latency_seen
+      << ",\"raised\":" << s.latency_raised << ",\"raises\":" << s.latency_raises << ",\"restores\":" << s.latency_restores
+      << ",\"failed\":" << s.latency_failed << '}'
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
       << ",\"mode\":{\"requested\":" << s.requested_mode.load() << ",\"target\":" << s.requested_target.load()

@@ -46,6 +46,13 @@ void arm(bool armed) noexcept;
 // (DLSS-G guide 6.4); On again: DLSS-G allocates them at its next On (one
 // short stutter).
 void enable(bool enabled) noexcept;
+// Worker, at arming (diagnostic, v0.27.2): the game's swap chain (the physical
+// chain Streamline made, maximum frame latency 1) and the maximum frame
+// latency it gets while the player has frame generation off (0: unchanged).
+// Streamline then presents on the game's thread, and with latency 1 the game's
+// waitable would hold each frame until the previous one is shown. Applied and
+// restored on the present thread; logged in write() ("latency").
+void latency_target(std::uintptr_t native_swap, unsigned off_latency) noexcept;
 bool frame_generation_on() noexcept;
 // Worker, live preset change: disarmed, Off at the last Present, and no
 // input slot holding a copy on a list not yet submitted or one the SDK may
