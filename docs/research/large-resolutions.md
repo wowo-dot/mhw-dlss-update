@@ -128,11 +128,39 @@ only 0.5 px at 1000 px. Measure before changing.
   (`gpu_memory_tests`).
 - **Full suite:** 673 tests pass.
 
-## In-game check (next)
+## In game (game-97, v0.24.0, 2026-10-13)
 
-1. **4K at every preset**, at 3840x2160 set in the game menu.
-2. **DSR 4x of the G9: 10240x2880.** It is over the old ceiling, and its
-   Quality preset hits the float boundary. The user sets DSR in the NVIDIA
-   Control Panel.
-3. **What to check:** the `video_memory` lines in `dlss_summary` and
-   `fg_status`, the render sizes, frame generation and fault 0.
+The user enabled DSR 2.25x and 4x (legacy, smoothness 0) in the NVIDIA app.
+Every launch ran Quality with frame generation 2x and Reflex Boost.
+
+| Launch | Window | Scene | Render | DLSS frames | FG tagged | Fault |
+|---|---|---|---|---|---|---|
+| 50480 | 3840x2160 windowed | full | 2560x1440 | 1,014 | 1,013 | 0 |
+| 64152 | 10240x2880 fullscreen | 5120x2880 (16:9) | 3408x1916 | 2,265 | 2,264 | 0 |
+| 34800 | 10240x2880 fullscreen | 5120x2880 (16:9) | 3408x1916 | 892 | 892 | 0 |
+| 46276 | 7680x2160 fullscreen | 3840x2160 (16:9) | 2560x1440 to DLAA and every preset | 6,219 | 6,215 | 0 |
+
+Every launch had zero exceptions, zero SDK errors and no HUD-less failures.
+
+- **The video memory budget** was 31,419 MB (RTX 5090).
+  - At 4K Quality, DLSS needed 383 MB by the estimate and its images measured
+    264 MB exactly. Frame generation needed 354 MB.
+  - At 10240x2880 the numbers were 680, 462 and 622 MB, with the game using
+    7.5 to 11 GB.
+- **Live presets at 7680x2160:** Quality to DLAA (3840x2160), then to Quality,
+  Balanced (2224x1251), Performance (1920x1080) and DLAA again. Each change
+  took 187-203 ms and passed the memory check before anything changed (DLAA
+  411 MB, measured 382). Frame generation came back every time.
+- **3408x1916 is the float boundary.** v0.23.10 would have refused DLSS at it.
+
+**Vanilla MHW breaks at 10240x2880.** The game restarted itself without
+Astera Loader after the resolution change. Its 5120x2880 scene lost its
+lighting in the lower part: dark and smeared, the HUD intact (the user's
+screenshot). With the mod at Quality the user saw it "flawless". The game
+then renders 3408x1916, smaller than 4K, and DLSS reconstructs the 5K scene.
+So the game's own limit depends on the size it renders itself. Hypothesis
+(not reversed): a fixed-size buffer in its lighting. DLAA at that size
+would render 5120x2880 natively and should show the vanilla breakage; not
+tested.
+
+v0.24.0 tagged.
