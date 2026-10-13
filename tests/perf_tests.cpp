@@ -11,7 +11,7 @@
 #include <sstream>
 #include <string>
 #include "../src/perf/hook_timing.hpp"
-#include "../src/perf/sharded_count.hpp"
+#include "../src/perf/in_flight.hpp"
 namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
 
 namespace {
@@ -251,10 +251,12 @@ void hook_timing_tests() {
           "6,400 calls over 64 frames: 100 a frame");
     ht::enabled.store(false);
 }
-// v0.23.8: the sharded in-flight count. Eight threads add and subtract
-// concurrently; it ends at zero, and a held count is seen until released.
-void sharded_count_tests() {
-    static mhw::perf::ShardedCount count;
+// v0.23.10: the in-flight count without locked instructions. Eight threads
+// add and subtract; a held count is seen from another thread; and the drain
+// contract under a race: after the flag is cleared and zero() observed, no
+// thread is still inside a section it entered on seeing the flag set.
+void in_flight_tests() {
+    static mhw::perf::InFlightCount count;
     check(count.zero() && count.load() == 0, "starts at zero");
     std::array<HANDLE, 8> threads{};
     for (auto& t : threads)
@@ -275,11 +277,47 @@ void sharded_count_tests() {
     check(seen_zero == 0, "another thread sees the held count");
     count.sub();
     check(count.zero(), "released");
+
+    struct Race {
+        mhw::perf::InFlightCount count;
+        std::atomic<bool> flag{true}, stop{};
+        std::atomic<unsigned> inside{}, violations{}, admitted{};
+    };
+    static Race race;
+    std::array<HANDLE, 8> workers{};
+    for (auto& w : workers)
+        w = CreateThread(nullptr, 0, [](void*) -> DWORD {
+            while (!race.stop.load()) {
+                race.count.add();
+                if (race.flag.load(std::memory_order_relaxed)) {
+                    race.inside.fetch_add(1);
+                    ++race.admitted;
+                    for (volatile unsigned k = 0; k < 20; ++k) {}
+                    race.inside.fetch_sub(1);
+                }
+                race.count.sub();
+            }
+            return 0;
+        }, nullptr, 0, nullptr);
+    for (unsigned round = 0; round < 200; ++round) {
+        race.flag.store(true);
+        Sleep(1);
+        race.flag.store(false);
+        const auto end = GetTickCount64() + 2000;
+        bool drained = race.count.zero();
+        while (!drained && GetTickCount64() < end) drained = race.count.idle();
+        if (!drained || race.inside.load() != 0) ++race.violations;
+    }
+    race.stop.store(true);
+    WaitForMultipleObjects(static_cast<DWORD>(workers.size()), workers.data(), TRUE, 60000);
+    for (auto h : workers) CloseHandle(h);
+    check(race.admitted.load() > 0, "the race admitted callbacks");
+    check(race.violations.load() == 0, "after the drain no admitted callback is still inside");
 }
 }  // namespace
 
 int main() {
-    sharded_count_tests();
+    in_flight_tests();
     hook_timing_tests();
     frame_stats_tests();
     region_tests();

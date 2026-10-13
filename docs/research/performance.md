@@ -392,3 +392,44 @@ WARP command lists, native and with the observer installed (MinHook):
   raster, predicate and the rest (PSO, heaps, ClearState, bundles).
 - It also counts the list-cache misses and the entries searched
   (`counters_per_frame`).
+
+## game-94 (v0.23.9): the observer's timing split
+
+Steady windows, per frame:
+
+| Calls | Count | Own ns a call | Forwarded ns a call |
+|---|---|---|---|
+| Root CBV/SRV/UAV | ~9,900 | ~120 | ~20 |
+| Descriptor tables | ~7,400 | ~90 | ~27 |
+| Raster (topology, viewports, scissors, buffers, targets) | ~3,300 | ~110 | ~54 |
+| ClearState, PSO, heaps, bundles | ~1,030 | ~78 | ~270 |
+| Root signatures | ~310 | ~155 | ~60 |
+| Root constants | 1-3 | ~150 | ~165 |
+
+- **The list cache:** about 63 table searches a frame, about 1,670 entries
+  compared. It is not the cause.
+- **The cost:** a flat 70-100 ns a call above the bench (about 21 ns), in
+  every call type. It lies in what every call shares: four locked
+  instructions (the in-flight add and subtract, and the entry lock's acquire
+  and release). In the bench's loop they are cheap. In game each waits for
+  the store buffer, which the driver has just filled recording the forwarded
+  call.
+
+## v0.23.10: no locked instructions on the observer's path
+
+- **`perf::InFlightCount`** replaces the sharded count.
+  - Each thread has a slot written with plain stores, with a compiler fence
+    before the admission flag is read.
+  - The drainer calls FlushProcessWriteBuffers once, after clearing the
+    flag, and then polls (the asymmetric Dekker pattern).
+  - `perf_tests` races eight threads against 200 drains. No admitted
+    callback is still inside after one.
+- **`perf::owner_lists`** (bit 1024, in `all_toggles`): the observer takes
+  no per-list lock.
+  - D3D12 lets one thread at a time record a list, and every reader of an
+    entry is a hook on that thread (checked: continuous_dlaa, the stream
+    route, DOF, silhouette, FG `closing`).
+  - Only `forget()` touches a released list's entry, under both locks.
+  - `fg_game.py` knows the bit (`LEAN_MASK` 1919).
+- **The bench:** 6.5-11 ns of overhead a call for 1-8 threads (21-29
+  before).

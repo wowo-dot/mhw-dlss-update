@@ -1,7 +1,7 @@
 #include "observer.hpp"
 #include "../perf/toggles.hpp"
 #include "../perf/hook_timing.hpp"
-#include "../perf/sharded_count.hpp"
+#include "../perf/in_flight.hpp"
 #include "../astera/astera_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
@@ -38,8 +38,8 @@ std::array<bool,max_hooks> created,enabled;
 std::atomic<bool> chain_live{};
 std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
 std::atomic<std::uint64_t> epoch{},forgotten{};
-// Callbacks in flight, one shard per thread (perf/sharded_count.hpp).
-perf::ShardedCount pending;
+// Callbacks in flight, without a locked instruction a call (perf/in_flight.hpp).
+perf::InFlightCount pending;
 std::atomic<unsigned> fault{};
 std::atomic<bool> accepting{};
 bool installed{},drained{};
@@ -74,17 +74,24 @@ Entry *find(ID3D12GraphicsCommandList *p) noexcept {
 // process-wide lock is taken first, as before. Both paths always take the
 // entry lock, so they exclude each other while the switch changes. Order:
 // process-wide, then entry; never the reverse.
+// With perf::owner_lists (and list_locks) no lock is taken: D3D12 lets one
+// thread at a time record a command list, the entry is written and read only
+// by hooks on that thread, and the game's own synchronization orders a list's
+// move to another thread. Only a released list's entry is touched elsewhere
+// (forget(), under both locks). game-94: the two locked instructions of the
+// entry lock were a large part of about 100 ns a call.
 class Locked {
 public:
-    explicit Locked(ID3D12GraphicsCommandList *list) noexcept:global_(!perf::on(perf::list_locks)){
+    explicit Locked(ID3D12GraphicsCommandList *list) noexcept:global_(!perf::on(perf::list_locks)),
+        owner_(!global_&&perf::on(perf::owner_lists)){
         if(global_)AcquireSRWLockExclusive(&mutex);
-        if((entry_=find(list))!=nullptr)AcquireSRWLockExclusive(&entry_->lock);
+        if((entry_=find(list))!=nullptr&&!owner_)AcquireSRWLockExclusive(&entry_->lock);
     }
-    ~Locked(){if(entry_)ReleaseSRWLockExclusive(&entry_->lock);if(global_)ReleaseSRWLockExclusive(&mutex);}
+    ~Locked(){if(entry_&&!owner_)ReleaseSRWLockExclusive(&entry_->lock);if(global_)ReleaseSRWLockExclusive(&mutex);}
     Locked(const Locked &)=delete;Locked &operator=(const Locked &)=delete;
     Entry *get() const noexcept {return entry_;}
 private:
-    bool global_;Entry *entry_{};
+    bool global_,owner_;Entry *entry_{};
 };
 bool copy(const void *source,void *dest,std::size_t bytes) noexcept {
     if(!source&&bytes)return false;

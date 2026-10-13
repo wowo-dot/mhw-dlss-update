@@ -30,7 +30,7 @@
 #include "../projection_binding/memory.hpp"
 #include "../bridge_probe/readable_region.hpp"
 #include "../perf/hook_timing.hpp"
-#include "../perf/sharded_count.hpp"
+#include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -78,10 +78,10 @@ constexpr unsigned hook_count=11;
 constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
 unsigned render_width(){return runtime.width;}unsigned render_height(){return runtime.height;}
 #endif
-// pending: callbacks in flight, one shard per thread (perf/sharded_count.hpp;
-// the indexed-draw hook alone runs about 2,600 times a frame on several
-// recording threads).
-std::atomic<bool> accepting{};perf::ShardedCount pending;std::atomic<unsigned> fault{};
+// pending: callbacks in flight, without a locked instruction a call
+// (perf/in_flight.hpp; the indexed-draw hook alone runs about 2,600 times a
+// frame on several recording threads). Drain checks use zero().
+std::atomic<bool> accepting{};perf::InFlightCount pending;std::atomic<unsigned> fault{};
 std::atomic<std::uint64_t> frames{},skips{},jitter_count{},restorations{},reset_count{},depth_count{};
 std::atomic<unsigned> last_skip{};
 SRWLOCK mutex=SRWLOCK_INIT;
@@ -1002,9 +1002,11 @@ template<class F> bool wait_for(F &&done,std::uint64_t ms){
 // Observes `count` at zero once within `ms`. Every hook counts itself before
 // it reads `accepting`, so after a stop one zero proves that no callback that
 // could still have seen the runtime accepting is running.
-bool observed_zero(const perf::ShardedCount &count,std::uint64_t ms){
+bool observed_zero(const perf::InFlightCount &count,std::uint64_t ms){
+    // One flush (zero()), then polling the slots.
+    if(count.zero())return true;
     const auto end=GetTickCount64()+ms;
-    while(!count.zero()){if(GetTickCount64()>=end)return false;SwitchToThread();}
+    while(!count.idle()){if(GetTickCount64()>=end)return false;SwitchToThread();}
     return true;
 }
 bool observed_zero(const std::atomic<unsigned> &count,std::uint64_t ms){
@@ -1289,8 +1291,8 @@ bool healthy() noexcept {return fault.load()==0&&obs::healthy()&&activation::hea
     ;}
 void finish() noexcept {
     stop();const auto deadline=GetTickCount64()+2000;
-    while((pending.load()||projection_busy.test()||!activation::drained())&&GetTickCount64()<deadline)Sleep(1);
-    if(pending.load()||projection_busy.test()||!activation::drained()){fail(24);return;}
+    while((!pending.zero()||projection_busy.test()||!activation::drained())&&GetTickCount64()<deadline)Sleep(1);
+    if(!pending.zero()||projection_busy.test()||!activation::drained()){fail(24);return;}
     #ifdef MHW_CONTINUOUS_SCALED
     // Restore native sizing while the render-thread callback is still installed.
     if(!render_resolution::finish()){fail(44);return;}
@@ -1323,7 +1325,7 @@ void finish() noexcept {
     // A forwarded callback may have entered before the patch was removed.
     // Keep the observer and all trampolines available until it returns.
     const auto return_deadline=GetTickCount64()+2000;
-    const auto callbacks_busy=[](){return pending.load()||projection_busy.test()||!activation::drained()
+    const auto callbacks_busy=[](){return !pending.zero()||projection_busy.test()||!activation::drained()
 #ifdef MHW_CONTINUOUS_SCALED
         ||!sr::callbacks_idle()
 #endif
@@ -1338,7 +1340,7 @@ void finish() noexcept {
 void save_rejected_shader(const std::filesystem::path &path) noexcept {
     try {
         Lock lock;
-        if(!shader_rejection.present||!shader_rejection.bytes||accepting.load()||pending.load()||
+        if(!shader_rejection.present||!shader_rejection.bytes||accepting.load()||!pending.zero()||
            !activation::drained())return;
         const HANDLE file=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
         if(file==INVALID_HANDLE_VALUE)return;
@@ -1350,7 +1352,7 @@ void save_rejected_shader(const std::filesystem::path &path) noexcept {
 }
 bool quiescent() noexcept {
     Lock lock;
-    if(accepting.load()||pending.load()||projection_busy.test()||!activation::drained()||
+    if(accepting.load()||!pending.zero()||projection_busy.test()||!activation::drained()||
        !obs::settled()||!obs::hooks_disabled()||lease.list||
        (fence&&(fence->GetCompletedValue()==UINT64_MAX||fence->GetCompletedValue()<signal_value)))return false;
     for(bool e:enabled)if(e)return false;
