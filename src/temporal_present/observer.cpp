@@ -1,6 +1,7 @@
 #include "observer.hpp"
 #include "../perf/toggles.hpp"
 #include "../perf/hook_timing.hpp"
+#include "../perf/sharded_count.hpp"
 #include "../astera/astera_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
@@ -37,7 +38,9 @@ std::array<bool,max_hooks> created,enabled;
 std::atomic<bool> chain_live{};
 std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
 std::atomic<std::uint64_t> epoch{},forgotten{};
-std::atomic<unsigned> pending{},fault{};
+// Callbacks in flight, one shard per thread (perf/sharded_count.hpp).
+perf::ShardedCount pending;
+std::atomic<unsigned> fault{};
 std::atomic<bool> accepting{};
 bool installed{},drained{};
 ViewportListener viewport_listener{};
@@ -47,8 +50,8 @@ struct Lock {Lock(){AcquireSRWLockExclusive(&mutex);}~Lock(){ReleaseSRWLockExclu
 void fail(unsigned f) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,f);accepting.store(false,std::memory_order_release);}
 bool enter() noexcept {
     if(!accepting.load(std::memory_order_acquire))return false;
-    pending.fetch_add(1,std::memory_order_acq_rel);
-    if(!accepting.load(std::memory_order_acquire)){pending.fetch_sub(1,std::memory_order_release);return false;}
+    pending.add();
+    if(!accepting.load(std::memory_order_acquire)){pending.sub();return false;}
     return true;
 }
 // A recording thread uses one list for many calls. A cached lookup holds while
@@ -136,7 +139,7 @@ void after(unsigned which,ID3D12GraphicsCommandList *list,bool admitted,bool ret
         if(!returned||which==0)output_observations[static_cast<std::size_t>(entry-entries.data())]={};
 #endif
     }}
-    pending.fetch_sub(1,std::memory_order_release);
+    pending.sub();
 }
 template<unsigned I>void WINAPI pointer_call(ID3D12GraphicsCommandList *list,void *value){
     auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
@@ -350,7 +353,7 @@ bool predicate_current(ID3D12GraphicsCommandList *list,Predicate &state) noexcep
 }
 bool hooks_disabled() noexcept {Lock lock;for(const auto v:enabled)if(v)return false;return true;}
 void stop() noexcept {accepting.store(false,std::memory_order_release);}
-bool settled() noexcept {return pending.load(std::memory_order_acquire)==0;}
+bool settled() noexcept {return pending.zero();}
 bool healthy() noexcept {return fault.load(std::memory_order_acquire)==0;}
 bool finish() noexcept {
     if(!installed)return true;

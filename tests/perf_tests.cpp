@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include "../src/perf/hook_timing.hpp"
+#include "../src/perf/sharded_count.hpp"
 namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
 
 namespace {
@@ -250,9 +251,35 @@ void hook_timing_tests() {
           "6,400 calls over 64 frames: 100 a frame");
     ht::enabled.store(false);
 }
+// v0.23.8: the sharded in-flight count. Eight threads add and subtract
+// concurrently; it ends at zero, and a held count is seen until released.
+void sharded_count_tests() {
+    static mhw::perf::ShardedCount count;
+    check(count.zero() && count.load() == 0, "starts at zero");
+    std::array<HANDLE, 8> threads{};
+    for (auto& t : threads)
+        t = CreateThread(nullptr, 0, [](void*) -> DWORD {
+            for (unsigned i = 0; i < 100000; ++i) { count.add(); count.sub(); }
+            return 0;
+        }, nullptr, 0, nullptr);
+    WaitForMultipleObjects(static_cast<DWORD>(threads.size()), threads.data(), TRUE, 60000);
+    for (auto h : threads) CloseHandle(h);
+    check(count.zero() && count.load() == 0, "balanced adds and subtracts end at zero");
+    count.add();
+    check(!count.zero() && count.load() == 1, "a held count is seen");
+    HANDLE other = CreateThread(nullptr, 0, [](void*) -> DWORD { return count.zero() ? 1U : 0U; }, nullptr, 0, nullptr);
+    WaitForSingleObject(other, 10000);
+    DWORD seen_zero{};
+    GetExitCodeThread(other, &seen_zero);
+    CloseHandle(other);
+    check(seen_zero == 0, "another thread sees the held count");
+    count.sub();
+    check(count.zero(), "released");
+}
 }  // namespace
 
 int main() {
+    sharded_count_tests();
     hook_timing_tests();
     frame_stats_tests();
     region_tests();

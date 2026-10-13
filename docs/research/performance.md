@@ -310,3 +310,46 @@ forwarded native call) and the forwarded call itself.
 - **Output:** a `hook_timing` event every 20 s, with estimated calls per
   frame and own and forwarded microseconds per frame
   (`perf/hook_timing.hpp`).
+
+## Session 20261013-perf7 (v0.23.7, game-92): hook timing
+
+`perf_ab` and `hook_timing` on (Quality, FG off, Boost). Steady 20 s windows,
+per frame (time summed over all threads):
+
+| Hook | Calls | Own time | Forwarded (native) |
+|---|---|---|---|
+| **Binding observer** | **~22,000** | **~4.4 ms** (~200 ns a call) | ~1.05 ms (~48 ns a call) |
+| Indexed draw | ~2,600 | ~0.2 ms | ~0.14 ms |
+| Reset/Close | ~32 | 0.04-0.32 ms (more while DLSS runs) | ~0.15 ms |
+| Dispatch (DLSS recording when running) | ~70 | 0.06-0.26 ms | - |
+| Barrier | ~150-190 | ~0.1 ms | ~0.23 ms |
+| Draw | ~140 | 0.01-0.05 ms | ~0.04 ms |
+| Execute | ~8 | ~0.01 ms | ~0.18 ms |
+
+The observer's own time is four times the D3D12 calls it wraps. Spread over
+the recording threads, it is how 0.27 ms reaches the critical path.
+
+**Its per-call costs:**
+1. Two atomic adds on one process-wide `pending` counter, from every
+   recording thread.
+2. Large clears in `Bindings`, which mirrors two root signatures of 64
+   arguments, each with 64 constants (about 36 KB):
+   - `root()` assigned `{}` to the 18 KB side on every signature change;
+   - `descriptor()` cleared a 280-byte argument on every call;
+   - `reset()` assigned `{}` to all 36 KB;
+   - a heap change cleared every table argument.
+
+## v0.23.8: a lean observer
+
+- **`perf::ShardedCount`:** an in-flight count with one cache-line shard per
+  thread. It keeps the drain contract: observing every shard at zero once
+  after clearing the flag. The observer's and continuous_dlaa's `pending`
+  use it.
+- **`Bindings`:**
+  - `RootBindings::set` marks the set arguments, and a signature change, a
+    Reset or a heap change clears only those;
+  - `descriptor()` no longer clears the constants (`mask` says which are
+    valid);
+  - equality compares kind, address, mask and the masked constants.
+- **Tests:** sparse clears and `set` (`temporal_present_bindings_tests`); the
+  sharded count under eight threads (`perf_tests`).

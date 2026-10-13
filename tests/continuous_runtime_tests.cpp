@@ -91,7 +91,7 @@ void queue_fixture(){
             std::ostringstream status;cd::write(status);check(cd::recording_pins.live()==1&&cd::recording_pins.released()==0,"fault freezes retirement even after Reset and fence");
             check(SUCCEEDED(list->Close()),"fault fixture close");return;}
     }
-    check(cd::healthy()&&cd::list_count==2&&cd::pending==0,"bounded registry after 1000 submissions");
+    check(cd::healthy()&&cd::list_count==2&&cd::pending.zero(),"bounded registry after 1000 submissions");
     ComPtr<ID3D12InfoQueue> messages;check(SUCCEEDED(device.As(&messages)),"validation messages");
     for(UINT64 i=0;i<messages->GetNumStoredMessagesAllowedByRetrievalFilter();++i){SIZE_T size{};messages->GetMessage(i,nullptr,&size);std::vector<std::byte> bytes(size);auto *m=reinterpret_cast<D3D12_MESSAGE *>(bytes.data());messages->GetMessage(i,m,&size);check(m->Severity>D3D12_MESSAGE_SEVERITY_WARNING,"clean queue validation");}
     std::cout<<"Continuous submission fixture passed: 1000 generations, two queues, bounded registry\n";
@@ -206,7 +206,7 @@ void forwarded_request_fixture(){
     }else if(mode=="forwarded-exception")forwarded_exception_call(&f);
     else cd::native(1,&f);
     cd::publishing=0;
-    check(cd::pending==0&&!cd::native_forwarding&&!cd::forwarded_telemetry.pending,"native return/SEH tracking drained");
+    check(cd::pending.zero()&&!cd::native_forwarding&&!cd::forwarded_telemetry.pending,"native return/SEH tracking drained");
     const bool untracked=mode=="forwarded-changed-before"||mode=="forwarded-ambiguous"||mode=="forwarded-unmatched";
     const bool failed=mode=="forwarded-exception"||mode=="forwarded-changed-after"||mode=="forwarded-stale-token";
     auto &m=cd::forwarded_telemetry;

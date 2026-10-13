@@ -3,13 +3,17 @@
 #include <stdexcept>
 
 namespace mhw::temporal_present {
+// As `*this = {}` with the generation and pipeline, without writing the
+// 36 KB of argument storage (only the arguments that are set are cleared).
 void Bindings::reset(std::uint64_t next, std::uintptr_t initial) noexcept {
-    *this = {}; known = next != 0; generation = next; pipeline = initial;
+    known = next != 0; valid = true; generation = next; pipeline = initial;
+    heaps = {}; heap_count = 0;
+    compute.clear(); graphics.clear();
 }
 void Bindings::root(bool g, std::uintptr_t signature) noexcept {
     if (!known) { valid = false; return; }
     auto &r = g ? graphics : compute;
-    if (r.signature != signature) { r = {}; r.signature = signature; }
+    if (r.signature != signature) r.clear(signature);
 }
 void Bindings::descriptor_heaps(std::span<const std::uintptr_t> values) noexcept {
     if (!known || values.size() > heaps.size()) { valid = false; return; }
@@ -23,7 +27,10 @@ void Bindings::descriptor_heaps(std::span<const std::uintptr_t> values) noexcept
     if (!changed) for (unsigned i=0; i<heap_count; ++i)
         if (heaps[i] != next[0] && (values.size() != 2 || heaps[i] != next[1])) changed = true;
     if (changed) for (auto *r : {&compute, &graphics})
-        for (auto &a : r->arguments) if (a.kind == ArgumentKind::table) a = {};
+        for (auto m = r->set; m; m &= m - 1) {
+            const auto i = static_cast<unsigned>(std::countr_zero(m));
+            if (r->arguments[i].kind == ArgumentKind::table) { r->arguments[i].clear(); r->set &= ~(std::uint64_t(1) << i); }
+        }
     heaps = next; heap_count = static_cast<unsigned>(values.size());
 }
 void Bindings::descriptor(bool g, unsigned index, ArgumentKind kind, std::uint64_t address) noexcept {
@@ -31,15 +38,16 @@ void Bindings::descriptor(bool g, unsigned index, ArgumentKind kind, std::uint64
     if (!known || !r.signature || index >= r.arguments.size() ||
         (kind != ArgumentKind::table && kind != ArgumentKind::cbv && kind != ArgumentKind::srv && kind != ArgumentKind::uav) ||
         (kind == ArgumentKind::table && (!heap_count || !address))) { valid = false; return; }
-    auto &a = r.arguments[index]; a = {}; a.kind = kind; a.address = address;
+    auto &a = r.arguments[index]; a.kind = kind; a.address = address; a.mask = 0;
+    r.set |= std::uint64_t(1) << index;
 }
 void Bindings::constants(bool g, unsigned index, unsigned offset, std::span<const std::uint32_t> values) noexcept {
     auto &r = g ? graphics : compute;
     if (!known || !r.signature || index >= r.arguments.size() || offset > 64 || values.size() > 64-offset) { valid = false; return; }
     if (values.empty()) return;
     auto &a = r.arguments[index];
-    if (a.kind != ArgumentKind::constants) a = {};
-    a.kind = ArgumentKind::constants;
+    if (a.kind != ArgumentKind::constants) { a.kind = ArgumentKind::constants; a.address = 0; a.mask = 0; }
+    r.set |= std::uint64_t(1) << index;
     for (unsigned i=0; i<values.size(); ++i) { a.values[offset+i] = values[i]; a.mask |= std::uint64_t(1) << (offset+i); }
 }
 bool Bindings::ready() const noexcept { return known && valid && generation && pipeline && compute.signature; }

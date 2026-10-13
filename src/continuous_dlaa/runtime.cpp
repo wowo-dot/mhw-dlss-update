@@ -30,6 +30,7 @@
 #include "../projection_binding/memory.hpp"
 #include "../bridge_probe/readable_region.hpp"
 #include "../perf/hook_timing.hpp"
+#include "../perf/sharded_count.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -77,12 +78,15 @@ constexpr unsigned hook_count=11;
 constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
 unsigned render_width(){return runtime.width;}unsigned render_height(){return runtime.height;}
 #endif
-std::atomic<bool> accepting{};std::atomic<unsigned> pending{},fault{};
+// pending: callbacks in flight, one shard per thread (perf/sharded_count.hpp;
+// the indexed-draw hook alone runs about 2,600 times a frame on several
+// recording threads).
+std::atomic<bool> accepting{};perf::ShardedCount pending;std::atomic<unsigned> fault{};
 std::atomic<std::uint64_t> frames{},skips{},jitter_count{},restorations{},reset_count{},depth_count{};
 std::atomic<unsigned> last_skip{};
 SRWLOCK mutex=SRWLOCK_INIT;
 struct Lock {Lock(){AcquireSRWLockExclusive(&mutex);}~Lock(){ReleaseSRWLockExclusive(&mutex);}};
-struct Guard {Guard(){pending.fetch_add(1);}~Guard(){pending.fetch_sub(1);}};
+struct Guard {Guard(){pending.add();}~Guard(){pending.sub();}};
 void fail(unsigned n) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,n);accepting.store(false);}
 bool read(void *,std::uintptr_t p,std::span<std::byte> out){return pb::copy_memory(p,out.data(),static_cast<unsigned>(out.size()));}
 const tb::Reader reader{nullptr,read};
@@ -977,7 +981,7 @@ void native_seh(unsigned kind,NativeFrame *f){
     }
 }
 }
-void native(unsigned kind,NativeFrame *f){pending.fetch_add(1);__try{native_seh(kind,f);}__finally{pending.fetch_sub(1);}}
+void native(unsigned kind,NativeFrame *f){pending.add();__try{native_seh(kind,f);}__finally{pending.sub();}}
 namespace {
 // A pending live preset request: the mode's value, or -1.
 std::atomic<int> mode_request{-1};
@@ -998,6 +1002,11 @@ template<class F> bool wait_for(F &&done,std::uint64_t ms){
 // Observes `count` at zero once within `ms`. Every hook counts itself before
 // it reads `accepting`, so after a stop one zero proves that no callback that
 // could still have seen the runtime accepting is running.
+bool observed_zero(const perf::ShardedCount &count,std::uint64_t ms){
+    const auto end=GetTickCount64()+ms;
+    while(!count.zero()){if(GetTickCount64()>=end)return false;SwitchToThread();}
+    return true;
+}
 bool observed_zero(const std::atomic<unsigned> &count,std::uint64_t ms){
     const auto end=GetTickCount64()+ms;
     while(count.load()){if(GetTickCount64()>=end)return false;SwitchToThread();}
