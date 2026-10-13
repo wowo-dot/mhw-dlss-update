@@ -168,12 +168,14 @@ bool discover_dependencies(Plan &p){
      vs=="730b7d23bcdca40477ed973c29c8fff8de7ab7244b05d142d5f9458fbfec5fdd")r.dependency=3;
   else if(const auto *f=screen_filter(std::span(r.shaders[1].bytes).first(r.shaders[1].size),std::span(r.shaders[0].bytes).first(r.shaders[0].size))){
    r.dependency=4;r.screen=f;}
-  // The pre-motion draw must be an approved screen filter. Nonzero-source
-  // descriptors (chain links) are admitted only through a qualified color
-  // consumer/producer: a generic overlay cannot silently stand in for one.
-  // An approved screen filter elsewhere must be such a link.
+  // The pre-motion draw must be an approved screen filter, or (v0.24.5) the
+  // composition of the depth of field whose six passes it closes. Nonzero-
+  // source descriptors (chain links) are admitted only through a qualified
+  // color consumer/producer: a generic overlay cannot silently stand in for
+  // one. An approved screen filter elsewhere must be such a link.
   const bool pre=4+i==p.pre_stage;
-  if((pre&&r.dependency!=4)||(r.dependency_source&&r.dependency!=3&&r.dependency!=4)){
+  const bool pre_dof=pre&&r.dependency==3&&r.dependency_source&&p.dof&&p.dof->key==p.keys[4+i];
+  if((pre&&r.dependency!=4&&!pre_dof)||(r.dependency_source&&r.dependency!=3&&r.dependency!=4)){
    unknown_shader=ps;unknown_key=p.keys[4+i];++unknown_count;return false;}
   if(r.dependency==4&&!pre&&!r.dependency_source)return false;
   if(!r.dependency)continue;
@@ -195,6 +197,9 @@ bool discover_dependencies(Plan &p){
   if(r.dependency==3&&(!r.dependency_source||b.textures[2].object!=r.dependency_source))return false;
   const auto role=[&](unsigned j){return r.dependency==1?0U:r.dependency==3?(j==2?0U:j+4):j+1;};
   for(unsigned j=0;j<r.read_count;++j)if(!add_dependency_resource(p,b.textures[j],role(j),r.reads[j]))return false;
+  // Before motion, the depth of field's scene is the TAA copy (resource 1)
+  // that DLSS fills at full size, as for a pre-motion screen filter.
+  if(4+i==p.pre_stage&&(r.dependency!=3||r.reads[2]!=1))return false;
   }
   dependency_rejection=4;std::uintptr_t view{},backend{},actual{};
   if(!field(r.packet_bindings[0],0,view)||!field(view,0x60,backend)||!field(backend,0x18,actual))return false;

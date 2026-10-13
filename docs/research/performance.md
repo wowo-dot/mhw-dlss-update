@@ -591,10 +591,28 @@ field on.
   16-core CPU that work overlaps, so fewer cores remain untested.
 - **The plan build's lock time** is the next candidate if a CPU with fewer
   cores shows it.
-- **Open, separate:** in the first ~35 s after arming (title screen and menus,
-  with the game's depth of field on from launch), 1,482 frames had plan
-  rejection 17: the overlay command gate, with middle-chain filters at orders
-  16 and 1024 (vtable RVA 0x3536c98). Those frames fell back cleanly, and two
-  single frames later had a radial blur (order 4100) and a 26005 filter.
-  Perf11 enabled depth of field only after the title screen and had none.
-  Check in the long session.
+- **Title screen with depth of field on (fixed in v0.24.5):** in the first
+  ~35 s after arming, 1,482 frames had plan rejection 17 at the overlay
+  command gate, branch 7 (an unsupported opcode, the dispatch), key
+  0x78000010.
+  - **The chain:** uToneMapFilter (order 0), the game's TAA (2),
+    **uNewDOFFilter (16)**, the motion filter (100), uGodRaysFilter (1024,
+    vtable 0x3536c98), then the endpoint.
+  - **Cause:** in the hub and at the title the game puts its depth of field
+    *between TAA and the motion filter*. The route took any filter there as a
+    pre-motion screen filter, the depth-colour slot: one draw, no dispatches.
+    In the field the depth of field comes after the motion filter (a
+    middle-chain link), where its six compute passes are handled.
+  - **Also in game-103:** the HDR test had depth of field on and fell back on
+    2,202 and 2,457 frames this way.
+  - **v0.24.5:** the pre-motion slot also takes the depth of field.
+    - Six dispatches are read as in the chain (`dof_read`); then the
+      composition draw, kind 3 (`9f04832c…`), whose scene (t2) source is the
+      TAA output.
+    - Dependency discovery allows kind 3 there only when it closes that
+      sequence, and requires its scene read to be the TAA copy (resource 1)
+      that DLSS fills at full size.
+    - Qualification and recording are the existing six-pass path
+      (`dof_qualify`, `dof_native_record.inl`).
+    - The two single frames with a radial blur (order 4100) and a 26005
+      filter remain to look at.

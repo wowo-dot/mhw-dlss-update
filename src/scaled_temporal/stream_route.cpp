@@ -785,10 +785,24 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
    if(pre_filters&&c.key==pre_key){
     if(!field(c.packet,0,raw)){plan_rejection=10;return false;}
     if((raw&31)==11)continue;  // state-list packets remain native
+    // v0.24.5: the game's depth of field (uNewDOFFilter) sits here, between
+    // TAA and the motion filter, in the hub and at the title (order 16; after
+    // the motion filter in the field). Its six compute passes precede the
+    // composition draw, as in the chain (dof_native_sequence.hpp), and read
+    // the TAA output: DLSS's full-size result.
+    if((raw&31)==6){
+     if(p.pre_stage!=UINT_MAX||(p.dof&&(p.dof->key!=c.key||p.dof->count==6)))
+      return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
+     if(!p.dof){p.dof=std::make_shared<DofNativeSequence>();p.dof->key=c.key;}
+     auto &dispatch=p.dof->passes[p.dof->count];dispatch.packet=c.packet;dispatch.index=base+j;
+     if(!dof_read(dispatch))return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
+     ++p.dof->count;continue;
+    }
     if((raw&31)!=0||p.pre_stage!=UINT_MAX)return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
     if(p.overlay_count==8)return overlay_failure(OutputCommands::draw_capacity,c.key,c.packet,base+j,raw,true);
     const auto stage=4+p.overlay_count++;p.keys[stage]=c.key;p.draws[stage].output=pre_output;
-    p.draws[stage].dependency_source=0;p.draws[stage].draw.packet=c.packet;p.pre_stage=stage;continue;
+    // A depth-of-field composition reads the TAA output as its scene (t2).
+    p.draws[stage].dependency_source=p.dof&&p.dof->key==c.key?pre_in:0;p.draws[stage].draw.packet=c.packet;p.pre_stage=stage;continue;
    }
    if(!overlay&&c.key!=0x78000002&&c.key!=0x78000064&&c.key!=0x7ffffff1&&c.key!=0x80000000&&c.key!=0x78004e20)continue;
    if(!field(c.packet,0,raw)){if(overlay){observation.command_gate={OutputCommands::packet_read,c.key,c.packet,base+j,0,0,overlay->seen,p.overlay_count};}plan_rejection=10;return /* rejected */ false;}
