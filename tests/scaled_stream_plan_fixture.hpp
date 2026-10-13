@@ -104,6 +104,40 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   std::ostringstream first,second;route::write_summary(first);route::census_write(second);
   require(first.str().find("\"post_census\":{\"captured\":2,\"samples\":[{")!=std::string::npos&&first.str().find("\"packets\":[[2013265922,13,0,0,64,32,")!=std::string::npos&&second.str()=="{\"captured\":2,\"samples\":[]}","census written once, in the route summary");
   std::cout<<"PASS post census: descriptors, copy, draws and targets of the native queue, written once\n";}
+ // full_post (v0.25.0): the final quad becomes the DLAA copy and arms the
+ // frame; the post scheduler then switches to the full rectangle after TAA and
+ // restores the render rectangle at its exit. The game's setViewport and copy
+ // helper are stand-ins here.
+ {struct Call {std::uintptr_t context{},destination{},source{};std::array<unsigned,4> rect{};};
+  static std::vector<Call> copies;static std::vector<std::array<int,4>> viewports;copies.clear();viewports.clear();
+  route::full_copy=[](std::uintptr_t c,std::uintptr_t d,int,const unsigned *xy,std::uintptr_t s_,int,const unsigned *r,const unsigned *o){
+   require(!xy[0]&&!xy[1]&&!o,"DLAA copy origin");copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]}});};
+  route::full_viewport=[](std::uintptr_t c,const int *r){viewports.push_back({r[0],r[1],r[2],r[3]});std::memcpy(reinterpret_cast<void *>(c+0x5c),r,16);};
+  mhw::scaled_temporal::full_post_enabled.store(true);
+  const auto armed_frame=s.frame+1;put(renderer+0x1f210,armed_frame);
+  const auto slot=route::final_before(frame);require(slot==armed_frame%32,"full_post final quad entry");
+  std::uintptr_t source_object{};require(route::field(context,0x718,source_object),"final tBaseMap");
+  require(route::full_final(frame,slot)&&copies.size()==1&&copies[0].context==context&&copies[0].destination==owners[4]&&
+          copies[0].source==source_object&&copies[0].rect==std::array<unsigned,4>{0,0,128,64}&&route::full_frame.load()==armed_frame,"final quad becomes the DLAA copy");
+  route::final_after(slot,true);require(!route::final_quads[slot].entered&&!route::final_quads[slot].valid,"DLAA copy left to the identity plan");
+  const std::array<int,4> render_rect{0,0,64,32},full_rect{0,0,128,64};
+  put(context+0x5c,render_rect);
+  route::full_post_enter(context);route::full_post_taa(context);
+  std::array<int,4> now{};require(route::field(context,0x5c,now)&&now==full_rect&&viewports.size()==1,"full rectangle after TAA");
+  route::full_post_taa(context);require(viewports.size()==1,"one switch per frame");
+  route::full_post_exit(context);require(route::field(context,0x5c,now)&&now==render_rect&&viewports.size()==2,"render rectangle restored at the exit");
+  route::full_post_enter(context);route::full_post_taa(context);require(viewports.size()==2,"disarmed after the exit");
+  // A rectangle other than the render one at the scheduler's entry, or a
+  // stale frame, leaves the chain native.
+  put(context+0x5c,full_rect);const auto again=route::final_before(frame);
+  require(route::full_final(frame,again)&&copies.size()==2,"re-armed");route::final_after(again,true);
+  const auto mismatches=route::full_counts.rect_mismatch.load();
+  route::full_post_enter(context);route::full_post_taa(context);
+  require(viewports.size()==2&&route::full_counts.rect_mismatch.load()==mismatches+1,"rectangle mismatch refused");
+  route::full_post_exit(context);
+  put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});
+  mhw::scaled_temporal::full_post_enabled.store(false);route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;
+  std::cout<<"PASS full_post: final quad to the DLAA copy, full rectangle after TAA, restored at the exit, refusals\n";}
  check_queue_completion(s,filters,motion,4);
  if(!dependency_dir.empty()){
  #include "scaled_dependency_plan_fixture.inl"

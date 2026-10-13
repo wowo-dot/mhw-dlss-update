@@ -20,6 +20,7 @@
 #include "silhouette_shader.hpp"
 #include "silhouette_draw.hpp"
 #include "watch_filter.hpp"
+#include "full_post.hpp"
 #ifdef MHW_FG_SCENE_PROBE
 #include "../frame_generation/scene_trace.hpp"
 #endif
@@ -44,6 +45,9 @@ extern "C" void scaled_draw_execution_entry();
 extern "C" void scaled_stream_final_entry();
 extern "C" void scaled_copy_execution_entry();
 extern "C" void scaled_indexed_execution_entry();
+extern "C" void scaled_full_key_entry();
+extern "C" void scaled_full_tone_map_entry();
+extern "C" void scaled_full_project_entry();
 extern "C" void mhw_binding_forward(void *,mhw::projection_binding::Frame *);
 namespace mhw::scaled_temporal::stream_route {
 namespace {
@@ -242,6 +246,7 @@ void watch(unsigned slot,const Plan &p) noexcept {
 struct FinalQuad {
  tb::Snapshot stamp;tb::Owner source,destination;std::uintptr_t attachment{},packet{},queue{};
  unsigned before{},after{},base_id{};bool entered{},valid{};
+ bool full_post{};  // replaced by the DLAA copy (full_post.inl)
 };
 std::array<FinalQuad,32> final_quads;
 std::array<Pipeline,4> pipelines;
@@ -269,7 +274,8 @@ std::uint64_t overlay_extended_draws{};std::array<unsigned,6> overlay_extended_l
 prepared_queue::Recorder prepared_queues;
 struct Active {unsigned slot{};ID3D12GraphicsCommandList *list{};std::uint64_t generation{};std::uintptr_t recording{};
  bool resolved{},copied{};unsigned draws{};std::array<bool,9> known{};std::array<unsigned,9> states{};} active;
-std::array<std::uintptr_t,6> targets{};std::array<void *,6> originals{};std::array<bool,6> enabled{};
+// 6-8: full_post (key setter, tone map callback, projection helper), only when on.
+std::array<std::uintptr_t,9> targets{};std::array<void *,9> originals{};std::array<bool,9> enabled{};
 // AL: hook 2 (CopyTextureRegion) is an AL chain, live while the runtime
 // has the stream hooks applied (chains_live), otherwise continuing straight on.
 constexpr unsigned api_hook=2;
@@ -523,6 +529,7 @@ unsigned final_before(const pb::Frame &f){
 }
 void final_after(unsigned slot,bool returned){
  if(slot==UINT_MAX)return;Lock lock;auto &q=final_quads[slot];
+ if(q.full_post){q.entered=q.valid=q.full_post=false;return;}  // the DLAA copy: planned as at DLAA
  std::uintptr_t source{},queue{},packet{};unsigned key{},opcode{};
  q.valid=returned&&q.entered&&same_stamp(q.stamp)&&field(q.stamp.context,0x710+8*(q.base_id&0xfff),source)&&source==q.source.object&&
   field(q.stamp.context,0x2b80,q.after)&&q.after==q.before+1&&field(q.stamp.context,0x2b78,queue)&&queue==q.queue&&
@@ -530,6 +537,7 @@ void final_after(unsigned slot,bool returned){
  q.entered=false;q.packet=packet;q.valid=q.valid&&final_identity(q,q.stamp);
  if(q.valid)++final_captured;else ++final_rejected;
 }
+#include "full_post.inl"
 #include "haze_capture.inl"
 #include "haze_route.inl"
 bool pin(const tb::Owner &o,ComPtr<ID3D12Resource> &out){
@@ -692,7 +700,11 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   observation.command_gate={branch,key,packet,index,raw,raw_read,seen,p.overlay_count};
   plan_rejection=17;++overlay_rejected;return false;};
  plan_rejection=plan_detail=plan_qualification=0;plan_vertex_gate={};
- p.identity=render_w==width&&render_h==height;
+ // full_post: an armed frame ends with the DLAA copy and runs its post chain
+ // at the output size, so it is planned as at DLAA (the resolve stays scaled).
+ const bool full=full_frame.load()==p.stamp.frame;
+ p.identity=(render_w==width&&render_h==height)||full;
+ if(full&&!(render_w==width&&render_h==height))++full_counts.identity_plans;
  if(p.identity){const bool built_identity=build_identity_plan(p,observation);if(built_identity)++identity_plans;return built_identity;}
  const auto &s=p.stamp;std::uintptr_t filters{},motion_in{},motion_out{},grade{},grade_in{},grade_out{},final_dest{},attachment{},endpoint{};
  std::array<ColorLink,16> middle_links{};std::array<unsigned,8> middle_path{};unsigned middle_size{},middle_count{};
@@ -1131,6 +1143,9 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_L
 }
 }
 namespace ht=perf::hook_timing;
+void full_post_enter(std::uintptr_t context) noexcept {full_enter(context);}
+void full_post_taa(std::uintptr_t context) noexcept {full_taa(context);}
+void full_post_exit(std::uintptr_t context) noexcept {full_exit(context);}
 void post_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_post);++pending;const auto receipt=post_before(*f);bool returned=false;
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[0],f);ht::forward_end(timing);returned=true;}
  __finally{post_after(receipt,returned);--pending;ht::end(timing);}}
@@ -1155,7 +1170,7 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
 bool haze_before_safe(const pb::Frame &f) noexcept{try{return haze_before(f);}catch(...){Lock lock;haze_reject(11);return false;}}
 void haze_after_safe(bool entered,bool returned) noexcept{try{haze_after(entered,returned);}catch(...){Lock lock;haze_reject(11);}}
 void final_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_final);++pending;const auto slot=final_before(*f);const bool capture=haze_before_safe(*f);bool returned=false;
- __try{ht::forward_begin(timing);mhw_binding_forward(originals[3],f);ht::forward_end(timing);returned=true;}
+ __try{ht::forward_begin(timing);if(!full_final(*f,slot))mhw_binding_forward(originals[3],f);ht::forward_end(timing);returned=true;}
  __finally{final_after(slot,returned);haze_after_safe(capture,returned);--pending;ht::end(timing);}}
 void draw_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_draw);++pending;unsigned stage=UINT_MAX;
  const auto slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:draw_before(*f,stage);bool returned=false;
@@ -1271,6 +1286,18 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
   {0x23c7831,740,"0da63ff39cc114c78483728e19221e1dd22806398522ec0095ec6c6349801247"}};
  for(const auto &g:gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="stream code gate";return false;}
  targets[0]=c.image+0x24ca1f0;targets[1]=c.image+0x259d670;targets[3]=c.image+0x2297e20;targets[4]=c.image+0x259c650;targets[5]=c.image+0x259d740;
+ // full_post (full_post.hpp): the key setter, the tone map's callback and the
+ // projection helper are hooked; setViewport and the copy helper are called.
+ if(full_post_enabled.load()){
+  constexpr Gate full_gates[]{
+   {0x23c9250,313,"48dc45a224fa9a3d25c884c46039221b34a7b8e21e880889250fd997f3ecb283"},
+   {0x23d0330,1271,"cd3085a7946eaef138f9c0af8b882a4fbc9c8df969107b954b278e157c0d907e"},
+   {0x2585410,77,"dfab8df5aedb0445313fa5f69484effd9b1f2b1882d2e4cf1a973bfd67535be9"},
+   {0x23cb520,301,"4fa9724b3eff99c5bddb0295302b6f73d1836521129f59f911ad7b94bb910ac8"}};
+  for(const auto &g:full_gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="full_post code gate";return false;}
+  targets[6]=c.image+0x2585410;targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
+  full_viewport=reinterpret_cast<FullViewportFn>(c.image+0x23d0330);full_copy=reinterpret_cast<FullCopyFn>(c.image+0x23c9250);
+ }
  auto *device=reinterpret_cast<ID3D12Device *>(c.device);ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
 #ifndef MHW_ALPHA
  // Research builds only: two scene-sized readbacks of the native depth (a
@@ -1280,8 +1307,9 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
  if(FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)))||
     FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||
     !pb::system_method(reinterpret_cast<std::uintptr_t>(list.Get()),16,targets[2])){reason="stream method discovery";return false;}
- const std::array<void *,6> detours{reinterpret_cast<void *>(scaled_postfilter_entry),reinterpret_cast<void *>(scaled_draw_execution_entry),reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry)};
+ const std::array<void *,9> detours{reinterpret_cast<void *>(scaled_postfilter_entry),reinterpret_cast<void *>(scaled_draw_execution_entry),reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry),reinterpret_cast<void *>(scaled_full_key_entry),reinterpret_cast<void *>(scaled_full_tone_map_entry),reinterpret_cast<void *>(scaled_full_project_entry)};
  for(unsigned i=0;i<targets.size();++i){
+  if(!targets[i])continue;  // full_post's hooks when off
   if(astera::active()&&i==api_hook){if(!originals[i]){reason="stream AL chain";return false;}enabled[i]=true;continue;}
   if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK||
     MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK){reason="stream hook preparation";return false;}enabled[i]=true;}
@@ -1640,7 +1668,7 @@ void write_summary(std::ostream &o){
  o<<",\"readiness\":";a(readiness.reasons());
  // v0.24.10: in the summary (the full report is quiet in the alpha); each
  // census sample is written once.
- o<<",\"post_census\":";census_write(o);
+ o<<",\"post_census\":";census_write(o);o<<",\"full_post\":";full_post_write(o);
  o<<",\"unknown_shaders\":"<<unknown_count<<",\"unknown_shader\":";
  if(unknown_count)o<<"{\"key\":"<<unknown_key<<",\"ps_sha256\":\""<<unknown_shader<<"\"}";else o<<"null";
  o<<",\"inserted_capture\":{\"attempts\":"<<inserted_dependencies.attempts()<<",\"samples\":"<<inserted_dependencies.size()<<",\"saved\":"<<inserted_saved<<",\"errors\":";
@@ -1717,6 +1745,9 @@ extern "C" void mhw_scaled_draw_execution(mhw::projection_binding::Frame *f){mhw
 extern "C" void mhw_scaled_stream_final(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::final_dispatch(f);}
 extern "C" void mhw_scaled_copy_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::copy_dispatch(f);}
 extern "C" void mhw_scaled_indexed_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::indexed_dispatch(f);}
+extern "C" void mhw_scaled_full_key(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_key_dispatch(f);}
+extern "C" void mhw_scaled_full_tone_map(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_tone_map_dispatch(f);}
+extern "C" void mhw_scaled_full_project(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_project_dispatch(f);}
 namespace mhw::scaled_temporal::stream_route {
 namespace {
 template<auto Detour> struct Chained;

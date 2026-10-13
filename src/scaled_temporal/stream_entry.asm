@@ -3,6 +3,9 @@ EXTERN mhw_scaled_draw_execution:PROC
 EXTERN mhw_scaled_stream_final:PROC
 EXTERN mhw_scaled_copy_execution:PROC
 EXTERN mhw_scaled_indexed_execution:PROC
+EXTERN mhw_scaled_full_key:PROC
+EXTERN mhw_scaled_full_tone_map:PROC
+EXTERN mhw_scaled_full_project:PROC
 
 
 SAVE MACRO where
@@ -84,4 +87,7 @@ ENTRY scaled_draw_execution_entry, mhw_scaled_draw_execution, 0
 ENTRY scaled_stream_final_entry, mhw_scaled_stream_final, 2
 ENTRY scaled_copy_execution_entry, mhw_scaled_copy_execution, 0
 ENTRY scaled_indexed_execution_entry, mhw_scaled_indexed_execution, 0
+ENTRY scaled_full_key_entry, mhw_scaled_full_key, 0
+ENTRY scaled_full_tone_map_entry, mhw_scaled_full_tone_map, 0
+ENTRY scaled_full_project_entry, mhw_scaled_full_project, 0
 END

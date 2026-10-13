@@ -34,6 +34,11 @@ void publish(const temporal_bindings::Snapshot &,const temporal_bindings::Packet
 // Called after the admitted native postqueue returns successfully, before its
 // owning camera frame ends. Individual filter returns do not complete the queue.
 void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uintptr_t view,std::uintptr_t taa) noexcept;
+// full_post (full_post.hpp), from the activation hooks on the render thread:
+// the post scheduler's entry and exit, and the return of TAA's callback.
+void full_post_enter(std::uintptr_t context) noexcept;
+void full_post_taa(std::uintptr_t context) noexcept;
+void full_post_exit(std::uintptr_t context) noexcept;
 bool ready(ID3D12GraphicsCommandList *,std::uint64_t generation,const temporal_bindings::Snapshot &,std::uintptr_t recording) noexcept;
 bool full_contract(const temporal_bindings::Snapshot &) noexcept;
 bool owns_packet(std::uintptr_t) noexcept;

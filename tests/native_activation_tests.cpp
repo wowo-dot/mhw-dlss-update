@@ -24,12 +24,19 @@ using Call=std::uint64_t(*)(std::uintptr_t,std::uintptr_t,std::uintptr_t,std::ui
 std::uintptr_t unit{},table{},ctx{},view{},other_view{},worker_ctx{},queue{},registry{},competitor{},dummy{},camera{};
 unsigned choice{},action{},taa_calls{},native_calls{},jitter_calls{},unrelated_calls{},registration_calls{};
 unsigned completions{},expected_completions{};bool queue_tail_completed{};
+unsigned full_enters{},full_exits{},full_taas{};
 namespace mhw::scaled_temporal::stream_route {
 void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uintptr_t incoming,std::uintptr_t taa) noexcept {
     check(manager==queue&&context==ctx&&incoming==view&&taa==unit,"completion preserves incoming queue identity across native volatile registers");
     check(queue_tail_completed&&aa::owned_context(context)&&aa::queued_taa==unit,"completion only after native queue tail in owning frame");
     queue_tail_completed=false;++completions;check(completions==expected_completions,"no early, nested or exceptional completion");
+    check(full_exits==full_enters,"full_post exit precedes the queue's completion");
 }
+// full_post (v0.25.0): the outer queue's entry and exit around the native
+// scheduler, and every TAA callback's return.
+void full_post_enter(std::uintptr_t context) noexcept {check(full_exits==full_enters,"full_post entries do not nest");static_cast<void>(context);++full_enters;}
+void full_post_taa(std::uintptr_t) noexcept {++full_taas;}
+void full_post_exit(std::uintptr_t context) noexcept {check(full_exits+1==full_enters,"full_post exit pairs its entry");static_cast<void>(context);++full_exits;}
 }
 constexpr std::uint64_t answer=0x987654321abcdef0ULL;
 void native_register(std::uintptr_t layer,unsigned stage,unsigned order){
@@ -201,5 +208,6 @@ int main(){
     check(completions==expected_completions,"queue completion counts include nested, stop and exception cases");
     for(const auto &item:{std::pair{"healthy",healthy},std::pair{"latched",latched},std::pair{"exception",frame_exception},std::pair{"taa-exception",taa_exception},std::pair{"queue-exception",queue_exception},std::pair{"reentrant",reentrant}})
         std::cout<<"{\"case\":\""<<item.first<<"\",\"activation\":"<<item.second<<"}\n";
+    check(full_enters&&full_taas&&full_exits<=full_enters,"full_post scheduler and TAA notifications");
     std::cout<<"Native activation: worker prefilter/join, main postqueue, four choices, duplicates/capacity, unrelated stages/threads, retained native gates, stop/reentry/exception cleanup passed\n";
 }
