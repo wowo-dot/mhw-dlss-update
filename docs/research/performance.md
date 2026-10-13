@@ -195,3 +195,33 @@ Same spot; FG off; Reflex Boost; the profiler off.
 - An expired region is refreshed with one query from its base (`refreshes`
   in the counters).
 - The second level keeps 256 regions.
+
+## Session 20261013-perf4 (v0.23.5, game-90): profile after the region cache
+
+Quality; FG off; Reflex Boost; `profile = on`.
+- **Frame rate under the profiler:** 225-230 fps (perf2, v0.23.3, same
+  setup: 201-203).
+- **Reads:** about 4 VirtualQuery calls a frame, almost all one-query
+  refreshes (about 900 a second); 18k per 20 s window, against 40k in perf3
+  and far more before.
+- **Present thread, 75k samples:**
+
+  | | v0.23.3 (perf2) | v0.23.5 (perf4) |
+  |---|---|---|
+  | NtQueryVirtualMemory (leaf) | 10.1% | 1.8% |
+  | Native queue hook (outer) | 9.0% | 1.8% |
+  | Jitter hook (outer) | 2.1% | 0.8% |
+  | The mod's own code (leaf in the mod) | - | 0.8% |
+
+  - The leaf-in-the-mod share splits into: bounded reads 0.18%, stream route
+    0.23%, continuous_dlaa hooks 0.20%, other 0.2%.
+  - The SHA-256 shader checks are about 0.6% (inner).
+  - The mod's own CPU time on the Present thread is therefore about 3-4%,
+    or 0.15 ms of a 4.4 ms frame.
+  - Everything else under the mod's hooks is the game's own work (main
+    update, frame build) or the driver's (Execute, Present, Reset) passing
+    through.
+- **Remaining gap:** at Quality, 234 fps (perf3) against an unmodded window
+  of 249, but the unmodded slices ranged 237-262 standing still. The
+  remaining difference is close to the launch-to-launch spread, so a
+  back-to-back A/B in one PresentMon session decides it.
