@@ -346,3 +346,82 @@ and TAA's own barriers.
 - a broader effects hunt (special fights, other zones);
 - then make `full_post` the default and remove the per-effect route (the
   user's call).
+
+## When to arm (v0.25.5 to v0.25.8)
+
+**v0.25.5: armed at the scheduler's entry.** The final quad stays native and
+is only remembered. At the scheduler's entry (after the registration pass) the
+frame was armed when TAA's descriptor was in the filter list (unit vtable
+0x351bda8, stage 15, order 2, skip byte +0x20 clear).
+
+- **game-119 (v0.25.5):** nothing armed. The final-quad helper (0x2297e20) has
+  about 40 callers, filters and other views among them; each call reset the
+  candidate. **v0.25.6:** only a valid final quad starts a candidate.
+- **game-120 (v0.25.6):** 5,019 schedulers, 5,019 "TAA not registered". At
+  the scheduler's entry the list is in registration order, not yet sorted. The
+  colour grade's endpoint (15, 0x7fffff1) has no unit and comes before TAA's
+  descriptor, and the search stopped at the first entry without a unit (the
+  fixture had TAA first). **v0.25.7:** entries without a unit, or skipped, are
+  passed over.
+
+**game-121 (v0.25.7): Fatalis, Safi'jiiva, Alatreon.** Every DLSS frame armed:
+157,555 of 157,551 frames, every input upscaled, 0 state mismatches, 106,684
+depth restores, fault 0. Two defects:
+
+- **The tent menu was mangled:** the render-size image sat in the top-left
+  corner, with stale content around it. The runtime refuses every tent frame at
+  TAA's producer (`taa_before`; a skip with no reason, no publication). The
+  scheduler's entry had already recorded the full-size DLAA copy, so the copy
+  ran with no plan and no DLSS output to copy. 6,743 such frames.
+- **The quest reward screen's background was zoomed.** That background is a
+  one-frame scene capture (`sub_142268890`, called by the camera's draw right
+  after the final quad). `sScene` (image+0x51c4368) holds the request:
+  +0xE998 equal to the renderer's epoch, set by `sub_141B602B0` for the
+  result's `ui\result\tex\capture_back`. The capture draws the target of pass
+  +0xE990 (default 15; view +0x60 + 0x40·pass → +0x58, the final quad's
+  tBaseMap) into +0xE988, at key (pass, priority +0xE994; default 0xffffffff,
+  the end of the chain), with `System_CopyScaleOffset`. Its texture
+  coordinates are the context's rectangle over the view's output size: the
+  render region. In an armed frame that target holds the full-size chain
+  output, so the capture showed its top-left corner stretched.
+
+**v0.25.8:**
+
+- **The entry requires an admitted queue.** The runtime's own check, as for
+  `post_queue_complete`: its TAA, the owned context, the frame's view.
+- **Armed after TAA's callback,** and only when the runtime has published the
+  frame there (`sr::publish` runs from the TAA hook inside the callback). Only
+  then is the DLAA copy recorded, in the final quad's key. The identity plan
+  finds its final copy by key and owners, not position. The tone map's
+  callback still runs at the full rectangle once the frame has entered. On a
+  frame that then stays native, this leaves the render region as it was: its
+  steps are per-pixel or linear in the pixel position, as before TAA in armed
+  frames.
+- **Unplanned copies are dropped.** The DLAA copy is registered with its
+  packet. At execution, without a prepared identity plan that takes it as the
+  final copy, its copy is dropped, and the final quad's native upscale (which
+  it would overwrite) stays.
+- **The scene capture is widened.** Its quad (stage 15, after TAA and the
+  slot, between the final quad and the scheduler's entry, with exactly the
+  render region's vertices) is found when the frame arms. Once the plan is
+  prepared, before the commands execute, its texture coordinates are widened
+  to the whole texture.
+
+**game-122 (v0.25.8): hub, tent, a quest and its reward screen.** The user:
+the tent "look is correct but its skipping", and "endscreen looks correct now".
+
+| Measure | Count |
+| --- | --- |
+| Armed frames (DLAA copies), all planned | 33,808 |
+| Upscales | 33,807 (1 in flight), 0 state mismatches |
+| Unpublished at TAA (the tent; native) | 16,136 |
+| Unadmitted (title, loading) | 4,048 |
+| Unplanned copies dropped | 0 |
+| Scene captures widened | 1 (the reward screen), 0 refusals |
+| Depth restores / silhouettes corrected | 21,301 / 426,039 |
+| DLSS skips | 16,400: the tent's 16,136 and 264 transition frames without depth (planned: spatial resolve) |
+
+The tent is native because the runtime refuses its frames at TAA's producer,
+which full_post does not change (game-121 shows the same refusals). v0.25.9
+counts those refusals by check (`producer_refusals`, `producer_last`) to find
+out why.

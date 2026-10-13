@@ -106,6 +106,15 @@ UnfilteredLifetime unfiltered_lifetime;
 ReconstructionState reconstruction;
 std::atomic<std::uint64_t> zero_jitter_projections{};
 std::array<std::uint64_t,12> dispatch_reasons{};
+// TAA's producer refusals (taa_before), by the first failing check: 1 call
+// arguments, 2 snapshot, 3 scene depth, 4 shader recipe, 5 command array,
+// 6 no projection, 7 projection of another frame/epoch, 8 of another
+// view/context, 9 of another bank/async mode, 10 render-size stamp, 11 jitter
+// mapping, 12 rectangle, 13 resource pins. The last refusal's frame and four
+// values (per reason, below) are kept.
+std::array<std::atomic<std::uint64_t>,14> producer_refusals{};
+struct ProducerRefusal {std::uint64_t frame{};unsigned reason{};std::array<std::uint64_t,4> values{};};
+ProducerRefusal last_producer_refusal;
 StateTrace state_trace;
 NativeStateAdmission state_admission;
 DepthEligibilityTrace depth_eligibility;
@@ -296,23 +305,32 @@ void projection_after(bool admitted,bool returned,NativeFrame &f){
 bool taa_before(const NativeFrame &f){
     if(!accepting.load()||f.call.caller!=cfg.image+tb::caller_rva)return false;
     publishing.fetch_add(1);producer={};auto &s=producer.source;
-    bool ok=!f.call.stack[0]&&!static_cast<unsigned char>(f.call.stack[1])&&tb::snapshot(reader,cfg,f.layer,f.call.gpr[1],s)&&
-        tb::scene_depth(reader,s,producer.depth)&&tb::shader_recipe(reader,s,producer.shader)&&
-        reader.get(s.context+0x2b80,producer_count)&&producer_count<65535&&reader.get(s.context+0x2b78,producer_array)&&producer_array;
+    unsigned reason{};std::array<std::uint64_t,4> values{};const auto gate=[&](unsigned code,bool passed){if(!passed)reason=code;return passed;};
+    bool ok=gate(1,!f.call.stack[0]&&!static_cast<unsigned char>(f.call.stack[1]))&&gate(2,tb::snapshot(reader,cfg,f.layer,f.call.gpr[1],s))&&
+        gate(3,tb::scene_depth(reader,s,producer.depth))&&gate(4,tb::shader_recipe(reader,s,producer.shader))&&
+        gate(5,reader.get(s.context+0x2b80,producer_count)&&producer_count<65535&&reader.get(s.context+0x2b78,producer_array)&&producer_array);
     if(ok){Lock lock;producer.projection=projections[s.frame%projections.size()];const auto &a=producer.projection.source.anchor;
-        ok=producer.projection.valid&&a.frame==s.frame&&a.epoch==s.epoch&&a.view==s.view&&a.context==s.context&&a.bank==s.bank&&a.async_mode==s.async;}
+        values={a.frame,s.frame,a.view,s.view};
+        ok=gate(6,producer.projection.valid)&&gate(7,a.frame==s.frame&&a.epoch==s.epoch)&&gate(8,a.view==s.view&&a.context==s.context)&&
+           gate(9,a.bank==s.bank&&a.async_mode==s.async);}
     #ifdef MHW_CONTINUOUS_SCALED
     render_resolution::InputStamp scale;
-    if(ok)ok=render_resolution::input_stamp(s.view,scale)&&scale.frame==s.frame&&scale.render_width==render_width()&&scale.render_height==render_height();
+    if(ok){ok=gate(10,render_resolution::input_stamp(s.view,scale)&&scale.frame==s.frame&&scale.render_width==render_width()&&scale.render_height==render_height());
+        values={scale.frame,s.frame,scale.render_width,scale.render_height};}
     if(ok){Lock lock;for(const auto &d:depths)if(d.live&&d.stamp.frame==s.frame&&d.stamp.epoch==s.epoch&&d.stamp.view==s.view&&d.stamp.bank==s.bank&&d.stamp.async==s.async&&d.destination==producer.depth.texture&&d.sequence>producer.depth_sequence){producer.depth_sequence=d.sequence;producer.depth_object=d.object;producer.depth_packet=d.packet;}}
     dlss_sdk::PixelJitter mapped;const auto &projection_bits=producer.projection.source.projection;
-    if(ok)ok=dlss_sdk::projection_jitter(scaled_geometry,{std::bit_cast<float>(projection_bits.jitter_bits[0]),std::bit_cast<float>(projection_bits.jitter_bits[1])},
-        std::bit_cast<float>(projection_bits.viewport_bits[0]),std::bit_cast<float>(projection_bits.viewport_bits[1]),mapped);
+    if(ok){ok=gate(11,dlss_sdk::projection_jitter(scaled_geometry,{std::bit_cast<float>(projection_bits.jitter_bits[0]),std::bit_cast<float>(projection_bits.jitter_bits[1])},
+        std::bit_cast<float>(projection_bits.viewport_bits[0]),std::bit_cast<float>(projection_bits.viewport_bits[1]),mapped));
+        values={projection_bits.jitter_bits[0],projection_bits.jitter_bits[1],projection_bits.viewport_bits[0],projection_bits.viewport_bits[1]};}
 #endif
-    if(ok)ok=s.rectangle==std::array<unsigned,4>{0,0,render_width(),render_height()}&&
-        pin(s.inputs[0].resource,26,producer.resources[0])&&pin(s.inputs[5].resource,42,producer.resources[1])&&
-        pin(s.inputs[4].resource,26,producer.resources[2],true)&&pin(producer.depth.texture.resource,41,producer.resources[3]);
-    if(!ok){producer.resources={};++skips;publishing.fetch_sub(1);return false;}
+    if(ok){values={s.rectangle[0],s.rectangle[1],s.rectangle[2],s.rectangle[3]};ok=gate(12,s.rectangle==std::array<unsigned,4>{0,0,render_width(),render_height()});}
+    if(ok){values={s.inputs[0].format,s.inputs[5].format,s.inputs[4].format,producer.depth.texture.format};
+        ok=gate(13,pin(s.inputs[0].resource,26,producer.resources[0])&&pin(s.inputs[5].resource,42,producer.resources[1])&&
+        pin(s.inputs[4].resource,26,producer.resources[2],true)&&pin(producer.depth.texture.resource,41,producer.resources[3]));}
+    if(!ok){
+        ++producer_refusals[reason<producer_refusals.size()?reason:0];
+        {Lock lock;last_producer_refusal={s.frame,reason,values};}
+        producer.resources={};++skips;publishing.fetch_sub(1);return false;}
     producer.projection.history.depth=producer.depth.texture.resource;return true;
 }
 RequestIdentity identity(const Taa &t){const auto &s=t.source;
@@ -1432,6 +1450,9 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";
     for(unsigned i=0;i<dispatch_reasons.size();++i){if(i)out<<',';out<<dispatch_reasons[i];}out<<']';
+    out<<",\"producer_refusals\":[";for(unsigned i=0;i<producer_refusals.size();++i){if(i)out<<',';out<<producer_refusals[i].load();}
+    {const auto &l=last_producer_refusal;  // write_summary holds the lock
+     out<<"],\"producer_last\":{\"frame\":"<<l.frame<<",\"reason\":"<<l.reason<<",\"values\":["<<l.values[0]<<','<<l.values[1]<<','<<l.values[2]<<','<<l.values[3]<<"]}";}
 #ifdef MHW_CONTINUOUS_SCALED
     // Skip reason 7 is a missing depth lease or a route readiness rejection.
     {DepthTraceLock trace_lock;out<<",\"depth_missing\":"<<scaled_depth_trace.missing_count<<",\"route_not_ready\":"<<scaled_depth_trace.readiness_rejected;}
