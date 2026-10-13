@@ -19,6 +19,8 @@ namespace mhw::alpha {
 //   reflex = on             ; on, boost, off (off only with frame_generation = off)
 //   runtime_dir = .         ; Streamline and NVIDIA DLSS DLLs
 //   log_dir = logs          ; log files of each launch
+//   profile = off           ; on: the CPU stack sampler for performance work
+//                           ; ("profile" events in the log; a little overhead)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
@@ -40,6 +42,7 @@ struct Config {
     unsigned dynamic_target{};   // frames per second; 0: the display's refresh rate
     bool generation_auto{};      // frame_generation_auto = on
     ReflexMode reflex = ReflexMode::on;
+    bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -154,6 +157,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "frame_generation_auto") {
             if (value == "on" || value == "off") c.generation_auto = value == "on";
             else c.warnings.push_back(where + "frame_generation_auto must be on or off");
+        } else if (key == "profile") {
+            if (value == "on" || value == "off") c.profile = value == "on";
+            else c.warnings.push_back(where + "profile must be on or off");
         } else if (key == "reflex") {
             if (!parse_reflex(value, c.reflex)) c.warnings.push_back(where + "reflex must be on, boost or off");
         } else if (key == "runtime_dir" || key == "log_dir") {

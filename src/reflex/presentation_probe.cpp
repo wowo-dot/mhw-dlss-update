@@ -792,7 +792,9 @@ DWORD WINAPI worker(void*) noexcept {
             mhw::alpha::status::generation(fg_plugin ? mhw::alpha::status::Generation::starting : mhw::alpha::status::Generation::off);
             mhw::continuous_dlaa::reconstruction_mode(alpha_config.dlss_mode);
             mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(alpha_config.dlss_mode));
-            mhw::perf::toggles.store(mhw::perf::all_toggles);
+            // profile = on: the stack sampler too (perf::sample_profile; started
+            // with the frame windows, as in the research build).
+            mhw::perf::toggles.store(mhw::perf::all_toggles|(alpha_config.profile?mhw::perf::sample_profile:0U));
             reflex_requested.store(alpha_config.reflex==mhw::alpha::ReflexMode::off?0U:alpha_config.reflex==mhw::alpha::ReflexMode::boost?2U:1U);
             mhw::alpha::status::reflex_mode(mhw::alpha::reflex_name(alpha_config.reflex));
             mhw::reflex::sdk_verbose_log = false;
@@ -888,7 +890,7 @@ DWORD WINAPI worker(void*) noexcept {
         log << "{\"event\":\"alpha_config\",\"dlss_mode\":\"" << mhw::alpha::dlss_mode_value(alpha_config.dlss_mode)
             << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
             << ",\"dynamic\":" << alpha_config.dynamic << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
-            << ",\"frame_generation_auto\":" << alpha_config.generation_auto
+            << ",\"frame_generation_auto\":" << alpha_config.generation_auto << ",\"profile\":" << alpha_config.profile
             << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -972,6 +974,8 @@ DWORD WINAPI worker(void*) noexcept {
 #ifndef MHW_ALPHA
             auto window_start=wait_start;
             mhw::perf::sampler::start();
+#else
+            if(alpha_config.profile)mhw::perf::sampler::start();
 #endif
 #endif
 #ifdef MHW_ALPHA

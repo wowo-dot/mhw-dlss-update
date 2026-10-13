@@ -10,8 +10,9 @@ v0.12.3+; before that the outermost mod frame), and that hook with the module
 the time was spent in; and the innermost game frame (v0.12.3+). Counts are wall-clock samples
 (waiting included) at about 1 kHz for the Present thread.
 
-Symbols: the mod from the linker map (<run>/mhw_fg_game_probe.map, else the
-build's map when the installed DLL matches the build); system and SDK DLLs
+Symbols: the mod from the linker map (<run>/mhw_fg_game_probe.map or the
+alpha's mhw_dlss_alpha.map, else the build's map when the installed DLL
+matches the build); system and SDK DLLs
 from their exports via dbghelp (an export name is the nearest exported
 symbol, so internal functions show as export+offset); the game by RVA.
 """
@@ -130,12 +131,15 @@ def sha(path):
 
 
 def mod_symbols(run, header):
-    local = run / 'mhw_fg_game_probe.map'
-    if local.exists():
-        return MapSymbols(local), str(local)
+    # The research build (mhw_fg_game_probe) or the alpha (mhw_dlss_alpha).
+    for name in ('mhw_fg_game_probe', 'mhw_dlss_alpha'):
+        local = run / f'{name}.map'
+        if local.exists():
+            return MapSymbols(local), str(local)
     build = REPO / 'build/bin/Release'
-    if (build / 'mhw_fg_game_probe.map').exists() and sha(build / 'mhw_fg_game_probe.dll') == header.get('dll_sha256'):
-        return MapSymbols(build / 'mhw_fg_game_probe.map'), 'build (sha matches)'
+    for name in ('mhw_fg_game_probe', 'mhw_dlss_alpha'):
+        if (build / f'{name}.map').exists() and sha(build / f'{name}.dll') == header.get('dll_sha256'):
+            return MapSymbols(build / f'{name}.map'), 'build (sha matches)'
     return None, 'no matching map: RVAs only'
 
 
@@ -146,6 +150,8 @@ def main():
     p.add_argument('--mask', type=int, help='only events taken with this perf mask')
     p.add_argument('--phase', help='unarmed, armed or fg_off')
     p.add_argument('--last', type=int, help='only the last N matching events (5-second windows)')
+    p.add_argument('--skip', type=int, default=0, help='drop the first N matching events (applied before --first)')
+    p.add_argument('--first', type=int, help='only the first N matching events (after --skip)')
     p.add_argument('--top', type=int, default=25)
     a = p.parse_args()
     rows, _ = rows_of(log_path(a.run, a.pid))
@@ -156,6 +162,9 @@ def main():
             phase = r['phase']
         elif r.get('event') == 'profile' and (a.mask is None or r['perf'] == a.mask) and (a.phase is None or phase == a.phase):
             events.append(r)
+    events = events[a.skip:]
+    if a.first:
+        events = events[:a.first]
     if a.last:
         events = events[-a.last:]
     if not events:

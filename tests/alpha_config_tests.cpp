@@ -97,6 +97,9 @@ int main() {
         check(a::parse_config("frame_generation_auto = ON\n", folder).generation_auto, "auto on, any case");
         const auto bad_auto = a::parse_config("frame_generation_auto = on\nframe_generation_auto = maybe\n", folder);
         check(bad_auto.generation_auto && bad_auto.warnings.size() == 1, "a bad auto value keeps the last good one");
+        check(!a::parse_config("", folder).profile && a::parse_config("profile = on\n", folder).profile, "profile off by default; on");
+        const auto bad_profile = a::parse_config("profile = sometimes\n", folder);
+        check(!bad_profile.profile && bad_profile.warnings.size() == 1, "a bad profile value warns and stays off");
 
         const auto edited = a::with_value(a::with_value("frame_generation = 2x\r\n", "dynamic_target", "165"), "frame_generation_auto", "on");
         check(edited == "frame_generation = 2x\r\ndynamic_target = 165\r\nframe_generation_auto = on\r\n", "new keys appended with CRLF");
