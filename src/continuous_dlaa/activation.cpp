@@ -309,5 +309,8 @@ void write(std::ostream &out){
        <<",\"hooks_disabled\":"<<hooks_off<<",\"native_choices\":[";
     for(unsigned i=0;i<choices.size();++i)out<<(i?",":"")<<choices[i].load();out<<"]}";
 }
+void write_choices(std::ostream &out){
+    TelemetryLock lock;out<<'[';for(unsigned i=0;i<choices.size();++i)out<<(i?",":"")<<choices[i].load();out<<']';
+}
 }
 extern "C" void mhw_aa_dispatch(unsigned kind,mhw::projection_binding::Frame *f){mhw::continuous_dlaa::activation::dispatch(kind,f);}

@@ -10,6 +10,9 @@
 #include "depth_consumer_copy.hpp"
 #endif
 #include "activation.hpp"
+#ifdef MHW_ALPHA
+#include "game_options.hpp"
+#endif
 #include "history.hpp"
 #include "requests.hpp"
 #include "retention.hpp"
@@ -1056,6 +1059,15 @@ template<class F> bool wait_for(F &&done,std::uint64_t ms){
     while(!done()){if(GetTickCount64()>=end)return false;Sleep(1);}
     return true;
 }
+#ifdef MHW_ALPHA
+// The player's anti-aliasing and resolution scaling again (game_options.hpp),
+// once the render thread restored the owned scale.
+void give_back_options() noexcept {
+    if(!game_options::taken())return;
+    wait_for(render_resolution::released,1000);
+    game_options::give_back();
+}
+#endif
 // Observes `count` at zero once within `ms`. Every hook counts itself before
 // it reads `accepting`, so after a stop one zero proves that no callback that
 // could still have seen the runtime accepting is running.
@@ -1159,12 +1171,21 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         mark(3);
         // 4 the render scale: retarget, or rebase on the new scene. From here
         // a failure stops the runtime.
+#ifdef MHW_ALPHA
+        // From Off: the game's own DLSS rules again (anti-aliasing Off,
+        // resolution scaling High) before the scale is taken.
+        if(from_off)game_options::take_over();
+#endif
         if(scene){
             if(std::string why;!render_resolution::rebase({found.width,found.height},basis,dlss_sdk::requested_scale(requested),why))
                 throw std::runtime_error("render scale: "+why);
         }else if(std::string why;from_off?!render_resolution::resume(dlss_sdk::requested_scale(requested),why)
-                                           :!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))
+                                           :!render_resolution::retarget(dlss_sdk::requested_scale(requested),why)){
+#ifdef MHW_ALPHA
+            if(from_off)give_back_options();
+#endif
             return resume(("render scale: "+why).c_str());
+        }
         changed=true;
         // The game's AA is taken over again from its next camera frame.
         if(from_off)activation::yield(false);
@@ -1251,6 +1272,9 @@ ModeChange turn_off() noexcept{
         mark(2);
         // 3 the game's own AA and scale from its next frame.
         activation::yield(true);render_resolution::yield();
+#ifdef MHW_ALPHA
+        give_back_options();
+#endif
         off.store(true);r.off=r.ok=true;mark(3);return r;
     }catch(const std::exception &e){r.reason=e.what();}
     catch(...){r.reason="turn off";}
@@ -1377,6 +1401,16 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         #ifdef MHW_CONTINUOUS_SCALED
         // The sizing gates must be checked before activation modifies their callees.
         // dlss_mode = off: everything is installed, nothing taken over.
+#ifdef MHW_ALPHA
+        // The game's own DLSS rules (game_options.hpp), before the render
+        // scale is taken: its start-up check needs the game's scale at 1.
+        // Without them DLSS runs as before, over the player's own settings.
+        if(std::string why;game_options::install(image,why)&&!off_at_start){
+            game_options::take_over();
+            if(!wait_for([&]{return render_resolution::full_scale(image);},2000))
+                throw std::runtime_error("the game did not apply resolution scaling High");
+        }
+#endif
         if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true,off_at_start))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
@@ -1415,6 +1449,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
 void stop() noexcept {accepting.store(false);live_installed.store(false);activation::stop();
 #ifdef MHW_CONTINUOUS_SCALED
     sr::stop();render_resolution::stop();
+#endif
+#ifdef MHW_ALPHA
+    give_back_options();
 #endif
 }
 bool healthy() noexcept {return fault.load()==0&&obs::healthy()&&activation::healthy()
@@ -1519,6 +1556,13 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<",\"identity_depth\":";identity_depth_survey.write(out);
     out<<",\"route\":";sr::write_summary(out);
 #endif
+#ifdef MHW_ALPHA
+    // The game's own DLSS rules for its AA and resolution scaling options,
+    // with the game's per-frame AA choice (Off, TAA, FXAA, both) seen by
+    // the owned frames.
+    out<<",\"game_options\":";game_options::write(out);
+    out<<",\"native_choices\":";activation::write_choices(out);
+#endif
     out<<'}';
 }
 void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)disabled=disabled&&!e;
@@ -1556,6 +1600,9 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     for(unsigned i=0;i<dispatch_reasons.size();++i)out<<(i?",":"")<<dispatch_reasons[i];out<<']';
     out<<",\"forwarded_requests\":";forwarded_telemetry.write(out);
     out<<",\"activation\":";activation::write(out);
+#ifdef MHW_ALPHA
+    out<<",\"game_options\":";game_options::write(out);
+#endif
 #ifdef MHW_CONTINUOUS_SCALED
     out<<",\"scaled_depth_capture\":";{DepthTraceLock trace_lock;scaled_depth_trace.write(out);}
     out<<",\"depth_schedule\":";depth_schedule_trace.write(out);

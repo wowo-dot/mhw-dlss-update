@@ -824,7 +824,8 @@ if(TARGET mhw_dlss_sdk_live)
         # once the game is ready, every lean path on and light logging.
         get_target_property(fg_game_sources mhw_fg_game_probe SOURCES)
         # v0.16: the status lines and the optional CMFM pages (third_party/cmfm).
-        add_library(mhw_dlss_alpha SHARED ${fg_game_sources} src/alpha/status.cpp src/alpha/menu.cpp)
+        # v0.27.6: the game's own DLSS rules for its AA and resolution scaling options.
+        add_library(mhw_dlss_alpha SHARED ${fg_game_sources} src/alpha/status.cpp src/alpha/menu.cpp src/continuous_dlaa/game_options.cpp)
         target_compile_features(mhw_dlss_alpha PRIVATE cxx_std_20)
         target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
             "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")

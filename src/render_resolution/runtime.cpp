@@ -334,6 +334,19 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,boo
 void stop() noexcept {requested=false;}
 void yield() noexcept {Lock lock;if(!image||fault.load()||!requested.load())return;yielded=true;requested=false;}
 bool yielded_now() noexcept {return yielded.load();}
+bool released() noexcept {Lock lock;return !requested.load()&&!ownership.owned;}
+bool full_scale(std::uintptr_t base) noexcept {
+    if(image)return false;
+    try{
+        pb::Runtime probe;std::string reason;if(!pb::discover(base,probe,reason))return false;
+        const auto planned=plan({probe.width,probe.height},probe.scene_override?probe.window_width:probe.width,1.F);
+        std::uintptr_t root{};if(!planned.valid||!pb::read(base+0x51c4480,root)||!root||root>UINTPTR_MAX-0x7b3f5)return false;
+        // As in ready(): no hook reads this state before install().
+        image=base;renderer=root;discovered=probe;Snapshot s{};const bool admitted=snapshot(s,planned);
+        image=0;renderer=0;discovered={};
+        return admitted&&s.desired==1.F&&s.applied==1.F&&s.view_scale==1.F&&s.combined==1.F&&s.view_combined==1.F;
+    }catch(...){image=0;renderer=0;discovered={};return false;}
+}
 bool resume(float scale,std::string &reason) {
     Lock lock;
     if(!image||!yielded.load()||fault.load()){reason="render scale not yielded";return false;}

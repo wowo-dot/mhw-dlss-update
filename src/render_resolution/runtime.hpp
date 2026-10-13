@@ -49,6 +49,13 @@ bool input_stamp(std::uintptr_t view,InputStamp &) noexcept;
 // Unlike stop(), reversible. No effect before install, after a fault or stop.
 void yield() noexcept;
 bool yielded_now() noexcept;
+// No override is requested and the render thread's last visit restored any
+// owned value (after yield() or stop(); before install). The game's own scale
+// setters then cannot race the restore. Any thread.
+bool released() noexcept;
+// Before install() only, as ready(): the game's own scale is 1 in every field
+// the start-up check (the first 32 visits) compares. Worker.
+bool full_scale(std::uintptr_t image) noexcept;
 // Worker: the override again at `scale` (planned as retarget() does) from the
 // next visit. The game's own scale meanwhile is adopted as its native value
 // (restored at the next yield). False (still yielded) if not yielded, after a

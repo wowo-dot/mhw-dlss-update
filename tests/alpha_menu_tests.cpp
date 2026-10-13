@@ -3,6 +3,7 @@
 #include "../src/alpha/config.hpp"
 #include "../src/alpha/menu_model.hpp"
 #include "../src/alpha/status.hpp"
+#include "../src/continuous_dlaa/game_options.hpp"
 #include <cstdio>
 
 namespace {
@@ -77,6 +78,17 @@ void settings_model() {
     check(m::choice_of(5) == 0 && m::choice_of(0) == 0, "unknown multipliers show 2x");
     check(m::multiplier_at(3) == 6 && m::multiplier_at(-1) == 0 && m::multiplier_at(4) == 0, "multiplier at index");
     std::string why;
+    {
+        // The game's own DLSS rules for its graphics menu (game_options.hpp,
+        // v0.27.6): the two rows its DLSS locks, with its own help texts.
+        namespace go = mhw::continuous_dlaa::game_options;
+        check(go::locked_row(15) && go::locked_row(22) && !go::locked_row(16) && !go::locked_row(32) && !go::locked_row(0),
+              "locked rows: resolution scaling and anti-aliasing");
+        check(go::locked_help(15, 10123) == 10552 && go::locked_help(22, 10252) == 10553 && go::locked_help(20, 10300) == 10300,
+              "the game's NVIDIA DLSS help texts");
+        check(go::anti_aliasing_off == 0 && go::resolution_scaling_high == 2 && go::anti_aliasing_values == 4 &&
+                  go::resolution_scaling_values == 5, "Off, High and the value ranges");
+    }
     {
         // What the card offers (capabilities.hpp, v0.27.5).
         namespace c = mhw::alpha::capabilities;

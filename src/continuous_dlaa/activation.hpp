@@ -25,4 +25,7 @@ bool healthy() noexcept;
 bool queue_disable() noexcept;
 void disabled(bool success) noexcept;
 void write(std::ostream &);
+// The game's AA choice (Off, TAA, FXAA, TAA+FXAA) in each owned frame, as a
+// JSON array.
+void write_choices(std::ostream &);
 }
