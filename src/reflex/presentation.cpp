@@ -266,6 +266,9 @@ HRESULT lifecycle_call(unsigned method, IUnknown* self, std::array<std::uint64_t
             e.buffers = d.BufferCount; e.flags = d.Flags;
         }
     }
+    if (e.described && (e.current_chain || method <= 3) && s->accepting.load() &&
+        s->listener_ready.load(std::memory_order_acquire) && s->listener.after)
+        s->listener.after(s->listener.context, e.format);
     SetLastError(error);
     s->lifecycle_record(e);
     return hr;

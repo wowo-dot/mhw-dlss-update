@@ -50,6 +50,9 @@ struct LifecycleEvent {
 struct LifecycleListener {
     void* context{};
     bool (*before)(void*, unsigned method) noexcept{};
+    // Optional (v0.24.8): after a successful call on the host's chain (or a
+    // creation), with the chain's back buffer format (DXGI_FORMAT).
+    void (*after)(void*, std::uint32_t format) noexcept{};
 };
 // One process-lived instance. Native interfaces stay in the host, including
 // every returned queue/swap-chain reference. Mandatory public COM calls use

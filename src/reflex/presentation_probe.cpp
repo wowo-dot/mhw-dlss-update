@@ -273,6 +273,7 @@ void change_dlss_scene(SceneRetry &retry){
         const auto chain=presentation->snapshot();
         configured=released&&sw&&sh&&sw<=chain.width&&sh<=chain.height&&ww==chain.width&&wh==chain.height;
         if(configured){
+            fg::back_buffer(chain.format);
             fg::configure(sdk,chain.width,chain.height,{(chain.width-sw)/2,(chain.height-sh)/2,sw,sh});
             fg::arm(true);
         }else mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");
@@ -482,7 +483,9 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
                                                                           : mhw::reflex::PresentationContract::synchronous_native);
     // DLSS-G Off before any host window manipulation (guide 12.0).
     presentation->lifecycle({presentation, [](void*, unsigned method) noexcept {
-        return mhw::frame_generation::game::lifecycle_guard(method); }});
+        return mhw::frame_generation::game::lifecycle_guard(method); },
+        // The HUD-less image follows the back buffer: SDR or HDR10 (v0.24.8).
+        [](void*, std::uint32_t format) noexcept { mhw::frame_generation::game::back_buffer(format); }});
 #else
     presentation->install(device_pin.Get(), factory_pin.Get());
 #endif
@@ -1092,6 +1095,7 @@ DWORD WINAPI worker(void*) noexcept {
                 } else {
                     const mhw::frame_generation::game::SceneRect scene{(chain.width - scene_width) / 2, (chain.height - scene_height) / 2,
                                                                        scene_width, scene_height};
+                    mhw::frame_generation::game::back_buffer(chain.format);
                     mhw::frame_generation::game::configure(sdk, chain.width, chain.height, scene);
                     mhw::frame_generation::game::multiplier(fg_multiplier);
 #ifdef MHW_ALPHA

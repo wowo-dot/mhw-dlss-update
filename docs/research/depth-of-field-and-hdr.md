@@ -103,10 +103,60 @@ The user turned on Windows HDR and the game's HDR mode (`ScreenMode=HDRMode`).
   one the HUD-less pass copies (brightness curve, sRGB encode, R8G8B8A8). So
   the HUD-less image was SDR-encoded for an HDR10 back buffer. **The user saw
   the HUD looking fine**, but the colour space is wrong in principle.
-- **Next (later):** reverse the game's HDR screen write (PQ encode and its
-  brightness parameters) and give the HUD-less pass an HDR path. Until then,
-  consider failing closed: no HUD-less image while the back buffer is not
-  8-bit SDR.
+### The game's HDR screen write (shader census, 2026-10-13)
+
+The census has three back-buffer copies:
+- `System_CopyToBackBuffer` (PS `e5ee2062…`): the SDR brightness curve and
+  sRGB encode the HUD-less pass already mirrors, with CBSystem at b3.
+- `System_CopyToBackBufferPQSingle` (PS `68b496ea…`): HDR10 only.
+- `System_CopyToBackBufferPQ` (PS `a9e2838c…`): SDR to o0 and HDR10 to o1.
+
+The HDR10 path takes its parameters from **CBRenderFrame (b2)**:
+`fHdrOutputWhiteLevel` @52 (default 100), `fHdrOutputGamutMappingRatio` @56,
+`fHdrOutputGamma` @60, `bIsGUIHdrGamma` @64, plus `bHdrOutput` @48.
+1. c = max(T, 0); b = the BT.709→BT.2020 rotation of c, with rows
+   (0.627404, 0.329282, 0.043314), (0.069097, 0.919540, 0.011361) and
+   (0.016392, 0.088013, 0.895595).
+2. x = b + ratio * (c − b).
+3. If bIsGUIHdrGamma: each channel below 1 becomes pow(max(x, 0), gamma).
+4. ST.2084 PQ of saturate(x / (10000 / white)), capped at 1.
+
+There is no brightness curve. That is why game-103's CBSystem capture never
+matched.
+
+### v0.24.8: HUD-less in HDR10
+
+- **`screen::hdr::encode`** (screen_transform.hpp) is the C++ reference of
+  that path.
+- **HudlessPass:**
+  - An HDR transform writes R10G10B10A2_UNORM. Until a valid capture it uses
+    the shader's defaults: 100 nits, ratio 0, gamma 1, no GUI gamma.
+  - An HDR capture of CBRenderFrame checks its layout: bHdrOutput set,
+    booleans 0 or 1, white level 10-10000, ratio 0-1, gamma 0.1-10, delta
+    time 0-10 s.
+  - The capture keeps the last valid capture and records the graphics root
+    parameter it was bound at.
+  - The target's format selects the transform; the SDR path is unchanged.
+- **The session:**
+  - It learns the back buffer's format at arming and after every swap-chain
+    call (the presentation's lifecycle listener, new `after` callback). The
+    game resizes 8-bit then HDR10 on each mode change.
+  - A slot's HUD-less image is re-created in that format when the slot is next
+    used; slots are fence-gated, so it is free then.
+  - With an HDR10 back buffer, each closing list in the capture window (at
+    most 4 a frame) offers its CBV root arguments to the HDR capture.
+  - Any other back buffer format gets no HUD-less image (skip reason
+    `format`).
+- **Status:** `hudless.back_buffer_format`, `hudless.recreated` and
+  `hudless.hdr{captures, probe_ok, probe_default, used, valid, white, ratio,
+  gamma, gui_gamma, gpu_attempts, gpu_matches, parameter, last_attempt}`.
+- **Test (hudless_pass_warp, WARP with GPU-based validation):** 5 HDR steps
+  with valid and invalid CBRenderFrame layouts, the defaults before any
+  capture, and the matched root parameter; 43,200 channels within 1.5 steps
+  of 10-bit of the reference. SDR is unchanged (69,120 channels), also after
+  HDR.
+- **Next:** an HDR run. Read `hdr.valid`, `white`, `parameter` and
+  `probe_default`, and look at generated frames, the HUD especially.
 
 ## Also open from the day
 

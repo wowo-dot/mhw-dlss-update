@@ -274,8 +274,136 @@ int main() {
         // An unwritten slot reads as invalid.
         HudlessPass fresh(f.device.Get(), width, height);
         require(!fresh.probe(0).valid, "unwritten probe");
+
+        // v0.24.8: HDR10. The target R10G10B10A2_UNORM selects the PQ
+        // transform; CBRenderFrame captures (layout-checked) set its
+        // parameters, the shader's defaults before any.
+        require(HudlessPass::compile(HudlessPass::Shader::transform_hdr) != nullptr &&
+                    HudlessPass::compile(HudlessPass::Shader::capture_hdr) != nullptr, "offline HDR compile");
+        require(pass.hdr_supported(), "R10G10B10A2 typed UAV store on WARP");
+        d.Format = HudlessPass::hdr_format;
+        auto hdr_target = f.resource(d, D3D12_HEAP_TYPE_DEFAULT, tag_state);
+        // Brighter columns than SDR (exact in R11G11B10_FLOAT).
+        constexpr float hdr_columns[4][3]{{0.5f, 0.25f, 0.125f}, {8.0f, 1.0f, 0.0f}, {32.0f, 2.0f, 0.75f}, {0.0f, 0.0f, 0.0f}};
+        hr(upload->Map(0, &none, reinterpret_cast<void **>(&texels)), "map HDR scene upload");
+        for (unsigned y = 0; y < height; ++y)
+            for (unsigned x = 0; x < width; ++x) {
+                const auto packed = r11g11b10(hdr_columns[x / (width / 4)]);
+                std::memcpy(texels + y * scene_footprint.Footprint.RowPitch + x * 4, &packed, 4);
+            }
+        upload->Unmap(0, nullptr);
+        // CBRenderFrame candidates at 256-byte strides: fDeltaTime@16,
+        // bSSSEnable@24, bHdrOutput@48, white@52, ratio@56, gamma@60, GUI@64.
+        struct Frame { float delta; std::uint32_t sss, hdr; float white, ratio, gamma; std::uint32_t gui; };
+        constexpr Frame frames[]{{0.016f, 1, 1, 200.0f, 0.25f, 1.2f, 1}, {0.016f, 0, 0, 200.0f, 0.0f, 1.0f, 0},
+                                 {0.016f, 0, 1, 5.0f, 0.0f, 1.0f, 0},    {0.016f, 0, 1, 200.0f, 1.5f, 1.0f, 0},
+                                 {0.016f, 7, 1, 200.0f, 0.0f, 1.0f, 0},  {0.016f, 0, 1, 80.0f, 0.0f, 1.0f, 0}};
+        b.Width = 256 * std::size(frames);
+        auto frame_constants = f.resource(b, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        hr(frame_constants->Map(0, &none, reinterpret_cast<void **>(&cb)), "map frame constants");
+        for (unsigned i = 0; i < std::size(frames); ++i) {
+            const auto &v = frames[i];
+            std::memset(cb + 256 * i, 0, 256);
+            std::memcpy(cb + 256 * i + 16, &v.delta, 4);
+            std::memcpy(cb + 256 * i + 24, &v.sss, 4);
+            std::memcpy(cb + 256 * i + 48, &v.hdr, 4);
+            std::memcpy(cb + 256 * i + 52, &v.white, 4);
+            std::memcpy(cb + 256 * i + 56, &v.ratio, 4);
+            std::memcpy(cb + 256 * i + 60, &v.gamma, 4);
+            std::memcpy(cb + 256 * i + 64, &v.gui, 4);
+        }
+        frame_constants->Unmap(0, nullptr);
+        // Each step: captures (candidate, root parameter), then the transform.
+        struct HdrStep { int captures[2]; unsigned parameter; int kept; std::uint32_t attempts, matches; int last; };
+        constexpr HdrStep hdr_steps[]{
+            {{-1, -1}, 0, -1, 0, 0, -1},  // defaults before any capture
+            {{0, -1}, 4, 0, 1, 1, 0},     // valid, GUI gamma on
+            {{1, 2}, 4, 0, 3, 1, 2},      // SDR output, white level 5: keep 0
+            {{3, 4}, 4, 0, 5, 1, 4},      // ratio 1.5, a garbage boolean: keep 0
+            {{5, -1}, 2, 5, 6, 2, 5}};    // valid again, another parameter
+        const auto readback_pixels = [&](ID3D12Resource *t) {
+            const auto to_copy = transition(t, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            f.list->ResourceBarrier(1, &to_copy);
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+            UINT64 total{};
+            const auto td = t->GetDesc();
+            f.device->GetCopyableFootprints(&td, 0, 1, 0, &fp, nullptr, nullptr, &total);
+            D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
+            dst.pResource = readback.Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            dst.PlacedFootprint = fp;
+            src.pResource = t;
+            src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            f.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            const auto back = transition(t, D3D12_RESOURCE_STATE_COPY_SOURCE, tag_state);
+            f.list->ResourceBarrier(1, &back);
+            return fp;
+        };
+        unsigned hdr_checked{};
+        for (unsigned i = 0; i < std::size(hdr_steps); ++i) {
+            const auto &c = hdr_steps[i];
+            const unsigned slot = i % HudlessPass::slots;
+            if (c.captures[0] >= 0) {
+                for (const int k : c.captures)
+                    if (k >= 0) pass.capture_hdr(f.list.Get(), frame_constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k), c.parameter);
+                f.execute();
+            }
+            auto fill = transition(scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
+            f.list->ResourceBarrier(1, &fill);
+            D3D12_TEXTURE_COPY_LOCATION scene_dst{}, scene_src{};
+            scene_dst.pResource = scene.Get();
+            scene_dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            scene_src.pResource = upload.Get();
+            scene_src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            scene_src.PlacedFootprint = scene_footprint;
+            f.list->CopyTextureRegion(&scene_dst, 0, 0, 0, &scene_src, nullptr);
+            std::swap(fill.Transition.StateBefore, fill.Transition.StateAfter);
+            f.list->ResourceBarrier(1, &fill);
+            pass.record(f.list.Get(), slot, scene.Get(), hdr_target.Get(), tag_state);
+            const auto fp = readback_pixels(hdr_target.Get());
+            f.execute();
+
+            const auto probe = pass.probe(slot);
+            screen::hdr::Parameters used;
+            if (c.kept >= 0) {
+                const auto &k = frames[c.kept];
+                used = {k.white, k.ratio, k.gamma, k.gui != 0};
+            }
+            require(probe.valid && probe.hdr && probe.hdr_ok == (c.kept >= 0) && probe.white == used.white &&
+                        probe.ratio == used.ratio && probe.hdr_gamma == used.gamma && probe.gui_gamma == used.gui_gamma &&
+                        probe.hdr_attempts == c.attempts && probe.hdr_matches == c.matches &&
+                        (c.kept < 0 || probe.hdr_parameter == (i == 4 ? 2u : 4u)) &&
+                        (c.last < 0 || probe.last_white == frames[c.last].white),
+                    "HDR probe step " + std::to_string(i) + ": attempts " + std::to_string(probe.hdr_attempts) + " matches " +
+                        std::to_string(probe.hdr_matches) + " white " + std::to_string(probe.white));
+            void *mapped{};
+            hr(readback->Map(0, nullptr, &mapped), "map HDR readback");
+            const auto *pixels = static_cast<const std::uint8_t *>(mapped);
+            for (unsigned y = 0; y < height; ++y)
+                for (unsigned x = 0; x < width; ++x) {
+                    std::uint32_t packed{};
+                    std::memcpy(&packed, pixels + y * fp.Footprint.RowPitch + x * 4, 4);
+                    const auto &v = hdr_columns[x / (width / 4)];
+                    const auto expected = screen::hdr::encode({v[0], v[1], v[2]}, used);
+                    for (unsigned ch = 0; ch < 3; ++ch) {
+                        const float actual = float((packed >> (10 * ch)) & 1023u);
+                        require(std::abs(actual - expected[ch] * 1023.0f) <= 1.5f,
+                                "HDR pixel step " + std::to_string(i) + " at " + std::to_string(x) + " channel " + std::to_string(ch) +
+                                    ": " + std::to_string(actual) + " vs " + std::to_string(expected[ch] * 1023.0f));
+                        ++hdr_checked;
+                    }
+                    require((packed >> 30) == 3u, "HDR alpha");
+                }
+            const D3D12_RANGE nothing{};
+            readback->Unmap(0, &nothing);
+        }
+        // The SDR target after HDR steps: the SDR transform, HDR flags clear.
+        pass.record(f.list.Get(), 0, scene.Get(), target.Get(), tag_state);
+        f.execute();
+        require(!pass.probe(0).hdr && pass.probe(0).parameters_ok, "SDR after HDR");
         f.messages();
-        std::cout << "hudless_pass_warp: " << std::size(steps) << " steps, " << checked << " channels\n";
+        std::cout << "hudless_pass_warp: " << std::size(steps) << " steps, " << checked << " channels; HDR "
+                  << std::size(hdr_steps) << " steps, " << hdr_checked << " channels\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << "hudless_pass_warp: " << e.what() << '\n';

@@ -31,6 +31,12 @@ struct SlotCamera {
 // Worker, once, after the SDK is attached with the FG plugin loaded, with the
 // scene rectangle in the back buffer (scene_rect.hpp).
 void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_height, SceneRect scene) noexcept;
+// Worker at arming, and the presentation's lifecycle listener after every
+// swap-chain call (v0.24.8): the back buffer's DXGI_FORMAT. The HUD-less image
+// follows it: B8G8R8A8/R8G8B8A8_UNORM through the SDR transform,
+// R10G10B10A2_UNORM (the game's HDR10) through the PQ transform; any other
+// format gets no HUD-less image.
+void back_buffer(unsigned format) noexcept;
 // Worker. Armed requests FG On while valid inputs arrive; disarmed turns it Off
 // at the next Present (Streamline itself stays alive until process exit).
 void arm(bool armed) noexcept;

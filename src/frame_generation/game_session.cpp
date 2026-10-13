@@ -41,8 +41,9 @@ constexpr unsigned system_parameter = 5;
 // Lists closed between a HUD-less record and the next Present that may record
 // a capture (the screen write's list is one of them).
 constexpr unsigned capture_limit = 4;
-enum class HudSkip : unsigned { disabled, no_restore, failed, count };
-constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{"disabled", "no_restore", "failed"};
+// format: the back buffer is neither SDR 8-bit nor HDR10 (v0.24.8).
+enum class HudSkip : unsigned { disabled, no_restore, failed, format, count };
+constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{"disabled", "no_restore", "failed", "format"};
 struct Staged {
     bool valid{};
     std::uint64_t frame{}, epoch{};
@@ -88,8 +89,13 @@ struct Session {
     bool hudless_failed{};
     std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
     std::atomic<bool> capture_window{};  // A HUD-less pass was recorded since the last Present
-    unsigned captures_this_frame{};
+    unsigned captures_this_frame{}, hdr_lists_this_frame{};
     std::uint64_t captures{}, capture_no_cbv{}, capture_limited{}, capture_failed{};
+    // v0.24.8: the back buffer's DXGI_FORMAT (back_buffer()); HDR10 captures
+    // (one per CBV root argument of a closing list), HDR probes with a valid
+    // capture or the shader's defaults, and slot images made for a new format.
+    std::atomic<unsigned> back_buffer_format{};
+    std::uint64_t hdr_captures{}, hdr_probe_ok{}, hdr_probe_default{}, hudless_recreated{};
     std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
         probe_ok{}, probe_fallback{}, probe_invalid{};
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
@@ -174,16 +180,26 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
 }
 
 // The HUD-less image covers exactly the scene rectangle.
-D3D12_RESOURCE_DESC hudless_desc(const D3D12_RESOURCE_DESC &scene) {
+D3D12_RESOURCE_DESC hudless_desc(const D3D12_RESOURCE_DESC &scene, DXGI_FORMAT format = HudlessPass::format) {
     D3D12_RESOURCE_DESC h{};
     h.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     h.Width = scene.Width;
     h.Height = scene.Height;
     h.DepthOrArraySize = h.MipLevels = 1;
     h.SampleDesc.Count = 1;
-    h.Format = HudlessPass::format;
+    h.Format = format;
     h.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     return h;
+}
+// The HUD-less image's format for the back buffer's (v0.24.8): DLSS-G takes
+// HUD-less colour in the back buffer's colour space. UNKNOWN: none.
+DXGI_FORMAT hudless_format(unsigned back_buffer, bool hdr_supported) noexcept {
+    switch (static_cast<DXGI_FORMAT>(back_buffer)) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM: return HudlessPass::format;
+    case DXGI_FORMAT_R10G10B10A2_UNORM: return hdr_supported ? HudlessPass::hdr_format : DXGI_FORMAT_UNKNOWN;
+    default: return DXGI_FORMAT_UNKNOWN;
+    }
 }
 
 bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Resource *scene) {
@@ -214,8 +230,13 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
         if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
             throw std::runtime_error("hudless scene extent");
         s.hudless = std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
+        // In the back buffer's format (SDR or HDR10, the same size); for any
+        // other, none until it changes (record() makes a slot's image then).
+        const auto wanted = hudless_format(s.back_buffer_format.load(), s.hudless->hdr_supported());
+        const auto image = hudless_desc(scene_desc, wanted);
         for (auto &i : s.images) {
-            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &h, tag_state, nullptr, IID_PPV_ARGS(&i.hudless))))
+            if (wanted == DXGI_FORMAT_UNKNOWN) break;
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &image, tag_state, nullptr, IID_PPV_ARGS(&i.hudless))))
                 throw std::runtime_error("hudless image");
             i.hudless->SetName(L"mhw-fg-hudless");
         }
@@ -362,6 +383,7 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 }
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
+void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
 bool frame_generation_on() noexcept { return session.on.load(); }
 bool inputs_settled() noexcept {
     auto &s = session;
@@ -572,7 +594,8 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             if (!probe.valid)
                 ++s.probe_invalid;
             else {
-                ++(probe.parameters_ok ? s.probe_ok : s.probe_fallback);
+                if (probe.hdr) ++(probe.hdr_ok ? s.hdr_probe_ok : s.hdr_probe_default);
+                else ++(probe.parameters_ok ? s.probe_ok : s.probe_fallback);
                 s.last_probe = probe;
             }
         }
@@ -604,6 +627,30 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                 ++s.hud_skips[static_cast<unsigned>(HudSkip::no_restore)];
                 const bool reasons[]{!roots.known, !roots.valid, !roots.generation, !roots.pipeline, !roots.graphics.signature};
                 for (unsigned i = 0; i < 5; ++i) if (reasons[i]) ++s.restore_reasons[i];
+            }
+            // v0.24.8: the slot's image follows the back buffer's format (the
+            // game switches SDR/HDR10 with its own resizes). The slot is free
+            // (fence-gated), so its image can be replaced here.
+            const auto wanted = hudless_format(s.back_buffer_format.load(), s.hudless->hdr_supported());
+            if (wanted == DXGI_FORMAT_UNKNOWN) {
+                ++s.hud_skips[static_cast<unsigned>(HudSkip::format)];
+                restore.reset();
+            } else if (restore && (!image.hudless || image.hudless->GetDesc().Format != wanted)) {
+                ComPtr<ID3D12Device> device;
+                const auto desc = hudless_desc(scene->GetDesc(), wanted);
+                const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+                image.hudless.Reset();
+                if (SUCCEEDED(scene->GetDevice(IID_PPV_ARGS(&device))) &&
+                    SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, tag_state, nullptr,
+                                                              IID_PPV_ARGS(&image.hudless)))) {
+                    image.hudless->SetName(L"mhw-fg-hudless");
+                    ++s.hudless_recreated;
+                } else {
+                    image.hudless.Reset();
+                    note_hudless_error(s, "hudless image for a new back buffer format");
+                    ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
+                    restore.reset();
+                }
             }
             if (restore) {
                 try {
@@ -640,6 +687,28 @@ void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &
     try {
         std::lock_guard lock(s.mutex);
         if (!s.hudless || !s.capture_window.load()) return;
+        // v0.24.8: with an HDR10 back buffer, every CBV root argument of the
+        // closing list is offered to the CBRenderFrame capture, which keeps
+        // only a layout-checked one (and its root parameter); at most
+        // capture_limit lists a frame, as for the SDR capture.
+        if (roots.known && roots.valid && s.hdr_lists_this_frame < capture_limit &&
+            hudless_format(s.back_buffer_format.load(), s.hudless->hdr_supported()) == HudlessPass::hdr_format) {
+            unsigned offered{};
+            for (unsigned i = 0; i < roots.graphics.arguments.size() && offered < 16; ++i) {
+                const auto &a = roots.graphics.arguments[i];
+                if (a.kind != temporal_present::ArgumentKind::cbv || !a.address) continue;
+                try {
+                    s.hudless->capture_hdr(list, a.address, i);
+                    ++s.hdr_captures;
+                    ++offered;
+                } catch (const std::exception &e) {
+                    note_hudless_error(s, e.what());
+                    ++s.capture_failed;
+                    break;
+                }
+            }
+            if (offered) ++s.hdr_lists_this_frame;
+        }
         const auto &system = roots.graphics.arguments[system_parameter];
         if (!roots.known || !roots.valid || system.kind != temporal_present::ArgumentKind::cbv || !system.address) {
             ++s.capture_no_cbv;
@@ -718,6 +787,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         ++s.presents;
         s.capture_window.store(false);
         s.captures_this_frame = 0;
+        s.hdr_lists_this_frame = 0;
         if (!s.sdk) return;
         // A missed present_end must not leak a tagged slot.
         if (s.pending != none) finish_pending(s, false);
@@ -913,7 +983,16 @@ void write(std::ostream &o) {
     }
     o << "],\"captures\":" << s.captures
       << ",\"capture_no_cbv\":" << s.capture_no_cbv << ",\"capture_limited\":" << s.capture_limited
-      << ",\"capture_failed\":" << s.capture_failed << ",\"error\":\"" << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
+      << ",\"capture_failed\":" << s.capture_failed
+      << ",\"back_buffer_format\":" << s.back_buffer_format.load() << ",\"recreated\":" << s.hudless_recreated
+      << ",\"hdr\":{\"captures\":" << s.hdr_captures << ",\"probe_ok\":" << s.hdr_probe_ok << ",\"probe_default\":" << s.hdr_probe_default
+      << ",\"used\":" << s.last_probe.hdr << ",\"valid\":" << s.last_probe.hdr_ok << ",\"white\":" << Number{s.last_probe.white}
+      << ",\"ratio\":" << Number{s.last_probe.ratio} << ",\"gamma\":" << Number{s.last_probe.hdr_gamma}
+      << ",\"gui_gamma\":" << s.last_probe.gui_gamma << ",\"gpu_attempts\":" << s.last_probe.hdr_attempts
+      << ",\"gpu_matches\":" << s.last_probe.hdr_matches << ",\"parameter\":" << s.last_probe.hdr_parameter
+      << ",\"last_attempt\":[" << Number{s.last_probe.last_white} << ',' << Number{s.last_probe.last_ratio} << ','
+      << Number{s.last_probe.last_hdr_gamma} << ',' << s.last_probe.last_gui << "]}"
+      << ",\"error\":\"" << s.hudless_error.data() << "\"},\"staged\":" << s.staged_count
       << ",\"staged_dropped\":" << s.staged_dropped + s.queue.dropped << ",\"final_unstaged\":" << s.final_unstaged
       << ",\"final_mismatch\":" << s.final_mismatch << ",\"mismatch_delta\":[" << s.mismatch_delta[0] << ','
       << s.mismatch_delta[1] << ',' << s.mismatch_delta[2] << ',' << s.mismatch_delta[3] << ',' << s.mismatch_delta[4]
