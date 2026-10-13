@@ -46,15 +46,6 @@ void arm(bool armed) noexcept;
 // (DLSS-G guide 6.4); On again: DLSS-G allocates them at its next On (one
 // short stutter).
 void enable(bool enabled) noexcept;
-// Worker, at arming: the game's swap chain (the physical chain Streamline
-// made). While DLSS-G is Off for a while (the player's Off, DLSS off, loading)
-// Streamline presents on the game's thread and lowers the chain's maximum
-// frame latency to 1; the game waits on the chain's waitable at the start of
-// every frame, so each frame would wait for the previous one to be shown
-// (game-129, game-130: 112-157 fps against 254 with frame generation on). The
-// session holds the game's own latency then and gives Streamline's back when
-// DLSS-G is On again (logged in write(), "latency").
-void latency_target(std::uintptr_t native_swap) noexcept;
 bool frame_generation_on() noexcept;
 // Worker, live preset change: disarmed, Off at the last Present, and no
 // input slot holding a copy on a list not yet submitted or one the SDK may

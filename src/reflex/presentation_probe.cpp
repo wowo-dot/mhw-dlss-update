@@ -60,9 +60,10 @@ void loader_log(al_log_level_t level, const std::string& text) noexcept;
 #include <memory>
 // "<dll>.fg-mode": "off" runs without DLSS-G (A/B diagnostic); "2x".."8x" sets
 // the starting frame multiplier (default 2x). Live changes: "<log>.mfg-<n>".
-// fg_plugin: DLSS-G requested at start, then usable (loaded and supported);
-// fg_loaded: loaded after attach (Streamline paces the swap chain, Reflex
-// stays on). Both are written once by the device's attach.
+// fg_plugin: DLSS-G requested at start, then usable (requested and supported;
+// the device's attach decides). fg_loaded: loaded now (Streamline paces the
+// swap chain, Reflex stays on); v0.27.4 loads and unloads it with the swap
+// chain (fg-live-toggle.md), so the worker updates it after each switch.
 namespace { bool fg_plugin = true, fg_loaded = false; unsigned fg_multiplier = 2;
             std::atomic<unsigned> fg_support_state{};std::atomic<bool> fg_loaded_state{}; }
 #ifdef MHW_ALPHA
@@ -215,8 +216,77 @@ bool apply_reflex_mode(bool loaded) {
 // retried every 2 s, up to 15 times, unless the menu asks for another mode.
 struct DlssRetry {std::uint64_t at{};mhw::continuous_dlaa::ModeRequest request{};unsigned count{};};
 // Frame generation was configured at arming and has not stopped since: it is
-// armed whenever DLSS runs (its inputs are DLSS's), paused while DLSS is off.
+// armed whenever DLSS runs with DLSS-G loaded (its inputs are DLSS's).
 bool fg_ready{};
+// v0.27.4 (fg-live-toggle.md): the game's own "make the buffers again"
+// request and its latency waitable, checked once at arming.
+// - sub_14229C320 (the HDR switch) sets 0x4000 in sRender+0x1F548 when the
+//   chain's buffers must be made again; sub_14229B020 (gated by
+//   frame_boundaries.cpp) consumes it at the next frame and resizes;
+// - sub_1423ADE30 waits on cD3DRender+0x10F0 (sRender+0x78), which
+//   cD3DRender::initForD3D12 (gated) fills from GetFrameLatencyWaitableObject.
+bool game_chain_ready{};
+bool game_chain_qualified() noexcept {
+    std::uintptr_t renderer{}, backend{};
+    return pb::verify_code(image,0x229c320,0x44,"4d688f8b830ca460e4ec196111c5f0cd73dbc95089b2a7ebcb6c2bbc4a22a0c0")&&
+           pb::verify_code(image,0x23ade30,0x47,"6c9808bc6ea7ff818d46b1e8d91ff3abfd6e0db181b1f9b503370707746b1900")&&
+           pb::verify_code(image,0x229b020,2420,"a4a09901e108fe38dabfb6d9df3a52f9d5ccd68a12b8b8e6f7a9ea671cbf5e90")&&
+           pb::verify_code(image,0x23a48e0,11101,"8757a054cc1c203128fdfb73ac88975dda7dc73ef5ef1a53a80f22cd0eb8e500")&&
+           pb::read(image+0x51c4480,renderer)&&renderer&&pb::read(renderer+0x78,backend)&&backend;
+}
+std::uintptr_t game_waitable_slot() noexcept {
+    std::uintptr_t renderer{}, backend{};
+    return pb::read(image+0x51c4480,renderer)&&renderer&&pb::read(renderer+0x78,backend)&&backend?backend+0x10F0:0;
+}
+bool game_resize_request() noexcept {
+    std::uintptr_t renderer{};
+    if(!pb::read(image+0x51c4480,renderer)||!renderer)return false;
+    __try{_InterlockedOr(reinterpret_cast<volatile long*>(renderer+0x1F548),0x4000);return true;}
+    __except(EXCEPTION_EXECUTE_HANDLER){return false;}
+}
+// A switch in progress: asked at, game requests made, the presentation's
+// outcome count before it, and what was asked.
+struct GenerationSwitch {std::uint64_t asked_at{};unsigned tries{};std::uint64_t outcomes{};bool want{},active{};};
+std::uint64_t switch_outcomes(const mhw::reflex::PresentationStats& v) noexcept {return v.switches+v.switch_failures+v.switch_refusals;}
+// Worker, every loop: DLSS-G is loaded exactly while frame generation is on
+// and DLSS runs. A change asks the presentation for a switch and the game for
+// its buffer remake, in which the switch happens; frame generation is Off
+// with its inputs settled before an unload, armed again after a load.
+void sync_generation(GenerationSwitch& g){
+    namespace fg=mhw::frame_generation::game;namespace cd=mhw::continuous_dlaa;
+    if(!fg_plugin||!game_chain_ready||!fg_ready)return;
+    const auto v=presentation->snapshot();
+    if(!v.identity)return;
+    const auto now=GetTickCount64();
+    if(g.active){
+        if(switch_outcomes(v)==g.outcomes){
+            if(now-g.asked_at<1500)return;
+            // The game did not resize (paused, minimized): ask again, up to 20 times.
+            if(++g.tries<20){game_resize_request();g.asked_at=now;return;}
+            presentation->request_switch(fg_loaded);  // nothing to do at a later resize
+            log<<"{\"event\":\"fg_switch\",\"want\":"<<g.want<<",\"done\":false,\"reason\":\"no resize\"}\n"<<std::flush;
+            g={};return;
+        }
+        fg_loaded=v.frame_generation_loaded;fg_loaded_state.store(fg_loaded);
+        log<<"{\"event\":\"fg_switch\",\"want\":"<<g.want<<",\"done\":true,\"loaded\":"<<fg_loaded<<",\"reason\":"<<v.switch_reason
+           <<",\"switches\":"<<v.switches<<",\"failures\":"<<v.switch_failures<<",\"refusals\":"<<v.switch_refusals
+           <<",\"hr\":"<<v.switch_last_hr<<",\"waitable_failures\":"<<v.waitable_failures<<",\"tries\":"<<g.tries
+           <<",\"ms\":"<<now-g.asked_at<<",\"buffers\":"<<v.buffers<<"}\n"<<std::flush;
+        mhw::alpha::status::reflex_mode(reflex_mode_name(reflex_applied.load()));
+        if(fg_loaded&&cd::live_modes()&&!cd::dlss_off())fg::arm(true);
+        g={};return;
+    }
+    const bool want=fg::status().enabled&&cd::live_modes()&&!cd::dlss_off();
+    if(want==fg_loaded)return;
+    if(!want){
+        // DLSS-G Off at the next Present and no input slot in use.
+        if(fg::status().armed)fg::arm(false);
+        if(fg::status().on||!fg::inputs_settled())return;
+    }
+    if(!presentation->request_switch(want))return;
+    g={now,0,switch_outcomes(v),want,true};
+    game_resize_request();
+}
 // Worker: after a scene change, frame generation takes the new scene
 // rectangle (centred in the back buffer); false if it does not fit.
 bool configure_generation_scene(){
@@ -262,7 +332,7 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted,DlssRetry 
         if(released&&scene)configured=configure_generation_scene();
     }
     const bool running=cd::live_modes()&&!cd::dlss_off();
-    if(fg_ready&&running&&released&&configured)fg::arm(true);
+    if(fg_ready&&fg_loaded&&running&&released&&configured)fg::arm(true);
     log<<"{\"event\":\"dlss_mode_change\",\"from\":"<<quoted(from_off?"off":mhw::alpha::dlss_mode_value(from))
        <<",\"requested\":"<<quoted(wanted.off?"off":mhw::alpha::dlss_mode_value(wanted.mode))
        <<",\"mode\":"<<quoted(r.off?"off":mhw::alpha::dlss_mode_value(r.mode))<<",\"scene\":"<<r.scene
@@ -304,7 +374,7 @@ void change_dlss_scene(SceneRetry &retry){
     if(generation&&r.ok){
         released=fg::release_inputs(true);
         configured=released&&configure_generation_scene();
-        if(configured)fg::arm(true);
+        if(configured&&fg_loaded)fg::arm(true);
         else{fg_ready=false;mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");}
     }
     const bool last=!r.ok&&r.retry&&retry.count+1>=40;
@@ -468,14 +538,22 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
             mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "DLSS-G-support");
 #endif
         }
+#ifdef MHW_ALPHA
+        // v0.27.4: frame generation off (or DLSS off) at start: the game's
+        // chain is made without DLSS-G (full speed); a switch loads it later.
+        else if (!alpha_config.frame_generation || !alpha_config.dlss) {
+            const auto unloaded = sdk.unload_frame_generation();
+            log << "{\"event\":\"fg_unloaded\",\"reason\":\"off_at_start\",\"result\":" << static_cast<int>(unloaded) << "}\n" << std::flush;
+        }
+#endif
     }
 #endif
     api(sdk.attach(device_pin.Get()), "attach-native-device");
 #ifdef MHW_FG_GAME
     // Loaded (also a plugin that could not be unloaded): Streamline owns the
-    // swap chain. Usable only if it is supported too.
+    // swap chain. Usable: requested and supported (loaded now or later).
     fg_loaded = sdk.frame_generation();
-    fg_plugin = fg_plugin && fg_loaded;
+    fg_plugin = fg_plugin && sdk.frame_generation_requested();
     fg_loaded_state.store(fg_loaded); fg_support_state.store(fg_plugin ? 2U : 1U);
     log << "{\"event\":\"fg_loaded\",\"loaded\":" << fg_loaded << ",\"usable\":" << fg_plugin << "}\n" << std::flush;
     if (fg_loaded) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
@@ -1147,11 +1225,13 @@ DWORD WINAPI worker(void*) noexcept {
                     mhw::frame_generation::game::mode(fg_mode, fg_target);
 #endif
 #ifdef MHW_ALPHA
-                    // The game's own frame latency while DLSS-G is off (game_session.hpp).
-                    mhw::frame_generation::game::latency_target(chain.native_swapchain);
-                    // Armed whenever DLSS runs (fg_ready); paused while the player has DLSS off.
+                    // Armed whenever DLSS runs with DLSS-G loaded (fg_ready); v0.27.4
+                    // loads and unloads DLSS-G with the swap chain (sync_generation).
                     fg_ready=true;
-                    if(!mhw::continuous_dlaa::dlss_off())mhw::frame_generation::game::arm(true);
+                    game_chain_ready=game_chain_qualified();
+                    if(game_chain_ready)presentation->waitable_slot(game_waitable_slot());
+                    log<<"{\"event\":\"fg_switch_ready\",\"game_chain\":"<<game_chain_ready<<",\"identity\":"<<presentation->snapshot().identity<<"}\n"<<std::flush;
+                    if(!mhw::continuous_dlaa::dlss_off()&&fg_loaded)mhw::frame_generation::game::arm(true);
 #else
                     mhw::frame_generation::game::arm(true);
 #endif
@@ -1176,7 +1256,7 @@ DWORD WINAPI worker(void*) noexcept {
                 // After a live mode change: the sleep count at which the driver is
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
-                DlssRetry dlss_retry;SceneRetry scene_retry;
+                DlssRetry dlss_retry;SceneRetry scene_retry;GenerationSwitch generation_switch;
                 // perf_ab (diagnostic, FG off): DLSS paused and running in
                 // turn, 30 s each, logged with the time to the plugin log.
                 std::uint64_t perf_ab_next=alpha_config.perf_ab&&!fg_loaded?GetTickCount64()+30000:0;bool perf_ab_paused=false;
@@ -1244,6 +1324,7 @@ DWORD WINAPI worker(void*) noexcept {
                         if(!applied)perf_ab_next=0;
                     }
                     // The game's own aspect switch (render_resolution yielded).
+                    sync_generation(generation_switch);
                     // While the player has DLSS off it waits for the way back (change_dlss_mode).
                     if(mhw::render_resolution::scene_changed()&&GetTickCount64()>=scene_retry.at&&!mhw::continuous_dlaa::dlss_off())
                         change_dlss_scene(scene_retry);
@@ -1400,7 +1481,10 @@ DWORD WINAPI worker(void*) noexcept {
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes
                        <<",\"width\":"<<stats.width<<",\"height\":"<<stats.height<<",\"buffers\":"<<stats.buffers<<",\"faults\":"<<stats.faults
-                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"queues\":"<<stats.queues<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr<<"}\n"<<std::flush;
+                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"queues\":"<<stats.queues<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr
+                       <<",\"identity\":"<<stats.identity<<",\"identity_refused\":"<<stats.identity_refused<<",\"frame_generation_loaded\":"<<stats.frame_generation_loaded
+                       <<",\"switches\":"<<stats.switches<<",\"switch_failures\":"<<stats.switch_failures<<",\"switch_refusals\":"<<stats.switch_refusals
+                       <<",\"switch_reason\":"<<stats.switch_reason<<",\"switch_waits\":"<<stats.switch_waits<<"}\n"<<std::flush;
                     last_resizes=stats.resizes;last_swapchains=stats.swapchains;
                 }
                 Sleep(100);

@@ -74,6 +74,13 @@ target_compile_options(mhw_frame_generation_on_fixture PRIVATE /W4 /WX /permissi
 target_link_options(mhw_frame_generation_on_fixture PRIVATE /guard:cf /OPT:NOICF)
 set_target_properties(mhw_frame_generation_on_fixture PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+# v0.27.4: the live frame generation switch (identity chain), owned window.
+add_executable(mhw_frame_generation_switch_fixture tools/frame_generation_switch_fixture.cpp)
+target_link_libraries(mhw_frame_generation_switch_fixture PRIVATE mhw_reflex_presentation user32)
+target_compile_options(mhw_frame_generation_switch_fixture PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /external:W0 /guard:cf)
+target_link_options(mhw_frame_generation_switch_fixture PRIVATE /guard:cf /OPT:NOICF)
+set_target_properties(mhw_frame_generation_switch_fixture PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 add_executable(mhw_frame_generation_direct_fixture tools/frame_generation_on_fixture.cpp)
 target_compile_definitions(mhw_frame_generation_direct_fixture PRIVATE MHW_FG_DIRECT_FIXTURE)
 target_link_libraries(mhw_frame_generation_direct_fixture PRIVATE mhw_reflex_presentation user32)
@@ -126,6 +133,13 @@ if(BUILD_TESTING)
     target_compile_options(reflex_present_result_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     target_link_libraries(reflex_present_result_tests PRIVATE mhw_astera_hooks)
     add_test(NAME reflex_present_result COMMAND reflex_present_result_tests)
+    # v0.27.4: the identity chain shares the window chain's class (WARP).
+    add_executable(identity_chain_tests tests/identity_chain_tests.cpp)
+    target_compile_features(identity_chain_tests PRIVATE cxx_std_20)
+    target_compile_definitions(identity_chain_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    target_compile_options(identity_chain_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_link_libraries(identity_chain_tests PRIVATE d3d12 dxgi dxguid user32)
+    add_test(NAME identity_chain COMMAND identity_chain_tests)
 
     add_executable(reflex_owned_interface_tests tests/reflex_owned_interface_tests.cpp)
     target_compile_features(reflex_owned_interface_tests PRIVATE cxx_std_20)

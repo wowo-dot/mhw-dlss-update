@@ -21,6 +21,15 @@ struct PresentationStats {
     std::uintptr_t native_device{}, native_swapchain{}, proxy_swapchain{};
     unsigned installed_hooks{}, pending_calls{};
     bool routing{}, restored{};
+    // v0.27.4 (fg-live-toggle.md): the game holds the identity chain; real
+    // chains made again by switch_chain() and how the last request ended
+    // (0 none, 1 with DLSS-G, 2 without, 3 refused: not possible here, 4 refused:
+    // exclusive fullscreen, 5 refused: the game's waitable not as expected,
+    // 6 failed and made again as before, 7 failed: no real chain).
+    bool identity{}, frame_generation_loaded{};
+    std::uint64_t identity_refused{}, switches{}, switch_failures{}, switch_refusals{}, waitable_failures{}, switch_waits{};
+    unsigned switch_reason{}, switch_pending{};
+    std::uint32_t switch_last_hr{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
@@ -63,8 +72,9 @@ struct LifecycleListener {
 // No frame tokens, sleep, markers, resource tags or rendering work here.
 class Presentation final {
 public:
-    // The FG scene variant also hooks ResizeTarget (13); others install 12.
-    static constexpr unsigned hook_capacity = 13;
+    // Device, factory and swap-chain detours; v0.27.4 adds the identity
+    // chain's routed methods (identity_chain.hpp).
+    static constexpr unsigned hook_capacity = 26;
     static constexpr unsigned lifecycle_capacity = 64;
     struct State;
     explicit Presentation(Streamline& sdk);
@@ -87,6 +97,16 @@ public:
     void ownership_running();
     void write_ownership(std::ostream&) const;
     PresentationStats snapshot() const;
+    // v0.27.4: the game's next ResizeBuffers on the identity chain makes the
+    // real chain again with (`frame_generation`) or without DLSS-G
+    // (Streamline's DLSS-G guide 18.0). The caller has DLSS-G Off and asks the
+    // game for that resize. False without an identity chain or without DLSS-G
+    // requested at slInit. Any thread.
+    bool request_switch(bool frame_generation) noexcept;
+    // Worker: where the game keeps the latency waitable it got from the
+    // identity chain (cD3DRender+0x10F0, checked by the caller's code gate);
+    // a switch replaces it there.
+    void waitable_slot(std::uintptr_t address) noexcept;
     bool stop() noexcept;
     // Requires successful stop and SDK shutdown. False retains all pins.
     bool release_after_shutdown() noexcept;

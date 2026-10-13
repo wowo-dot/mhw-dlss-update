@@ -77,7 +77,7 @@ void Streamline::initialize(const std::filesystem::path& runtime, const std::fil
     if (module_ || !runtime.is_absolute() || !logs.is_absolute() ||
         (selection != StreamlineFeatures::reflex_only && selection != StreamlineFeatures::reflex_and_frame_generation))
         throw std::runtime_error("Streamline initialization arguments");
-    frame_generation_ = selection == StreamlineFeatures::reflex_and_frame_generation;
+    frame_generation_ = frame_generation_requested_ = selection == StreamlineFeatures::reflex_and_frame_generation;
     const auto root = std::filesystem::canonical(runtime);
     // Official 2.12.0 production binaries only. Verify every requested plugin
     // before executing any SDK code. No OTA or downloaded plugin loading.
@@ -134,6 +134,7 @@ sl::Result Streamline::attach(void* native_device) {
     if (!initialized_ || !attach_) return sl::Result::eErrorNotInitialized;
     const auto result = attach_(native_device);
     if (result == sl::Result::eOk) {
+        attached_ = true;
         feature(feature_, sl::kFeatureReflex, "slReflexSleep", sleep_);
         feature(feature_, sl::kFeaturePCL, "slPCLSetMarker", marker_);
         feature(feature_, sl::kFeatureReflex, "slReflexSetOptions", options_);
@@ -150,10 +151,37 @@ sl::Result Streamline::attach(void* native_device) {
     return result;
 }
 sl::Result Streamline::unload_frame_generation() {
-    if (!initialized_ || !set_loaded_ || !frame_generation_) return sl::Result::eErrorNotInitialized;
-    const auto result = set_loaded_(sl::kFeatureDLSS_G, false);
-    if (result == sl::Result::eOk) frame_generation_ = false;
-    return result;
+    if (!frame_generation_) return sl::Result::eErrorNotInitialized;
+    return frame_generation_load(false);
+}
+sl::Result Streamline::frame_generation_load(bool loaded) {
+    if (!initialized_ || !set_loaded_ || !loaded_ || !frame_generation_requested_) return sl::Result::eErrorNotInitialized;
+    if (loaded == frame_generation_) return sl::Result::eOk;
+    if (!loaded) {
+        // Nothing calls into the plugin once it is unloaded.
+        frame_generation_options_ = nullptr;
+        frame_generation_state_ = nullptr;
+        frame_generation_ = false;
+        return set_loaded_(sl::kFeatureDLSS_G, false);
+    }
+    auto result = set_loaded_(sl::kFeatureDLSS_G, true);
+    bool now{};
+    if (result == sl::Result::eOk && (result = loaded_(sl::kFeatureDLSS_G, now)) == sl::Result::eOk && !now)
+        result = sl::Result::eErrorFeatureNotSupported;
+    if (result != sl::Result::eOk) return result;
+    // Before attach, attach() resolves them.
+    if (attached_) {
+        void* options{}; void* state{};
+        if (feature_(sl::kFeatureDLSS_G, "slDLSSGSetOptions", options) != sl::Result::eOk || !options ||
+            feature_(sl::kFeatureDLSS_G, "slDLSSGGetState", state) != sl::Result::eOk || !state) {
+            set_loaded_(sl::kFeatureDLSS_G, false);
+            return sl::Result::eErrorFeatureMissing;
+        }
+        frame_generation_options_ = reinterpret_cast<PFun_slDLSSGSetOptions*>(options);
+        frame_generation_state_ = reinterpret_cast<PFun_slDLSSGGetState*>(state);
+    }
+    frame_generation_ = true;
+    return sl::Result::eOk;
 }
 sl::Result Streamline::frame_generation_free(const sl::ViewportHandle& viewport) const {
     return frame_generation_ && free_ ? free_(sl::kFeatureDLSS_G, viewport) : sl::Result::eErrorNotInitialized;
@@ -252,7 +280,7 @@ sl::Result Streamline::shutdown() noexcept {
         sleep_ = nullptr; marker_ = nullptr; options_ = nullptr; state_ = nullptr;
         requirements_ = nullptr; frame_generation_options_ = nullptr; frame_generation_state_ = nullptr;
         loaded_ = nullptr; set_loaded_ = nullptr; free_ = nullptr;
-        frame_generation_ = false;
+        frame_generation_ = frame_generation_requested_ = attached_ = false;
     }
     return result;
 }

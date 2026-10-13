@@ -119,8 +119,10 @@ void run(int argc, wchar_t** argv) {
             hr(factory->CreateSwapChainForHwnd(queue.Get(), window.hwnd, &sc, nullptr, nullptr, &swap), "native returned swap");
             hr(swap.As(&chain), "swap3");
             const auto stats = bridge.snapshot();
-            require(stats.native_swapchain == reinterpret_cast<std::uintptr_t>(chain.Get()) &&
-                stats.proxy_swapchain != stats.native_swapchain && stats.installed_hooks == 12, "native/proxy separation");
+            // v0.27.4: the application holds the identity chain (identity_chain.hpp).
+            require(stats.identity && stats.native_swapchain != reinterpret_cast<std::uintptr_t>(chain.Get()) &&
+                stats.proxy_swapchain != stats.native_swapchain && stats.installed_hooks == mhw::reflex::Presentation::hook_capacity,
+                "identity/native/proxy separation");
         };
         create_chain();
 #ifdef MHW_REFLEX_FRAME_FIXTURE

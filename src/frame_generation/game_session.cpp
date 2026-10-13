@@ -27,20 +27,13 @@ constexpr unsigned slot_count = 3, none = InputRing<slot_count>::none;
 constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;  // DLSS converter output state
 const sl::ViewportHandle viewport{0};
 
-enum class Off : unsigned { not_armed, no_token, no_ready, camera, constants, tags, options, disabled, count };
+enum class Off : unsigned { not_armed, no_token, no_ready, camera, constants, tags, options, disabled, unloaded, count };
 constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
-    "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options", "disabled"};
+    "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options", "disabled", "unloaded"};
 // The player's Off frees DLSS-G's resources this many Presents after it, when
 // its last On frames are done on the GPU (the paced chain queues one frame).
 constexpr unsigned free_after_presents = 4;
-// The game's own maximum frame latency: cD3DRender::initForD3D12 calls
-// mpSwapChain12->SetMaximumFrameLatency(3) and keeps the chain's waitable,
-// which the game thread waits on (1 s timeout, sub_1423ADE30 from 0x229b020)
-// at the start of every frame (clean image, v0.27.3).
-constexpr UINT game_frame_latency = 3;
-// DLSS-G Off this many Presents in a row before the game's latency is held;
-// shorter Offs are left to Streamline.
-constexpr unsigned latency_hold_after = 8;
+
 
 struct Images {
     ComPtr<ID3D12Resource> depth, motion, hudless;
@@ -93,14 +86,6 @@ struct Session {
     unsigned disabled_presents{};
     bool freed{};
     std::uint64_t frees{}, free_failed{};
-    // latency_target(): the chain; Presents in a row with DLSS-G Off and On;
-    // Streamline's latency while On (sampled; 0 unknown), the value found at
-    // the last check, whether the game's is held, and the outcomes.
-    Microsoft::WRL::ComPtr<IDXGISwapChain2> chain;
-    unsigned off_streak{}, on_presents{};
-    UINT latency_on{}, latency_seen{};
-    bool latency_held{};
-    std::uint64_t latency_sets{}, latency_restores{}, latency_failed{};
     InputRing<slot_count> ring;
     std::array<Images, slot_count> images;
     std::array<bool, slot_count> slot_hudless{};
@@ -298,50 +283,9 @@ bool same_image(const D3D12_RESOURCE_DESC &a, const D3D12_RESOURCE_DESC &b) {
            a.MipLevels == b.MipLevels && a.DepthOrArraySize == b.DepthOrArraySize && a.SampleDesc.Count == b.SampleDesc.Count;
 }
 
-// Owner thread, under the session lock, every Present that leaves DLSS-G Off:
-// after latency_hold_after of them, the game's own latency, set again whenever
-// Streamline lowered it. A failed call gives up for the session.
-void hold_game_latency(Session &s) {
-    if (!s.chain || ++s.off_streak < latency_hold_after) return;
-    UINT now{};
-    if (FAILED(s.chain->GetMaximumFrameLatency(&now))) {
-        ++s.latency_failed;
-        s.chain.Reset();
-        return;
-    }
-    s.latency_seen = now;
-    s.latency_held = true;
-    if (now == game_frame_latency) return;
-    if (SUCCEEDED(s.chain->SetMaximumFrameLatency(game_frame_latency))) ++s.latency_sets;
-    else {
-        ++s.latency_failed;
-        s.chain.Reset();
-    }
-}
-// Owner thread, under the session lock, every Present with DLSS-G On:
-// Streamline's latency back after a hold, else sampled now and then.
-void release_game_latency(Session &s) {
-    s.off_streak = 0;
-    if (!s.chain) return;
-    if (s.latency_held) {
-        s.latency_held = false;
-        s.on_presents = 0;
-        if (!s.latency_on) return;  // never seen On: Streamline sets its own
-        if (SUCCEEDED(s.chain->SetMaximumFrameLatency(s.latency_on))) ++s.latency_restores;
-        else {
-            ++s.latency_failed;
-            s.chain.Reset();
-        }
-        return;
-    }
-    if ((s.on_presents++ & 63) != 32) return;  // a while after the On began
-    if (UINT now{}; SUCCEEDED(s.chain->GetMaximumFrameLatency(&now))) s.latency_on = now;
-}
-
 // Owner thread, under the session lock. Null tags release SDK references.
 void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     ++s.off[static_cast<unsigned>(reason)];
-    hold_game_latency(s);
     if (!s.on.load()) return;
     if (token) {
         sl::Extent extent{0, 0, s.output_width, s.output_height};
@@ -453,12 +397,7 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
 void enable(bool enabled) noexcept { session.enabled.store(enabled); }
-void latency_target(std::uintptr_t native_swap) noexcept {
-    std::lock_guard lock(session.mutex);
-    session.chain.Reset();
-    if (native_swap && FAILED(reinterpret_cast<IUnknown *>(native_swap)->QueryInterface(IID_PPV_ARGS(&session.chain))))
-        ++session.latency_failed;
-}
+
 void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
 bool frame_generation_on() noexcept { return session.on.load(); }
 bool inputs_settled() noexcept {
@@ -867,6 +806,17 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         if (!s.sdk) return;
         // A missed present_end must not leak a tagged slot.
         if (s.pending != none) finish_pending(s, false);
+        // v0.27.4: DLSS-G unloaded (fg-live-toggle.md): nothing to tag or set;
+        // it is Off with nothing held when it loads again with a new chain.
+        if (!s.sdk->frame_generation()) {
+            ++s.off[static_cast<unsigned>(Off::unloaded)];
+            s.on.store(false);
+            s.applied_generated = 0;
+            s.applied_mode = sl::DLSSGMode::eOff;
+            s.shown_generated.store(0);
+            s.freed = true;
+            return;
+        }
         if (!s.enabled.load()) {
             turn_off(s, token, Off::disabled);
             // A long-term Off (guide 6.4): eOff, then slFreeResources once its
@@ -996,7 +946,6 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             s.shown_dynamic.store(w.mode == sl::DLSSGMode::eDynamic);
         }
         s.pending = slot;
-        release_game_latency(s);
         s.last = {true, entry.frame, entry.epoch, camera};
         ++s.tagged;
         if (frame.reset) ++s.reset_tags;
@@ -1051,9 +1000,7 @@ void write(std::ostream &o) {
     const auto &r = s.ring.counters();
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
       << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees << ",\"free_failed\":" << s.free_failed
-      << ",\"latency\":{\"game\":" << game_frame_latency << ",\"on\":" << s.latency_on << ",\"seen\":" << s.latency_seen
-      << ",\"held\":" << s.latency_held << ",\"sets\":" << s.latency_sets << ",\"restores\":" << s.latency_restores
-      << ",\"failed\":" << s.latency_failed << ",\"chain\":" << (s.chain != nullptr) << '}'
+      << ",\"loaded\":" << (s.sdk && s.sdk->frame_generation())
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
       << ",\"mode\":{\"requested\":" << s.requested_mode.load() << ",\"target\":" << s.requested_target.load()

@@ -30,7 +30,15 @@ public:
     // Before attach: unloads the requested DLSS-G plugin (a card or system
     // without frame generation); Streamline then leaves the swap chain alone.
     sl::Result unload_frame_generation();
-    // After attach: DLSS-G is loaded (Streamline owns the swap chain's pacing).
+    // v0.27.4: loads or unloads the requested DLSS-G plugin at any time
+    // (slSetFeatureLoaded); after attach a load resolves its functions again.
+    // Only with no swap chain alive (DLSS-G guide 18.0: the chain is made
+    // again after every switch). The caller serializes it with every other
+    // DLSS-G call.
+    sl::Result frame_generation_load(bool loaded);
+    // DLSS-G was requested at slInit (it can be loaded later).
+    bool frame_generation_requested() const noexcept { return frame_generation_requested_; }
+    // DLSS-G is loaded now (Streamline owns the swap chain's pacing).
     bool frame_generation() const noexcept { return frame_generation_; }
     // Frees DLSS-G's resources after a long-term Off (the player turned frame
     // generation off; DLSS-G guide 6.4). The present thread, with it Off.
@@ -74,6 +82,8 @@ private:
     bool init_attempted_{};
     bool initialized_{};
     bool frame_generation_{};
+    bool frame_generation_requested_{};
+    bool attached_{};
     PFun_slInit* init_{};
     PFun_slShutdown* shutdown_{};
     PFun_slSetD3DDevice* attach_{};

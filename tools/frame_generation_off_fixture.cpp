@@ -267,8 +267,8 @@ void run(int argc, wchar_t** argv) {
         }
         const auto stats = bridge.snapshot();
         require(stats.presents == count && stats.sdk_paced_presents == count && stats.test_presents == 1 && stats.resizes == 2 &&
-            stats.queues == 1 && stats.swapchains == 1 && !stats.faults && stats.installed_hooks == 12 &&
-            stats.native_swapchain == reinterpret_cast<std::uintptr_t>(chain.Get()) &&
+            stats.queues == 1 && stats.swapchains == 1 && !stats.faults && stats.installed_hooks == mhw::reflex::Presentation::hook_capacity &&
+            stats.identity && stats.native_swapchain != reinterpret_cast<std::uintptr_t>(chain.Get()) &&
             stats.proxy_swapchain != stats.native_swapchain, "FG Off native routing");
         require(frames.session.completed() == count && frames.session.tokens() == count && frames.session.sleeps() == count &&
             frames.session.markers() == count * 6 && frames.begins == count && frames.ends == count &&
