@@ -22,6 +22,18 @@ namespace mhw::alpha::menu {
 namespace {
 namespace mm = menu_model;
 namespace fg = frame_generation::game;
+namespace caps = capabilities;
+
+// What this card offers (capabilities.hpp), completed with the session's
+// DLSS-G limits when those were read after the start.
+caps::Capabilities card() {
+    auto c = status::snapshot().caps;
+    const auto session = fg::status();
+    if (!c.max_multiplier && session.maximum) c.max_multiplier = session.maximum + 1;
+    if (c.dynamic == caps::Support::unknown && session.dynamic_support)
+        c.dynamic = session.dynamic_support == 2 ? caps::Support::yes : caps::Support::no;
+    return c;
+}
 
 enum Row : std::uint32_t {
     frame_generation_row = 1,
@@ -38,6 +50,8 @@ enum Row : std::uint32_t {
     reflex_row,
     generation_row,
     generated_row,
+    card_row,
+    features_row,
 };
 
 // Touched on CMFM's menu thread (and once by add_pages before any page exists).
@@ -234,11 +248,21 @@ cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *v
             copy(why, why_size, "Unknown frame rate.");
             return CMFM_ERROR;
         }
-        if (id != multiplier_row) return CMFM_OK;
-        std::string reason = "Unknown multiplier.";
-        if (value->i == mm::dynamic_choice) {
-            if (mm::dynamic_allowed(fg::status().dynamic_support, reason)) return CMFM_OK;
-        } else if (const auto m = mm::multiplier_at(value->i); m && mm::multiplier_allowed(m, fg::status().maximum, reason)) {
+        // What the card offers (capabilities.hpp).
+        std::string reason;
+        const auto c = card();
+        if (id == dlss_mode_row) {
+            if (value->i == mm::off_choice || caps::available(c, caps::Option::dlss, 0, reason)) return CMFM_OK;
+        } else if (id == frame_generation_row) {
+            if (!value->i || caps::available(c, caps::Option::frame_generation, 0, reason)) return CMFM_OK;
+        } else if (id == multiplier_row) {
+            reason = "Unknown multiplier.";
+            if (value->i == mm::dynamic_choice) {
+                if (caps::available(c, caps::Option::dynamic, 0, reason)) return CMFM_OK;
+            } else if (const auto m = mm::multiplier_at(value->i); m && caps::available(c, caps::Option::multiplier, m, reason)) {
+                return CMFM_OK;
+            }
+        } else {
             return CMFM_OK;
         }
         copy(why, why_size, reason);
@@ -342,9 +366,12 @@ std::uint32_t CMFM_CALL locked(void *, std::uint32_t id, char *why, std::uint32_
         const auto &s = state.settings;
         if (id != frame_generation_row && id != multiplier_row && id != target_row && id != auto_row) return 0;
         // Known once the game's device exists (before any Mods page opens).
-        const bool unsupported = reflex::frame_generation_support() == 1;
-        const char *reason = !state.fg_requested ? "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded."
-                             : unsupported       ? "This graphics card or driver has no DLSS Frame Generation."
+        const auto c = card();
+        std::string missing;
+        if (!state.fg_requested || c.frame_generation == caps::Support::no)
+            missing = c.frame_generation == caps::Support::no ? caps::frame_generation_reason(c)
+                                                              : "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded.";
+        const char *reason = !missing.empty()              ? missing.c_str()
                              : id == frame_generation_row      ? nullptr
                              : !s.frame_generation              ? "Turn frame generation on first."
                              : id == target_row && !s.dynamic ? "Used only by the Dynamic multiplier."
@@ -392,6 +419,8 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
         case reflex_row: line = status::reflex_line(v); break;
         case generation_row: line = status::generation_line(v); break;
         case generated_row: line = status::generated_line(v); break;
+        case card_row: line = caps::card_line(v.caps); break;
+        case features_row: line = caps::features_line(card()); break;
         default: line = "?";
         }
         copy(text, text_size, line);
@@ -535,6 +564,9 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
                 CMFM_FLAG_LIVE),
             row(generated_row, CMFM_TYPE_TEXT, label_text("Generated frames"), help_text("Generated frames shown since the game started."),
                 CMFM_FLAG_LIVE),
+            row(card_row, CMFM_TYPE_TEXT, label_text("Graphics card"), help_text("The graphics card the game uses, its memory and driver.")),
+            row(features_row, CMFM_TYPE_TEXT, label_text("Supports"),
+                help_text("What this graphics card, driver and Windows offer this mod. Settings it cannot use are locked with the reason.")),
         };
 
         cmfm_page_t page{};

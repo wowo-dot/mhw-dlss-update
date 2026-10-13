@@ -1,4 +1,5 @@
 // The alpha's CMFM pages: the ini edit, the settings model and the status lines.
+#include "../src/alpha/capabilities.hpp"
 #include "../src/alpha/config.hpp"
 #include "../src/alpha/menu_model.hpp"
 #include "../src/alpha/status.hpp"
@@ -76,12 +77,64 @@ void settings_model() {
     check(m::choice_of(5) == 0 && m::choice_of(0) == 0, "unknown multipliers show 2x");
     check(m::multiplier_at(3) == 6 && m::multiplier_at(-1) == 0 && m::multiplier_at(4) == 0, "multiplier at index");
     std::string why;
-    check(m::multiplier_allowed(6, 0, why) && why.empty(), "unknown limit: everything allowed");
-    check(m::multiplier_allowed(2, 1, why) && !m::multiplier_allowed(3, 1, why), "RTX 40: 2x only");
-    check(why == "This graphics card shows 2x at most; 3x and up need an RTX 50.", "RTX 40 reason");
-    check(m::multiplier_allowed(4, 3, why) && !m::multiplier_allowed(6, 3, why), "limit 3: up to 4x");
-    check(why == "This graphics card shows 4x at most.", "limit 3 reason");
-    check(m::multiplier_allowed(6, 5, why), "limit 5: 6x");
+    {
+        // What the card offers (capabilities.hpp, v0.27.5).
+        namespace c = mhw::alpha::capabilities;
+        c::Capabilities card;
+        check(c::available(card, c::Option::multiplier, 6, why) && why.empty(), "unknown limit: everything allowed");
+        card.frame_generation = c::Support::yes;
+        card.max_multiplier = 2;
+        check(c::available(card, c::Option::multiplier, 2, why) && !c::available(card, c::Option::multiplier, 3, why), "RTX 40: 2x only");
+        check(why == "This graphics card shows 2x at most; 3x and up need an RTX 50.", "RTX 40 reason");
+        card.max_multiplier = 4;
+        check(c::available(card, c::Option::multiplier, 4, why) && !c::available(card, c::Option::multiplier, 6, why), "limit 4x");
+        check(why == "This graphics card shows 4x at most.", "limit reason");
+        card.max_multiplier = 6;
+        check(c::available(card, c::Option::multiplier, 6, why), "6x");
+        why.clear();
+        check(c::available(card, c::Option::dynamic, 0, why) && why.empty(), "Dynamic: unknown");
+        card.dynamic = c::Support::no;
+        check(!c::available(card, c::Option::dynamic, 0, why) &&
+                  why == "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.", "Dynamic not supported");
+        // No frame generation: its reason for every frame generation choice.
+        c::Capabilities rtx30;
+        rtx30.known = true;
+        rtx30.card = {"NVIDIA GeForce RTX 3080", c::nvidia, 0x2206, 10240, 610, 88};
+        rtx30.dlss = rtx30.reflex = c::Support::yes;
+        rtx30.frame_generation = c::Support::no;
+        rtx30.missing = c::Missing::card;
+        check(!c::available(rtx30, c::Option::frame_generation, 0, why) &&
+                  why == "DLSS Frame Generation needs an NVIDIA GeForce RTX 40 or 50 series graphics card.", "card reason");
+        check(!c::available(rtx30, c::Option::multiplier, 2, why) && !c::available(rtx30, c::Option::dynamic, 0, why), "all FG choices");
+        check(c::available(rtx30, c::Option::dlss, 0, why) && c::available(rtx30, c::Option::reflex, 0, why), "DLSS and Reflex stay");
+        check(c::card_line(rtx30) == "NVIDIA GeForce RTX 3080, 10 GB, driver 610.88", "card line");
+        check(c::features_line(rtx30) == "DLSS, Reflex; no frame generation", "features without FG");
+        rtx30.missing = c::Missing::driver;
+        rtx30.driver_required_major = 615;
+        rtx30.driver_required_minor = 5;
+        check(c::frame_generation_reason(rtx30) == "DLSS Frame Generation needs NVIDIA driver 615.05 or newer (installed: 610.88).",
+              "driver reason");
+        rtx30.missing = c::Missing::scheduling;
+        check(c::frame_generation_reason(rtx30).find("Hardware-accelerated GPU scheduling") != std::string::npos, "scheduling reason");
+        rtx30.missing = c::Missing::plugin_off;
+        check(c::frame_generation_reason(rtx30) == "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded." &&
+                  c::features_line(rtx30) == "DLSS, Reflex", "plugin off: not a missing feature");
+        // RTX 50 with everything.
+        c::Capabilities rtx50;
+        rtx50.known = true;
+        rtx50.card = {"NVIDIA GeForce RTX 5090", c::nvidia, 0x2b85, 32607, 610, 88};
+        rtx50.dlss = rtx50.reflex = rtx50.frame_generation = rtx50.dynamic = c::Support::yes;
+        rtx50.max_multiplier = 6;
+        check(c::card_line(rtx50) == "NVIDIA GeForce RTX 5090, 32 GB, driver 610.88", "RTX 50 card line");
+        check(c::features_line(rtx50) == "DLSS, Reflex, frame generation up to 6x, Dynamic", "RTX 50 features");
+        // Not NVIDIA: DLSS refused with its reason.
+        c::Capabilities other;
+        other.known = true;
+        other.card.vendor = 0x1002;
+        other.dlss = c::Support::no;
+        check(!c::available(other, c::Option::dlss, 0, why) && why == "DLSS needs an NVIDIA GeForce RTX graphics card.", "not NVIDIA");
+        check(c::card_line(c::Capabilities{}) == "Not known yet", "unknown card");
+    }
     {
         check(m::dynamic_choice == 4 && std::string_view(m::multiplier_names[4]) == "Dynamic" && m::multiplier_at(4) == 0,
               "Dynamic is the last multiplier choice");
@@ -92,10 +145,6 @@ void settings_model() {
         check(m::generation_mode(s) == 1, "Auto");
         s.dynamic = true;
         check(m::generation_choice(s) == 4 && m::generation_mode(s) == 2, "Dynamic wins over Auto");
-        why.clear();
-        check(m::dynamic_allowed(0, why) && m::dynamic_allowed(2, why) && why.empty(), "Dynamic: unknown or supported");
-        check(!m::dynamic_allowed(1, why) && why == "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.",
-              "Dynamic not supported");
         const auto plain = m::target_choices(0);
         check(plain.size() == m::targets.size() && plain.front() == 0 && m::target_index(plain, 240) == 11, "target choices");
         const auto custom = m::target_choices(138);

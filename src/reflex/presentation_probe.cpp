@@ -500,6 +500,21 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     require(SUCCEEDED(created_device->QueryInterface(IID_PPV_ARGS(&device_pin))), "native-device-interface");
     require(device_pin->GetNodeCount() == 1 && SUCCEEDED(device_pin->GetDeviceRemovedReason()), "native-device-health");
     owner = GetCurrentThreadId();
+#ifdef MHW_ALPHA
+    // v0.27.5: the card first (capabilities.hpp), so a failure below still shows it.
+    namespace caps_ns = mhw::alpha::capabilities;
+    caps_ns::Capabilities caps; caps.known = true;
+    if (Microsoft::WRL::ComPtr<IDXGIAdapter1> described; adapter && SUCCEEDED(adapter->QueryInterface(IID_PPV_ARGS(&described)))) {
+        DXGI_ADAPTER_DESC1 d{};
+        if (SUCCEEDED(described->GetDesc1(&d))) {
+            char name[256]{};
+            WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, static_cast<int>(sizeof(name)), nullptr, nullptr);
+            caps.card.name = name; caps.card.vendor = d.VendorId; caps.card.device = d.DeviceId;
+            caps.card.memory_mb = static_cast<std::uint64_t>(d.DedicatedVideoMemory) >> 20;
+        }
+    }
+    mhw::alpha::status::card_capabilities(caps);
+#endif
 #ifdef MHW_FG_GAME
     // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
     sdk.initialize(runtime, output / L"sdk-logs", fg_plugin ? mhw::reflex::StreamlineFeatures::reflex_and_frame_generation
@@ -515,6 +530,18 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     auto luid = device_pin->GetAdapterLuid();
     sl::AdapterInfo info{}; info.deviceLUID = reinterpret_cast<std::uint8_t*>(&luid);
     info.deviceLUIDSizeInBytes = sizeof(luid);
+#ifdef MHW_ALPHA
+    {   // The driver as Streamline detects it.
+        sl::FeatureRequirements reflex_requirements{};
+        if (sdk.requirements(sl::kFeatureReflex, reflex_requirements) == sl::Result::eOk) {
+            caps.card.driver_major = reflex_requirements.driverVersionDetected.major;
+            caps.card.driver_minor = reflex_requirements.driverVersionDetected.minor;
+        }
+        caps.reflex = sdk.supported(sl::kFeatureReflex, info) == sl::Result::eOk ? caps_ns::Support::yes : caps_ns::Support::no;
+        if (!fg_plugin) { caps.frame_generation = caps_ns::Support::no; caps.missing = caps_ns::Missing::plugin_off; }
+        mhw::alpha::status::card_capabilities(caps);
+    }
+#endif
     api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
     api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
 #ifdef MHW_FG_GAME
@@ -527,6 +554,29 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
             << ",\"flags\":" << static_cast<unsigned>(fg_requirements.flags)
             << ",\"max_viewports\":" << fg_requirements.maxNumViewports
             << ",\"required_tags\":" << fg_requirements.numRequiredTags << "}\n" << std::flush;
+#ifdef MHW_ALPHA
+        {   // Why not, in the SDK's own terms (sl_result.h).
+            const auto result = fg_support != sl::Result::eOk ? fg_support : fg_requirements_result;
+            caps.frame_generation_result = static_cast<unsigned>(result);
+            caps.frame_generation = result == sl::Result::eOk ? caps_ns::Support::yes : caps_ns::Support::no;
+            caps.missing = result == sl::Result::eOk ? caps_ns::Missing::none
+                         : result == sl::Result::eErrorDriverOutOfDate ? caps_ns::Missing::driver
+                         : result == sl::Result::eErrorOSOutOfDate ? caps_ns::Missing::os
+                         : result == sl::Result::eErrorOSDisabledHWS ? caps_ns::Missing::scheduling
+                         : result == sl::Result::eErrorAdapterNotSupported || result == sl::Result::eErrorNoSupportedAdapterFound ||
+                                   result == sl::Result::eErrorFeatureNotSupported ? caps_ns::Missing::card
+                                                                                  : caps_ns::Missing::other;
+            if (fg_requirements_result == sl::Result::eOk) {
+                caps.driver_required_major = fg_requirements.driverVersionRequired.major;
+                caps.driver_required_minor = fg_requirements.driverVersionRequired.minor;
+                if (fg_requirements.driverVersionDetected.major) {
+                    caps.card.driver_major = fg_requirements.driverVersionDetected.major;
+                    caps.card.driver_minor = fg_requirements.driverVersionDetected.minor;
+                }
+            }
+            mhw::alpha::status::card_capabilities(caps);
+        }
+#endif
         // v0.27.0: DLSS-G loads at every start, so frame generation turns on
         // and off live. A card or system without it runs DLSS and Reflex alone.
         if (fg_support != sl::Result::eOk || fg_requirements_result != sl::Result::eOk) {
@@ -538,17 +588,30 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
             mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "DLSS-G-support");
 #endif
         }
-#ifdef MHW_ALPHA
-        // v0.27.4: frame generation off (or DLSS off) at start: the game's
-        // chain is made without DLSS-G (full speed); a switch loads it later.
-        else if (!alpha_config.frame_generation || !alpha_config.dlss) {
-            const auto unloaded = sdk.unload_frame_generation();
-            log << "{\"event\":\"fg_unloaded\",\"reason\":\"off_at_start\",\"result\":" << static_cast<int>(unloaded) << "}\n" << std::flush;
-        }
-#endif
     }
 #endif
     api(sdk.attach(device_pin.Get()), "attach-native-device");
+#if defined(MHW_FG_GAME) && defined(MHW_ALPHA)
+    if (fg_plugin && sdk.frame_generation()) {
+        // DLSS-G's own limits (guide 14.1, 14.2), while it is loaded; if it
+        // cannot answer before a swap chain exists the session's first state
+        // read completes them.
+        sl::DLSSGState limits{};
+        const auto read = sdk.frame_generation_state(sl::ViewportHandle{0}, limits);
+        if (read == sl::Result::eOk && limits.numFramesToGenerateMax) {
+            caps.max_multiplier = limits.numFramesToGenerateMax + 1;
+            caps.dynamic = limits.bIsDynamicMFGSupported == sl::Boolean::eTrue ? caps_ns::Support::yes : caps_ns::Support::no;
+        }
+        log << "{\"event\":\"fg_limits\",\"result\":" << static_cast<int>(read) << ",\"max_generated\":" << limits.numFramesToGenerateMax
+            << ",\"dynamic\":" << (limits.bIsDynamicMFGSupported == sl::Boolean::eTrue) << "}\n" << std::flush;
+        // v0.27.4: frame generation off (or DLSS off) at start: the game's
+        // chain is made without DLSS-G (full speed); a switch loads it later.
+        if (!alpha_config.frame_generation || !alpha_config.dlss) {
+            const auto unloaded = sdk.unload_frame_generation();
+            log << "{\"event\":\"fg_unloaded\",\"reason\":\"off_at_start\",\"result\":" << static_cast<int>(unloaded) << "}\n" << std::flush;
+        }
+    }
+#endif
 #ifdef MHW_FG_GAME
     // Loaded (also a plugin that could not be unloaded): Streamline owns the
     // swap chain. Usable: requested and supported (loaded now or later).
@@ -560,6 +623,17 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
 #endif
     api(sdk.options(sl::ReflexMode::eOff), "Reflex-Off");
     sl::ReflexState state{}; api(sdk.state(state), "Reflex-state");
+#ifdef MHW_ALPHA
+    if (!state.lowLatencyAvailable) caps.reflex = caps_ns::Support::no;
+    mhw::alpha::status::card_capabilities(caps);
+    log << "{\"event\":\"card_capabilities\",\"name\":" << quoted(caps.card.name) << ",\"vendor\":" << caps.card.vendor
+        << ",\"device\":" << caps.card.device << ",\"memory_mb\":" << caps.card.memory_mb
+        << ",\"driver\":" << quoted(caps_ns::version_text(caps.card.driver_major, caps.card.driver_minor))
+        << ",\"reflex\":" << static_cast<unsigned>(caps.reflex) << ",\"frame_generation\":" << static_cast<unsigned>(caps.frame_generation)
+        << ",\"missing\":" << static_cast<unsigned>(caps.missing) << ",\"result\":" << caps.frame_generation_result
+        << ",\"driver_required\":" << quoted(caps_ns::version_text(caps.driver_required_major, caps.driver_required_minor))
+        << ",\"max_multiplier\":" << caps.max_multiplier << ",\"dynamic\":" << static_cast<unsigned>(caps.dynamic) << "}\n" << std::flush;
+#endif
     device_checked = true;
     log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"loader\":" << (out == nullptr)
         << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
@@ -1171,6 +1245,8 @@ DWORD WINAPI worker(void*) noexcept {
                     mhw::alpha::status::dlss_sizes(render_w,render_h,scene_w,scene_h);
                     mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(mhw::continuous_dlaa::reconstruction_mode()));
                     mhw::alpha::status::dlss(mhw::continuous_dlaa::dlss_off()?mhw::alpha::status::Stage::player_off:mhw::alpha::status::Stage::running);
+                    // NGX startup and the DLSS install succeeded (capabilities.hpp).
+                    mhw::alpha::status::dlss_available(true);
                 }
 #endif
 #endif
@@ -1256,7 +1332,7 @@ DWORD WINAPI worker(void*) noexcept {
                 // After a live mode change: the sleep count at which the driver is
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
-                DlssRetry dlss_retry;SceneRetry scene_retry;GenerationSwitch generation_switch;
+                DlssRetry dlss_retry;SceneRetry scene_retry;GenerationSwitch generation_switch;unsigned learned_multiplier{};
                 // perf_ab (diagnostic, FG off): DLSS paused and running in
                 // turn, 30 s each, logged with the time to the plugin log.
                 std::uint64_t perf_ab_next=alpha_config.perf_ab&&!fg_loaded?GetTickCount64()+30000:0;bool perf_ab_paused=false;
@@ -1325,6 +1401,16 @@ DWORD WINAPI worker(void*) noexcept {
                     }
                     // The game's own aspect switch (render_resolution yielded).
                     sync_generation(generation_switch);
+                    {   // DLSS-G's limits once its state was read (capabilities.hpp).
+                        const auto session=mhw::frame_generation::game::status();
+                        if(session.maximum&&session.maximum+1!=learned_multiplier){
+                            learned_multiplier=session.maximum+1;
+                            const auto dynamic=session.dynamic_support==2?mhw::alpha::capabilities::Support::yes
+                                              :session.dynamic_support==1?mhw::alpha::capabilities::Support::no:mhw::alpha::capabilities::Support::unknown;
+                            mhw::alpha::status::generation_limits(learned_multiplier,dynamic);
+                            log<<"{\"event\":\"fg_limits\",\"source\":\"session\",\"max_multiplier\":"<<learned_multiplier<<",\"dynamic\":"<<session.dynamic_support<<"}\n"<<std::flush;
+                        }
+                    }
                     // While the player has DLSS off it waits for the way back (change_dlss_mode).
                     if(mhw::render_resolution::scene_changed()&&GetTickCount64()>=scene_retry.at&&!mhw::continuous_dlaa::dlss_off())
                         change_dlss_scene(scene_retry);

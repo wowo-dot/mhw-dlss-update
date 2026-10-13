@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include "capabilities.hpp"
 
 // What the mod is doing, for CMFM's Status page (alpha).
 // - The worker and the Astera Loader entry report it (status.cpp keeps it
@@ -41,6 +42,7 @@ struct View {
     unsigned generation_mode{}, target{}, dynamic_support{}, presented_now{}, single_streak{};
     unsigned display_hz{};  // the game's monitor, 0 if unknown (display_refresh.hpp)
     bool dynamic_applied{}, dynamic_refused{};
+    capabilities::Capabilities caps;  // what this card offers (v0.27.5)
 };
 // Presents in a row without a generated frame before Auto reads as paused
 // (single ones happen at camera cuts).
@@ -54,6 +56,12 @@ void generation(Generation, std::string_view reason = {}) noexcept;
 void dlss_sizes(unsigned render_width, unsigned render_height, unsigned scene_width, unsigned scene_height) noexcept;
 void dlss_mode(std::string_view name) noexcept;
 void reflex_mode(std::string_view name) noexcept;
+// v0.27.5: what this card offers, at start (capabilities.hpp), then as learned:
+// DLSS (NGX's capability, at arming) and DLSS-G's multiplier limit and
+// Dynamic support (its state, once read).
+void card_capabilities(const capabilities::Capabilities &) noexcept;
+void dlss_available(bool) noexcept;
+void generation_limits(unsigned max_multiplier, capabilities::Support dynamic) noexcept;
 // The worker stopped on `reason`: what had not started yet is off.
 void worker_failed(std::string_view reason) noexcept;
 // Menu thread.

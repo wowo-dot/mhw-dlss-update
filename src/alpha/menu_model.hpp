@@ -109,14 +109,6 @@ constexpr int generation_choice(const Settings &s) { return s.dynamic ? dynamic_
 constexpr unsigned multiplier_at(int index) {
     return index >= 0 && index < static_cast<int>(multipliers.size()) ? multipliers[static_cast<unsigned>(index)] : 0;
 }
-// Whether Dynamic can be chosen. `support` is the session's view of
-// DLSSGState::bIsDynamicMFGSupported: 0 not known yet (allowed: the session
-// falls back to the fixed multiplier if it is not), 1 no, 2 yes.
-inline bool dynamic_allowed(unsigned support, std::string &why) {
-    if (support != 1) return true;
-    why = "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.";
-    return false;
-}
 
 // "Target frame rate" choices: the display's refresh rate (0), then common
 // rates; a value from the ini that is not one of them is added in order.
@@ -141,14 +133,5 @@ inline int target_index(const std::vector<unsigned> &choices, unsigned target) {
 // The session's mode (frame_generation::game::Mode order: fixed, automatic, dynamic).
 constexpr unsigned generation_mode(const Settings &s) { return s.dynamic ? 2U : s.generation_auto ? 1U : 0U; }
 
-// Whether the graphics card can show `multiplier`. `maximum` is the number of
-// generated frames DLSS-G allows (0 while unknown: everything is accepted and
-// the session limits it). If not, the reason for the help line.
-inline bool multiplier_allowed(unsigned multiplier, unsigned maximum, std::string &why) {
-    if (!maximum || multiplier <= maximum + 1) return true;
-    why = maximum == 1 ? "This graphics card shows 2x at most; 3x and up need an RTX 50."
-                       : "This graphics card shows " + std::to_string(maximum + 1) + "x at most.";
-    return false;
-}
 
 }  // namespace mhw::alpha::menu_model
