@@ -433,3 +433,39 @@ Steady windows, per frame:
   - `fg_game.py` knows the bit (`LEAN_MASK` 1919).
 - **The bench:** 6.5-11 ns of overhead a call for 1-8 threads (21-29
   before).
+
+## Session 20261013-perf9 (v0.23.10, game-95)
+
+`perf_ab` and `hook_timing` on, Quality, FG off, Boost. DLSS fault 0; clean
+exit.
+
+**Hook timing, steady windows, per frame:**
+- the observer: about 22,000 calls at about 39 ns of own time each, 0.85 ms
+  in all (2.4 ms in v0.23.8, 4.4 ms in v0.23.7);
+- indexed draws: 80-100 us (160 before);
+- all hooks: 1.1-1.5 ms (2.7-3.2 before).
+
+**Frame rate:**
+
+| Steady phases | fps | CPU busy | 1% low | p99 |
+|---|---|---|---|---|
+| DLSS running | 242-245 | 3.94-3.99 ms | 175-179 | 5.57-5.70 ms |
+| DLSS paused | 246-248 | 3.90-3.93 | 181-182 | 5.49-5.53 |
+
+- The observer's remaining time on the recording threads is mostly off the
+  critical path: cutting it by two thirds gained about 2 fps.
+- **The day's progress at Quality** (hub, RTX 5090, CPU-bound):
+
+  | | Morning (v0.23.2) | Now (v0.23.10) | Unmodded (perf6) |
+  |---|---|---|---|
+  | fps | 225 | 242-245 | 261 |
+  | 1% low | 136 | 175-179 | 186-193 |
+  | p99 | 7.35 ms | 5.6-5.7 ms | 5.2-5.4 ms |
+
+- **The remaining gap** (about 6%, with DLSS paused about 5%) mixes:
+  - what the mod changes in the game (TAA forced into the queue, the
+    render-scale override);
+  - Reflex's per-frame calls;
+  - the hooks on game functions;
+  - launch-to-launch variance (an unmodded launch's own slices ranged
+    241-266 fps).
