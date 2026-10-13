@@ -62,7 +62,6 @@ struct Config {
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
     bool hook_timing{};          // hook_timing = on (diagnostic; not in the shipped ini)
-    unsigned fg_off_latency{};   // fg_off_latency = 1..16 (diagnostic, v0.27.2; 0: unchanged)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -181,9 +180,6 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "frame_generation_auto") {
             if (value == "on" || value == "off") c.generation_auto = value == "on";
             else c.warnings.push_back(where + "frame_generation_auto must be on or off");
-        } else if (key == "fg_off_latency") {
-            if (value.size() == 1 && value[0] >= '0' && value[0] <= '9') c.fg_off_latency = static_cast<unsigned>(value[0] - '0');
-            else c.warnings.push_back(where + "fg_off_latency must be 0 to 9");
         } else if (key == "frame_generation_plugin") {
             if (value == "auto" || value == "off") c.generation_plugin = value == "auto";
             else c.warnings.push_back(where + "frame_generation_plugin must be auto or off");

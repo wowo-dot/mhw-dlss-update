@@ -943,7 +943,6 @@ DWORD WINAPI worker(void*) noexcept {
             << ",\"dynamic\":" << alpha_config.dynamic << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
             << ",\"frame_generation_auto\":" << alpha_config.generation_auto << ",\"frame_generation_plugin\":" << quoted(alpha_config.generation_plugin ? "auto" : "off") << ",\"profile\":" << alpha_config.profile
             << ",\"perf_ab\":" << alpha_config.perf_ab << ",\"hook_timing\":" << alpha_config.hook_timing
-            << ",\"fg_off_latency\":" << alpha_config.fg_off_latency
             << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -1148,8 +1147,8 @@ DWORD WINAPI worker(void*) noexcept {
                     mhw::frame_generation::game::mode(fg_mode, fg_target);
 #endif
 #ifdef MHW_ALPHA
-                    // Diagnostic (fg_off_latency): the chain's latency while the player has FG off.
-                    mhw::frame_generation::game::latency_target(chain.native_swapchain, alpha_config.fg_off_latency);
+                    // The game's own frame latency while DLSS-G is off (game_session.hpp).
+                    mhw::frame_generation::game::latency_target(chain.native_swapchain);
                     // Armed whenever DLSS runs (fg_ready); paused while the player has DLSS off.
                     fg_ready=true;
                     if(!mhw::continuous_dlaa::dlss_off())mhw::frame_generation::game::arm(true);

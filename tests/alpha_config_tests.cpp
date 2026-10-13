@@ -112,9 +112,6 @@ int main() {
         check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1, "perf_ab refused while DLSS-G loads (frame generation off or not)");
         check(a::parse_config("", folder).generation_plugin && a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,
               "DLSS-G loads by default");
-        check(a::parse_config("fg_off_latency = 2\n", folder).fg_off_latency == 2 && !a::parse_config("", folder).fg_off_latency,
-              "fg_off_latency: unchanged by default");
-        check(a::parse_config("fg_off_latency = 12\n", folder).warnings.size() == 1, "fg_off_latency is one digit");
         const auto bad_plugin = a::parse_config("frame_generation_plugin = never\n", folder);
         check(bad_plugin.generation_plugin && bad_plugin.warnings.size() == 1, "a bad plugin value warns and keeps auto");
         check(!a::parse_config("", folder).hook_timing && a::parse_config("hook_timing = on\n", folder).hook_timing,
