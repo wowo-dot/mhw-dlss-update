@@ -7,6 +7,8 @@
 #include <ostream>
 
 namespace mhw::perf::hook_timing {
+inline constexpr unsigned period = 64;
+inline std::atomic<bool> enabled{};
 // Hook timing (v0.23.7, diagnostic: the alpha's "hook_timing = on"). Every
 // 64th hooked call of a thread is timed with the time-stamp counter: the
 // hook's own time (entry to exit, less the forwarded native call) and the
@@ -14,7 +16,13 @@ namespace mhw::perf::hook_timing {
 // calls cost one relaxed load and a thread-local increment; timed calls add
 // three relaxed atomic adds. No locks.
 enum Category : unsigned {
-    observer,      // binding observer: every state setter on every command list
+    observer,      // binding observer: ClearState, PSO, bundles, descriptor heaps
+    observer_root,       // root signatures
+    observer_table,      // root descriptor tables
+    observer_constants,  // root constants
+    observer_view,       // root CBV, SRV and UAV
+    observer_raster,     // topology, viewports, scissors, vertex/index buffers, targets
+    observer_predicate,  // predication
     reset_close,   // command-list Reset and Close
     execute,       // ExecuteCommandLists
     barrier,       // ResourceBarrier
@@ -25,10 +33,30 @@ enum Category : unsigned {
     category_count
 };
 inline constexpr const char *names[category_count]{
-    "observer", "reset_close", "execute", "barrier", "draw", "indexed", "dispatch", "copy"};
-inline constexpr unsigned period = 64;
+    "observer", "observer_root", "observer_table", "observer_constants", "observer_view", "observer_raster",
+    "observer_predicate", "reset_close", "execute", "barrier", "draw", "indexed", "dispatch", "copy"};
+// The observer's method index (observer.cpp's `which`) to its category.
+constexpr Category observer_category(unsigned which) noexcept {
+    return which == 4 || which == 5   ? observer_root
+         : which == 6 || which == 7   ? observer_table
+         : which >= 8 && which <= 11  ? observer_constants
+         : which >= 12 && which <= 17 ? observer_view
+         : which == 23                ? observer_predicate
+         : (which >= 18 && which <= 22) || which == 24 ? observer_raster
+                                      : observer;
+}
+// Event counts beside the timings (all calls, relaxed adds).
+enum Counter : unsigned {
+    observer_find_scans,  // the per-thread list cache missed: the entry table was searched
+    observer_find_steps,  // entries compared in those searches
+    counter_count
+};
+inline constexpr const char *counter_names[counter_count]{"observer_find_scans", "observer_find_steps"};
+inline std::array<std::atomic<std::uint64_t>, counter_count> counters{};
+inline void count(Counter c, std::uint64_t n = 1) noexcept {
+    if (enabled.load(std::memory_order_relaxed)) counters[c].fetch_add(n, std::memory_order_relaxed);
+}
 
-inline std::atomic<bool> enabled{};
 struct Totals {
     std::atomic<std::uint64_t> timed{}, own{}, forwarded{};
 };
@@ -114,6 +142,13 @@ inline void write(std::ostream &out, std::uint64_t frames) {
         out << (i ? "," : "") << '"' << names[i] << "\":{\"calls_per_frame\":" << double(timed) * scale
             << ",\"own_us_per_frame\":" << (per_us > 0 ? double(own) / per_us * scale : 0.0)
             << ",\"forwarded_us_per_frame\":" << (per_us > 0 ? double(forwarded) / per_us * scale : 0.0) << '}';
+    }
+    out << "},\"counters_per_frame\":{";
+    static std::array<std::uint64_t, counter_count> last_counts{};
+    for (unsigned i = 0; i < counter_count; ++i) {
+        const auto now = counters[i].load();
+        out << (i ? "," : "") << '"' << counter_names[i] << "\":" << (window ? double(now - last_counts[i]) / double(window) : 0.0);
+        last_counts[i] = now;
     }
     out << "}}\n";
     last_frames = frames;

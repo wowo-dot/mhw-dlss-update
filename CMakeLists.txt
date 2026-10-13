@@ -521,6 +521,12 @@ target_include_directories(observer_slots_tests PRIVATE "${minhook_SOURCE_DIR}/i
 target_link_libraries(observer_slots_tests PRIVATE mhw_temporal_state d3d12 dxgi dxguid)
 set_target_properties(observer_slots_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_test(NAME observer_list_slots COMMAND observer_slots_tests)
+# Not a test: the observer's per-call cost on WARP (run by hand).
+add_executable(observer_bench tests/observer_bench.cpp)
+target_compile_options(observer_bench PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /O2)
+target_include_directories(observer_bench PRIVATE "${minhook_SOURCE_DIR}/include")
+target_link_libraries(observer_bench PRIVATE mhw_temporal_state d3d12 dxgi dxguid)
+set_target_properties(observer_bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_executable(mhw_temporal_input_replay tools/temporal_input_replay.cpp)
 target_link_libraries(mhw_temporal_input_replay PRIVATE mhw_temporal_gpu_inputs)
 target_compile_options(mhw_temporal_input_replay PRIVATE /W4 /WX /permissive- /EHsc /utf-8)

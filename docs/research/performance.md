@@ -353,3 +353,42 @@ the recording threads, it is how 0.27 ms reaches the critical path.
   - equality compares kind, address, mask and the masked constants.
 - **Tests:** sparse clears and `set` (`temporal_present_bindings_tests`); the
   sharded count under eight threads (`perf_tests`).
+
+## Session 20261013-perf8 (v0.23.8, game-93): the lean observer in game
+
+| Steady phases | fps | CPU busy | p99 | 1% low |
+|---|---|---|---|---|
+| DLSS running | 240-242 | 4.00-4.02 ms | 5.50-5.57 ms | 179-182 |
+| DLSS paused | 247 | 3.92 | 5.36-5.39 | 185-186 |
+| Unmodded (perf6) | 261 | 3.70 | 5.2-5.4 | 186-193 |
+
+- **The observer:** 4.4 ms of CPU a frame became 2.4 ms (about 110 ns a
+  call at about 22,000 calls).
+- **1% lows** now nearly match the unmodded game.
+- **The gap:** -7.7% running (it was -11 to -14%), -5.5% paused.
+
+## The observer bench (`observer_bench`, not a ctest)
+
+WARP command lists, native and with the observer installed (MinHook):
+
+| Threads (one list each, draw-like mix) | Overhead a call |
+|---|---|
+| 1 | 21 ns |
+| 2 | 23-24 ns |
+| 4 | 24-25 ns |
+| 8 | 26-29 ns |
+
+- Hook timing inside the bench reports 22-24 ns of own time a call, so the
+  in-game timing is accurate. The game's ~110 ns is real and specific to the
+  game.
+- **Candidates:**
+  - the call mix (root constants, vertex buffers, root-signature changes);
+  - the per-thread list cache missing when MHW's job threads move between
+    lists, so each lookup searches the 128-entry table.
+
+## v0.23.9: the observer's timing split
+
+- `hook_timing` splits the observer into root, table, constants, view,
+  raster, predicate and the rest (PSO, heaps, ClearState, bundles).
+- It also counts the list-cache misses and the entries searched
+  (`counters_per_frame`).

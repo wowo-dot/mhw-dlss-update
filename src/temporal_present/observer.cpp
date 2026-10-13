@@ -64,7 +64,10 @@ Entry *find(ID3D12GraphicsCommandList *p) noexcept {
     const auto e=epoch.load(std::memory_order_acquire);
     if(p==last_list&&last_entry<list_limit&&last_epoch==e)return &entries[last_entry];
     const auto n=entry_count.load(std::memory_order_acquire);
-    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==p){last_list=p;last_entry=i;last_epoch=e;return &entries[i];}
+    perf::hook_timing::count(perf::hook_timing::observer_find_scans);
+    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==p){
+        perf::hook_timing::count(perf::hook_timing::observer_find_steps,i+1);last_list=p;last_entry=i;last_epoch=e;return &entries[i];}
+    perf::hook_timing::count(perf::hook_timing::observer_find_steps,n);
     return nullptr;
 }
 // Entry state is guarded by the entry's own lock. Without perf::list_locks the
@@ -142,58 +145,58 @@ void after(unsigned which,ID3D12GraphicsCommandList *list,bool admitted,bool ret
     pending.sub();
 }
 template<unsigned I>void WINAPI pointer_call(ID3D12GraphicsCommandList *list,void *value){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,void *)>(originals[I])(list,value);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(I,list,admitted,returned,reinterpret_cast<std::uintptr_t>(value));perf::hook_timing::end(timing);}
 }
 void WINAPI predicate_call(ID3D12GraphicsCommandList *list,ID3D12Resource *buffer,UINT64 offset,D3D12_PREDICATION_OP operation){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(23));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,ID3D12Resource *,UINT64,D3D12_PREDICATION_OP)>(originals[23])(list,buffer,offset,operation);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(23,list,admitted,returned,reinterpret_cast<std::uintptr_t>(buffer),offset,operation);perf::hook_timing::end(timing);}
 }
 void WINAPI heaps_call(ID3D12GraphicsCommandList *list,UINT count,ID3D12DescriptorHeap *const *heaps){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(3));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,ID3D12DescriptorHeap *const *)>(originals[3])(list,count,heaps);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(3,list,admitted,returned,count,reinterpret_cast<std::uintptr_t>(heaps));perf::hook_timing::end(timing);}
 }
 template<unsigned I>void WINAPI table_call(ID3D12GraphicsCommandList *list,UINT index,D3D12_GPU_DESCRIPTOR_HANDLE value){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,D3D12_GPU_DESCRIPTOR_HANDLE)>(originals[I])(list,index,value);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(I,list,admitted,returned,index,value.ptr);perf::hook_timing::end(timing);}
 }
 template<unsigned I>void WINAPI constant_call(ID3D12GraphicsCommandList *list,UINT index,UINT value,UINT offset){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,UINT)>(originals[I])(list,index,value,offset);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(I,list,admitted,returned,index,value,offset);perf::hook_timing::end(timing);}
 }
 template<unsigned I>void WINAPI constants_call(ID3D12GraphicsCommandList *list,UINT index,UINT count,const void *values,UINT offset){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,const void *,UINT)>(originals[I])(list,index,count,values,offset);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(I,list,admitted,returned,index,(std::uintptr_t(count)<<32)|offset,reinterpret_cast<std::uintptr_t>(values));perf::hook_timing::end(timing);}
 }
 template<unsigned I>void WINAPI address_call(ID3D12GraphicsCommandList *list,UINT index,D3D12_GPU_VIRTUAL_ADDRESS value){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,D3D12_GPU_VIRTUAL_ADDRESS)>(originals[I])(list,index,value);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(I,list,admitted,returned,index,value);perf::hook_timing::end(timing);}
 }
 void WINAPI topology_call(ID3D12GraphicsCommandList *list,D3D12_PRIMITIVE_TOPOLOGY topology){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(18));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,D3D12_PRIMITIVE_TOPOLOGY)>(originals[18])(list,topology);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(18,list,admitted,returned,topology);perf::hook_timing::end(timing);}
 }
 template<unsigned I,class T>void WINAPI raster_call(ID3D12GraphicsCommandList *list,UINT count,const T *values){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(I));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,const T *)>(originals[I])(list,count,values);perf::hook_timing::forward_end(timing);returned=true;
         if constexpr(I==19)if(admitted&&viewport_listener){++viewport_notifications;viewport_listener(list,count,values,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}}
     __finally{after(I,list,admitted,returned,count,reinterpret_cast<std::uintptr_t>(values));perf::hook_timing::end(timing);}
 }
 void WINAPI vertices_call(ID3D12GraphicsCommandList *list,UINT first,UINT count,const D3D12_VERTEX_BUFFER_VIEW *values){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(21));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,const D3D12_VERTEX_BUFFER_VIEW *)>(originals[21])(list,first,count,values);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(21,list,admitted,returned,first,count,reinterpret_cast<std::uintptr_t>(values));perf::hook_timing::end(timing);}
 }
 void WINAPI outputs_call(ID3D12GraphicsCommandList *list,UINT count,const D3D12_CPU_DESCRIPTOR_HANDLE *values,BOOL contiguous,const D3D12_CPU_DESCRIPTOR_HANDLE *depth){
-    auto timing=perf::hook_timing::begin(perf::hook_timing::observer);const bool admitted=enter();bool returned=false;
+    auto timing=perf::hook_timing::begin(perf::hook_timing::observer_category(22));const bool admitted=enter();bool returned=false;
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,const D3D12_CPU_DESCRIPTOR_HANDLE *,BOOL,const D3D12_CPU_DESCRIPTOR_HANDLE *)>(originals[22])(list,count,values,contiguous,depth);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(22,list,admitted,returned,count,reinterpret_cast<std::uintptr_t>(values),reinterpret_cast<std::uintptr_t>(depth),static_cast<unsigned>(contiguous));perf::hook_timing::end(timing);}
 }
