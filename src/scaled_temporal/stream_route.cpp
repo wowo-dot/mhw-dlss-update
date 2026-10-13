@@ -1151,6 +1151,8 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_L
  Guard guard;bool replaced=false;
  // full_post's slot copy never runs (full_post_slot.inl).
  if(full_slot_scope!=UINT_MAX&&!injecting){full_slot_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));return;}
+ // An unplanned DLAA copy never runs.
+ if(full_final_scope!=UINT_MAX&&!injecting){full_final_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));return;}
 #ifdef MHW_FG_SCENE_PROBE
  const auto scene_receipt=scene_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
 #endif
@@ -1163,7 +1165,7 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_L
 }
 }
 namespace ht=perf::hook_timing;
-void full_post_enter(std::uintptr_t context) noexcept {full_enter(context);}
+void full_post_enter(std::uintptr_t context,bool admitted) noexcept {full_enter(context,admitted);}
 void full_post_taa(std::uintptr_t context) noexcept {full_taa(context);}
 void full_post_exit(std::uintptr_t context) noexcept {full_exit(context);}
 void full_post_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth,unsigned gbuffer4_state,std::uintptr_t gbuffer4) noexcept {
@@ -1190,6 +1192,8 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
   if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;
    if(p.identity&&!(render_w==width&&render_h==height))(void)silhouette_candidates(p);
    if(p.identity||silhouette_candidates(p))(void)prepare_frame(p);
+   // full_post: the scene capture reads the full-size chain output.
+   if(p.prepared&&p.identity&&!(render_w==width&&render_h==height))full_capture_apply(frame);
    watch(static_cast<unsigned>(frame%plans.size()),p);}
   else{++unqualified;p.resources={};}
  }catch(const std::exception &e){failure=e.what();fail(1);}
@@ -1255,14 +1259,17 @@ void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;
 void copy_dispatch(pb::Frame *f){
  auto timing=ht::begin(ht::route_copy);++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;const auto old_final=copy_final;
  const auto old_full=full_slot_scope;const auto old_full_state=full_slot_state;const auto old_full_calls=full_slot_calls;
- // full_post's slot packet first: its copy is never the native one.
- full_slot_scope=full_slot_before(*f);
- copy_final=false;copy_slot=full_slot_scope!=UINT_MAX||(filtering()&&!watched_packet(f->gpr[3]))?UINT_MAX:copy_before(*f);bool returned=false;
+ const auto old_final_scope=full_final_scope;const auto old_final_calls=full_final_calls;
+ // full_post's slot packet first: its copy is never the native one. Then an
+ // unplanned DLAA copy, whose copy is dropped.
+ full_slot_scope=full_slot_before(*f);full_final_scope=full_slot_scope==UINT_MAX?full_final_before(*f):UINT_MAX;
+ copy_final=false;copy_slot=full_slot_scope!=UINT_MAX||full_final_scope!=UINT_MAX||(filtering()&&!watched_packet(f->gpr[3]))?UINT_MAX:copy_before(*f);bool returned=false;
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[4],f);ht::forward_end(timing);returned=true;}
  __finally{
   copy_after(returned);if(full_slot_scope!=UINT_MAX)full_slot_after();
   copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;
-  full_slot_scope=old_full;full_slot_state=old_full_state;full_slot_calls=old_full_calls;--pending;ht::end(timing);
+  full_slot_scope=old_full;full_slot_state=old_full_state;full_slot_calls=old_full_calls;
+  full_final_scope=old_final_scope;full_final_calls=old_final_calls;--pending;ht::end(timing);
  }
 }
 void observe_final_scene(FinalSceneObserver observer) noexcept {final_scene_observer.store(observer);}

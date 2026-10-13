@@ -214,7 +214,9 @@ void dispatch_inner(unsigned kind,pb::Frame *f) {
         __try{
             if(previous){++queue_visits;queued_taa=reject_queue(5);}else queued_taa=prepare_queue(*f);
 #ifdef MHW_CONTINUOUS_SCALED
-            if(!previous){scaled_temporal::stream_route::full_post_enter(ctx);full_entered=true;}
+            // Admitted as for post_queue_complete below: only such a queue is planned.
+            if(!previous){scaled_temporal::stream_route::full_post_enter(ctx,queued_taa&&requested.load()&&!fault.load()&&owned_context(ctx)&&view==frame_view);
+                full_entered=true;}
 #endif
             mhw_binding_forward(originals[7],f);returned=true;
 #ifdef MHW_CONTINUOUS_SCALED

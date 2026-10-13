@@ -36,7 +36,7 @@ void publish(const temporal_bindings::Snapshot &,const temporal_bindings::Packet
 void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uintptr_t view,std::uintptr_t taa) noexcept;
 // full_post (full_post.hpp), from the activation hooks on the render thread:
 // the post scheduler's entry and exit, and the return of TAA's callback.
-void full_post_enter(std::uintptr_t context) noexcept;
+void full_post_enter(std::uintptr_t context,bool admitted) noexcept;
 void full_post_taa(std::uintptr_t context) noexcept;
 void full_post_exit(std::uintptr_t context) noexcept;
 // From the continuous runtime's TAA consumer, once it proved the scene depth's

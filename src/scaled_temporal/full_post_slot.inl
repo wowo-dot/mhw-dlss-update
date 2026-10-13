@@ -99,6 +99,36 @@ unsigned full_slot_before(const pb::Frame &f) noexcept {
  return found;
 }
 void full_slot_after() noexcept {if(full_slot_calls!=1)++full_counts.slot_skips[0];}
+// The copy executor enters a registered DLAA copy (v0.25.8). When its frame's
+// identity plan is prepared and takes it as the final copy, it runs as at DLAA
+// (copy_before). Otherwise its copy is dropped (full_final_copy). Returns the
+// entry, or UINT_MAX.
+thread_local unsigned full_final_scope=UINT_MAX,full_final_calls{};
+unsigned full_final_before(const pb::Frame &f) noexcept {
+ Lock lock;unsigned found=UINT_MAX;
+ for(unsigned i=0;i<full_finals.size();++i)if(full_finals[i].packet&&full_finals[i].packet==f.gpr[3]&&!full_finals[i].executed){found=i;break;}
+ if(found==UINT_MAX)return found;
+ // A packet address a later packet reuses is not the DLAA copy.
+ auto &r=full_finals[found];std::uintptr_t destination{},source{};std::array<unsigned,4> rect{};
+ if(!field(r.packet,0x10,destination)||destination!=r.destination.object||!field(r.packet,0x18,source)||source!=r.source.object||
+    !field(r.packet,0x38,rect)||rect!=std::array<unsigned,4>{0,0,width,height}){r={};++full_counts.final_stale;return UINT_MAX;}
+ r.executed=true;
+ const auto &p=plans[r.frame%plans.size()];
+ if(p.prepared&&p.stamp.frame==r.frame&&p.identity&&p.final_copy==r.packet)return UINT_MAX;
+ full_final_calls=0;return found;
+}
+// The unplanned DLAA copy's one copy (tBaseMap's texture into the view's
+// attachment) is dropped; any other call is forwarded.
+void full_final_copy(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *destination,UINT x,UINT y,UINT z,
+                     const D3D12_TEXTURE_COPY_LOCATION *source,const D3D12_BOX *box,std::uintptr_t caller) noexcept {
+ bool drop{};
+ {Lock lock;const auto &r=full_finals[full_final_scope];D3D12_TEXTURE_COPY_LOCATION d{},s{};
+  drop=++full_final_calls==1&&caller==cfg.image+0x259caf0&&!x&&!y&&!z&&
+       pb::copy_memory(reinterpret_cast<std::uintptr_t>(destination),&d,sizeof(d))&&pb::copy_memory(reinterpret_cast<std::uintptr_t>(source),&s,sizeof(s))&&
+       reinterpret_cast<std::uintptr_t>(d.pResource)==r.destination.resource&&reinterpret_cast<std::uintptr_t>(s.pResource)==r.source.resource;
+  ++(drop?full_counts.fallbacks:full_counts.fallback_unverified);}
+ if(!drop)reinterpret_cast<CopyFn>(originals[2])(list,destination,x,y,z,source,box);
+}
 // The slot's copy (TAA's output into GBuffer5, 1x1) never runs: it is replaced
 // by the upscale, or by nothing. The three inputs' states are the plan's at the
 // slot (GBuffer5 COPY_DEST, by the packet itself). When TAA's consumer has

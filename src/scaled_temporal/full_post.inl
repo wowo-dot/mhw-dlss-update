@@ -9,20 +9,28 @@ using FullCopyFn=void(*)(std::uintptr_t context,std::uintptr_t destination,int d
 // The game's setViewport (0x23d0330) and copy helper (0x23c9250), set when
 // the hooks are installed. Fixtures may supply their own.
 FullViewportFn full_viewport{};FullCopyFn full_copy{};
-// A frame's candidate is the final quad (pending); it is armed at the post
-// scheduler's entry, once the registration pass has shown TAA's callback will
-// run (v0.25.5).
+// A frame's candidate is the final quad (pending). It enters the post
+// scheduler when the runtime admitted the queue and the registration pass lists
+// TAA's callback (the tone map's callback then runs at the full rectangle), and
+// is armed after TAA's callback, once the runtime has published the frame there
+// (v0.25.8).
 struct FullPostState {
  std::uint64_t frame{};std::uintptr_t context{};
  bool pending{},armed{},in_scheduler{},switched{},tone_map_full{};
  std::array<int,4> render_rect{},full_rect{};
- std::uintptr_t source{},destination{};unsigned key{},order{};  // the final quad's owners and key fields
+ tb::Owner source,destination;unsigned key{},order{};  // the final quad's owners and key fields
+ unsigned quad_at{},scheduler_at{};  // the command count at the final quad and at the scheduler's entry
 };
 thread_local FullPostState full_state;
 std::atomic<std::uint64_t> full_frame{UINT64_MAX};  // the last armed frame (plan builder)
 struct FullPostCounters {
  std::atomic<std::uint64_t> final_copies{},schedulers{},switches{},tone_map_switches{},projections{},restores{},
-  not_switched{},rect_mismatch{},stale{},declined{},no_taa{},taa_unreadable{},identity_plans{};
+  not_switched{},rect_mismatch{},stale{},declined{},no_taa{},taa_unreadable{},unadmitted{},unpublished{},identity_plans{};
+ // v0.25.8: DLAA copies registered unverified or overwritten unexecuted, and
+ // dropped at execution without a prepared plan (or forwarded, unverified);
+ // scene captures widened to the chain's output, and refusals by reason.
+ std::atomic<std::uint64_t> final_unverified{},final_stale{},fallbacks{},fallback_unverified{},captures{};
+ std::array<std::atomic<std::uint64_t>,5> capture_refusals{};
  // The inputs' upscale (v0.25.2): slots recorded, refused (by reason),
  // planned, executed with the upscale, executed without it (by reason).
  std::atomic<std::uint64_t> slots{},slots_planned{},upscales{},slot_unverified{},slot_stale{};
@@ -73,6 +81,45 @@ struct FullSlot {
 };
 std::array<FullSlot,8> full_slots;  // frame % 8, under the route lock
 constexpr unsigned full_slot_key=(15U<<27)|3U;
+// The DLAA copy (v0.25.8), registered when recorded. At execution, a plan that
+// claims it (prepared, identity, its final copy) takes it as at DLAA; any other
+// execution drops its copy (full_post_slot.inl), so the final quad's native
+// upscale, which it would overwrite, stays.
+struct FullFinal {
+ std::uint64_t frame{};std::uintptr_t packet{};tb::Owner source,destination;
+ bool executed{};
+};
+std::array<FullFinal,8> full_finals;  // frame % 8, under the route lock
+// The scene capture (sub_142268890; sScene image+0x51c4368). On request
+// (+0xE998 equal to the renderer's epoch +0x1f208; sub_141B602B0 for the quest
+// result's background, ui\result\tex\capture_back) the camera's draw records,
+// after the final quad and before the post scheduler, a quad
+// (System_CopyScaleOffset) from the target of pass +0xE990 (view +0x60 +
+// 0x40 * pass -> +0x58) into +0xE988, at key (pass, priority +0xE994): by
+// default (15, 0xffffffff), the end of the post chain. Its texture
+// coordinates are the context's rectangle over the view's output size: the
+// render region. In an armed frame that target, the final quad's tBaseMap,
+// holds the full-size chain output, and the capture showed its corner
+// stretched (game-121: the reward screens zoomed). So the draw is found when
+// the frame is armed, and its texture coordinates are widened to the whole
+// texture once the frame's plan is prepared.
+struct FullCapture {std::uint64_t frame{};std::uintptr_t context{},packet{};bool valid{};};
+std::array<FullCapture,8> full_captures;  // frame % 8, under the route lock
+// The capture's four vertices (position, then texture coordinates) as the game
+// writes them for the rectangle r (x, y, width, height) over w x h.
+std::array<float,16> full_capture_vertices(const std::array<int,4> &r,float w,float h) noexcept {
+ const float u0=static_cast<float>(r[0])/w,v0=static_cast<float>(r[1])/h,u1=static_cast<float>(r[2])/w,v1=static_cast<float>(r[3])/h;
+ return {-1.F,1.F,u0,v0,-1.F,-1.F,u0,v1,1.F,1.F,u1,v0,1.F,-1.F,u1,v1};
+}
+// A draw packet's quad in the context's vertex arena (as postfilter.cpp's
+// geometry: state +0x20 stride, +0x24 offset; packet +0x40 count, +0x44 first).
+std::uintptr_t full_quad_vertices(std::uintptr_t context,std::uintptr_t packet) noexcept {
+ unsigned raw{},count{},first{},offset{};std::uintptr_t state{},arena{};unsigned char stride{};
+ if(!field(packet,0,raw)||(raw&31)!=0||!field(packet,0x40,count)||count!=4||!field(packet,0x44,first)||first>1048576||
+    !field(packet,0x18,state)||!state||!field(state,0x20,stride)||stride!=16||!field(state,0x24,offset)||offset>16777216||
+    !field(context,0x2b50,arena)||!arena)return 0;
+ return arena+offset+16ULL*first;
+}
 // Records the slot on the post scheduler's thread, inside TAA's key. 0: the
 // slot was recorded and verified; otherwise the refusal (nothing recorded),
 // or 7 (recorded, not verified: registered so that its copy never runs).
@@ -147,8 +194,9 @@ void full_candidate(const pb::Frame &f,unsigned slot){
  if(!full_post_enabled.load()||!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return;
  FinalQuad q;{Lock lock;q=final_quads[slot];}
  auto &s=full_state;s=FullPostState{};
- if(!q.entered||q.stamp.context!=f.gpr[2]||!field(f.gpr[2],0x154,s.key)||!field(f.gpr[2],0x15c,s.order)){++full_counts.declined;return;}
- s.frame=q.stamp.frame;s.context=f.gpr[2];s.source=q.source.object;s.destination=q.destination.object;s.pending=true;
+ if(!q.entered||q.stamp.context!=f.gpr[2]||!field(f.gpr[2],0x154,s.key)||!field(f.gpr[2],0x15c,s.order)||!field(f.gpr[2],0x2b80,s.quad_at)){
+  ++full_counts.declined;return;}
+ s.frame=q.stamp.frame;s.context=f.gpr[2];s.source=q.source;s.destination=q.destination;s.pending=true;
  s.render_rect={0,0,static_cast<int>(render_w),static_cast<int>(render_h)};s.full_rect={0,0,static_cast<int>(width),static_cast<int>(height)};
 }
 // TAA's descriptor in this frame's scheduler list (sFilterSwapchain +0x3c
@@ -168,28 +216,102 @@ unsigned full_taa_registered() noexcept {
   if(type==cfg.image+0x351bda8)return 0;}
  return 2;
 }
-// At the scheduler's entry the candidate is armed: the final copy becomes the
-// game's DLAA copy (the same owners, the full rectangle), recorded in the
-// final quad's key (stage 16, order 0) after the quad, which it overwrites.
-// Without TAA's callback this frame, nothing is armed: the frame stays native.
-void full_enter(std::uintptr_t context) noexcept {
+// At the scheduler's entry, a queue the runtime admitted (its TAA, this
+// context, the frame's view: the continuous runtime's own check) with TAA's
+// callback registered enters the scheduler: the tone map's callback then runs
+// at the full rectangle. Nothing is recorded yet.
+void full_enter(std::uintptr_t context,bool admitted) noexcept {
  auto &s=full_state;if(!s.pending||context!=s.context)return;
  s.pending=false;
  std::uint64_t frame{};std::array<int,4> rect{};
  if(!field(cfg.renderer,0x1f210,frame)||frame!=s.frame){++full_counts.stale;return;}
  ++full_counts.schedulers;
+ if(!admitted){++full_counts.unadmitted;return;}
  if(!field(context,0x5c,rect)||rect!=s.render_rect){++full_counts.rect_mismatch;return;}
  if(const auto missing=full_taa_registered()){++(missing==1?full_counts.taa_unreadable:full_counts.no_taa);return;}
- unsigned key{},order{};
- if(!field(context,0x154,key)||!field(context,0x15c,order)){++full_counts.declined;return;}
+ if(!field(context,0x2b80,s.scheduler_at)){++full_counts.declined;return;}
+ s.in_scheduler=true;
+}
+// The runtime published this frame at TAA's producer (its stamp in the route:
+// sr::publish, from the TAA hook inside TAA's callback). Only such a frame is
+// planned, and its TAA output is then filled at the output size (by DLSS, or
+// by the spatial resolve when DLSS skips the frame).
+bool full_published(std::uint64_t frame,std::uintptr_t context) noexcept {
+ Lock lock;const auto &p=plans[frame%plans.size()];return p.published&&p.stamp.frame==frame&&p.stamp.context==context;
+}
+// The final copy becomes the game's DLAA copy (the final quad's owners, the
+// full rectangle), recorded in the final quad's key (stage 16, order 0): it
+// sorts after the quad, which it overwrites. The entry the helper appended is
+// found by its owners and registered even when it does not verify, so that it
+// never runs unplanned; not found, the route stops (fault 15). false: nothing
+// recorded.
+bool full_final_record(std::uintptr_t context,const FullPostState &s) noexcept {
+ unsigned key{},order{},count{};std::uintptr_t array{};
+ if(!field(context,0x154,key)||!field(context,0x15c,order)||!field(context,0x2b80,count)||!field(context,0x2b78,array)||!array||count>=65535)return false;
  auto *k=reinterpret_cast<volatile unsigned *>(context+0x154),*o=reinterpret_cast<volatile unsigned *>(context+0x15c);
  const unsigned xy[2]{},full[4]{0,0,width,height};
- *k=s.key;*o=s.order;full_copy(context,s.destination,0,xy,s.source,0,full,nullptr);*k=key;*o=order;
- s.armed=true;s.in_scheduler=true;full_frame.store(s.frame);++full_counts.final_copies;
+ *k=s.key;*o=s.order;full_copy(context,s.destination.object,0,xy,s.source.object,0,full,nullptr);*k=key;*o=order;
+ struct Command {unsigned key{},padding{};std::uintptr_t packet{};} c;static_assert(sizeof(Command)==16);
+ unsigned after{},raw{};std::uintptr_t destination{},source{};std::array<unsigned,4> rect{};
+ if(!pb::copy_memory(array+16ULL*count,&c,sizeof(c))||!c.packet||!field(c.packet,0x10,destination)||destination!=s.destination.object||
+    !field(c.packet,0x18,source)||source!=s.source.object){fail(15);return true;}
+ if((c.key>>27)!=16||!field(context,0x2b80,after)||after!=count+1||!field(c.packet,0,raw)||(raw&31)!=13||
+    !field(c.packet,0x38,rect)||rect!=std::array<unsigned,4>{0,0,width,height})++full_counts.final_unverified;
+ FullFinal r;r.frame=s.frame;r.packet=c.packet;r.source=s.source;r.destination=s.destination;
+ {Lock lock;auto &q=full_finals[s.frame%full_finals.size()];if(q.packet&&!q.executed)++full_counts.final_stale;q=r;}
+ return true;
 }
+// 0: no capture this frame, or the capture found and registered. Otherwise the
+// refusal: 1 unreadable, 2 another pass or source (left as it is), 3 not found
+// exactly once.
+unsigned full_capture_find(std::uintptr_t context,const FullPostState &s) noexcept {
+ std::uintptr_t scene{},texture{},view{},main_view{},target{},source{},array{};std::uint64_t requested{},epoch{};unsigned pass{};
+ if(!field(cfg.image,0x51c4368,scene)||!scene||!field(scene,0xe998,requested)||!field(cfg.renderer,0x1f208,epoch))return 1;
+ if(requested!=epoch||!field(scene,0xe988,texture)||!texture)return 0;
+ // sub_142268890 records it only for the renderer's main view.
+ if(!field(context,0x1d0,view)||!field(cfg.renderer,0x1f450,main_view)||view!=main_view)return 0;
+ if(!field(scene,0xe990,pass)||pass!=15)return 2;
+ if(!field(view,0x60+0x40*15,target)||!target||!field(target,0x58,source))return 1;
+ if(source!=s.source.object)return 2;
+ if(!field(context,0x2b78,array)||!array||s.scheduler_at<s.quad_at||s.scheduler_at-s.quad_at>4096)return 1;
+ const auto native=full_capture_vertices(s.render_rect,static_cast<float>(width),static_cast<float>(height));
+ std::uintptr_t found{};unsigned matches{};
+ for(unsigned i=s.quad_at;i<s.scheduler_at;++i){
+  struct Command {unsigned key{},padding{};std::uintptr_t packet{};} c;static_assert(sizeof(Command)==16);
+  if(!pb::copy_memory(array+16ULL*i,&c,sizeof(c)))return 1;
+  // Stage 15 after TAA and the slot: the chain's output is full size there.
+  if((c.key>>27)!=15||(c.key&0x7ffffffU)<=3)continue;
+  std::array<float,16> now{};const auto vertices=full_quad_vertices(context,c.packet);
+  if(!vertices||!pb::copy_memory(vertices,now.data(),sizeof(now))||std::memcmp(now.data(),native.data(),sizeof(now)))continue;
+  found=c.packet;++matches;}
+ if(matches!=1)return 3;
+ {Lock lock;full_captures[s.frame%full_captures.size()]={s.frame,context,found,true};}
+ return 0;
+}
+// Under the route lock, once the armed frame's plan is prepared (before its
+// commands execute): the capture samples the whole chain output (texture
+// coordinates 0..1), its vertices checked unchanged first.
+void full_capture_apply(std::uint64_t frame) noexcept {
+ auto &c=full_captures[frame%full_captures.size()];if(!c.valid||c.frame!=frame)return;c.valid=false;
+ const std::array<int,4> rect{0,0,static_cast<int>(render_w),static_cast<int>(render_h)};
+ const auto native=full_capture_vertices(rect,static_cast<float>(width),static_cast<float>(height));
+ const auto full=full_capture_vertices(rect,static_cast<float>(render_w),static_cast<float>(render_h));
+ std::array<float,16> now{};const auto vertices=full_quad_vertices(c.context,c.packet);
+ if(!vertices||!pb::copy_memory(vertices,now.data(),sizeof(now))||std::memcmp(now.data(),native.data(),sizeof(now))){++full_counts.capture_refusals[4];return;}
+ std::memcpy(reinterpret_cast<void *>(vertices),full.data(),sizeof(full));++full_counts.captures;
+}
+// After TAA's callback the frame is armed when the runtime published it there.
+// Otherwise nothing is recorded and the frame stays native (game-121: in the
+// tent menu every frame was refused at TAA's producer after the entry had
+// armed it, and the full copy showed the render-size image in its corner); the
+// tone map's full rectangle left its render region as it was.
 void full_taa(std::uintptr_t context) noexcept {
- auto &s=full_state;if(!s.in_scheduler||s.switched||context!=s.context)return;
- // The inputs' upscale slot first, in TAA's key. Without it the chain still
+ auto &s=full_state;if(!s.in_scheduler||s.armed||context!=s.context)return;
+ if(!full_published(s.frame,context)){++full_counts.unpublished;s=FullPostState{};return;}
+ if(!full_final_record(context,s)){++full_counts.declined;s=FullPostState{};return;}
+ s.armed=true;full_frame.store(s.frame);++full_counts.final_copies;
+ if(const auto refusal=full_capture_find(context,s))++full_counts.capture_refusals[refusal];
+ // The inputs' upscale slot, in TAA's key. Without it the chain still
  // switches: its depth- and motion-based effects then read the render-size
  // inputs for this frame (a refusal is counted).
  if(const auto refusal=full_slot_record(context,s.frame))++full_counts.slot_refusals[(std::min)(refusal,7U)];
@@ -198,7 +320,7 @@ void full_taa(std::uintptr_t context) noexcept {
 void full_exit(std::uintptr_t context) noexcept {
  auto &s=full_state;if(!s.in_scheduler||context!=s.context)return;
  if(s.switched||s.tone_map_full){full_viewport(context,s.render_rect.data());++full_counts.restores;}
- if(!s.switched)++full_counts.not_switched;
+ if(!s.switched)++full_counts.not_switched;  // TAA's callback did not run: nothing was recorded
  s=FullPostState{};
 }
 // The tone map's callback (unit, context) runs before TAA's. Its final grade
@@ -233,7 +355,11 @@ void full_post_write(std::ostream &o){
  o<<"{\"enabled\":"<<full_post_enabled.load()<<",\"final_copies\":"<<full_counts.final_copies<<",\"schedulers\":"<<full_counts.schedulers
   <<",\"switches\":"<<full_counts.switches<<",\"tone_map_switches\":"<<full_counts.tone_map_switches<<",\"projections\":"<<full_counts.projections
   <<",\"restores\":"<<full_counts.restores<<",\"not_switched\":"<<full_counts.not_switched<<",\"rect_mismatch\":"<<full_counts.rect_mismatch
-  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"taa_unreadable\":"<<full_counts.taa_unreadable<<",\"identity_plans\":"<<full_counts.identity_plans
+  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"taa_unreadable\":"<<full_counts.taa_unreadable<<",\"unadmitted\":"<<full_counts.unadmitted<<",\"unpublished\":"<<full_counts.unpublished
+  <<",\"final_unverified\":"<<full_counts.final_unverified<<",\"final_stale\":"<<full_counts.final_stale<<",\"fallbacks\":"<<full_counts.fallbacks
+  <<",\"fallback_unverified\":"<<full_counts.fallback_unverified<<",\"captures\":"<<full_counts.captures<<",\"capture_refusals\":["
+  <<full_counts.capture_refusals[0]<<','<<full_counts.capture_refusals[1]<<','<<full_counts.capture_refusals[2]<<','<<full_counts.capture_refusals[3]<<','<<full_counts.capture_refusals[4]<<']'
+  <<",\"identity_plans\":"<<full_counts.identity_plans
   <<",\"inputs\":{\"ready\":"<<full_inputs.ready()<<",\"failure\":\""<<full_inputs_failure<<"\",\"bytes\":"<<full_inputs.bytes()<<",\"slots\":"<<full_counts.slots<<",\"planned\":"<<full_counts.slots_planned
   <<",\"upscales\":"<<full_counts.upscales<<",\"states_checked\":"<<full_counts.states_checked<<",\"states_planned\":"<<full_counts.states_planned
   <<",\"state_mismatch\":["<<full_counts.state_mismatch[0]<<','<<full_counts.state_mismatch[1]<<','<<full_counts.state_mismatch[2]<<','<<full_counts.state_mismatch[3]
