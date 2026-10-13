@@ -255,3 +255,17 @@ user then tried to break it.
     thread;
   - a new list takes the slot;
   - a full table of live lists fails.
+
+## game-87 (v0.23.2, 2026-10-13): passed
+
+The user tried to break it and could not.
+- **Six live aspect changes**, all succeeded on the first attempt in
+  156-219 ms, with FG configured again each time:
+  - four at Quality (1696x715 / 1696x954);
+  - two at Performance (1280x540 / 1280x720).
+- **Two live preset changes**: Quality → Balanced → Performance, 172 ms each.
+- **The registry:** 51 lists at the start, 108, then 127, then full at 128.
+  The prune freed 114 released lists; 32 were live at the last summary.
+- **Health:** DLSS fault 0 for the whole session (20,104 frames); clean exit.
+
+Live 16:9 / 21:9 recovery (roadmap step 2, part B) is done; v0.23.2 is tagged.
