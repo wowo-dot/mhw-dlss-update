@@ -505,3 +505,69 @@ unmodded game. Where the GPU is the limit, the presets' GPU savings decide
 
 **Diagnostics added:** `profile`, `perf_ab`, `hook_timing`,
 `observer_bench`, and the PresentMon capture and summary tools.
+
+## perf11: the effect handlers in the field (v0.24.2, game-100)
+
+The hub runs never exercised:
+- the silhouette redraws (field only);
+- depth of field (the user's game had it off);
+- the effect-specific handlers.
+
+The timing diagnostic also covered only the D3D12 hooks. v0.24.2 adds the
+game-function hooks to `hook_timing`:
+- `route_post`, `route_draw`, `route_indexed`, `route_copy` and `route_final`
+  (the stream route's detours);
+- `route_queue` (plan build, silhouette scan, preparation);
+- `native_frame` (the continuous runtime's TAA, DLSS consumer, depth and
+  projection hooks).
+
+**Run setup:** training grounds, Quality, frame generation off, the game's
+depth of field on, `perf_ab` and `hook_timing` on, PresentMon
+(`local/perf/20261013-perf11`).
+- **Coverage:** depth of field ran on 35,567 frames (0 failures), with 664,140
+  silhouette corrections.
+- **Recording:** the user's 286 s video. Video time is wall clock minus
+  09:37:54, so DLSS ran at 69-99, 129-159, 189-219 and 249-279 s.
+
+| Steady 25 s windows | fps | 1% low | p99 | CPU busy | GPU busy |
+|---|---|---|---|---|---|
+| DLSS running (4) | 296.5-298.3 | 215-222 | 4.50-4.65 ms | 3.21-3.23 ms | 2.71-2.82 ms |
+| DLSS paused (3) | 299.3-299.8 | 218-225 | 4.45-4.58 ms | 3.20 ms | 2.04-2.12 ms |
+
+The handlers cost about 0.7% fps (0.02 ms of frame time), with the same 1%
+lows and no stutter. The +0.7 ms of GPU is DLSS plus depth of field and the
+redraws at output size; the GPU is not the limit at 300 fps.
+
+**Hook timing (own CPU time, all threads).** Running-only windows against
+paused-only windows; the 20 s timing windows were not aligned to the A/B
+switch.
+
+| | Extra with DLSS running |
+|---|---|
+| Silhouette redraws (`indexed`) | ~0.2 ms a frame |
+| Depth of field and compute (`dispatch`) | ~0.18 ms a frame |
+| DLSS consumer hooks (`native_frame`) | ~0.19 ms a frame |
+| Plan build and silhouette scan (`route_queue`) | ~0.16 ms a frame |
+| List reset and close | ~0.11 ms a frame |
+| Barriers | ~0.07 ms a frame |
+| **Total** | **about 1 ms a frame** |
+
+That work runs on the game's worker threads and overlaps on the 9950X3D;
+fewer cores would have less slack.
+
+**Always on, even paused:** `route_indexed` (~250-290 µs a frame, about 0.8 µs
+a call) and `route_draw` (~165 µs, 0.5 µs a call).
+- **Cause:** the packet filter. The plan ring keeps up to 32 plans watched
+  (a slot is unwatched only when it is published again), and every engine
+  draw was compared against every watched plan's list: about 1,000 compares,
+  almost all misses.
+- **v0.24.3:** `watch_filter.hpp`.
+  - Each plan has a 1,024-bit filter, and a 16,384-bit union covers every
+    watched plan. Each has two bits an address, with no false negatives.
+  - A draw no plan watches is rejected after two loads. A union hit checks
+    the per-plan filters, then the exact list.
+  - Unwatch rebuilds the union from the remaining lists, word by word, so a
+    reader always sees every watched plan's bits.
+  - Barriers' resource lookups use the same filter.
+  - perf_tests: about 2% of unrelated addresses pass the union at 1,300
+    entries, and under 1% pass a plan filter at 40.

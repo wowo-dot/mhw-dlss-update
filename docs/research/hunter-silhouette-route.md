@@ -111,6 +111,43 @@ The late-candidates fixture (`scaled_stream_route_fixture … late-candidates`)
 checks both cases: a packet whose engine pipeline writes nothing is
 classified, and one with a colour write is not.
 
+**Four vertex streams (game-100, v0.24.3).** The perf11 run in the training
+grounds, with the user changing the area's objects, left 75,740 silhouette
+draws native with rejection 8 (buffers, failed check 2: `vertex_mask` 15, not
+1). They were absent in game-99.
+
+- **What they are:** shader census lookups of the rejected pairs give hunter
+  materials in `RenderTransparent`: PL_Skin, PL_Hair, PL_EditFace,
+  PL_Mt_AlphaTest and Uber_Mt. Their vertex shaders are the **AlphaDither**
+  variants (MeshSkin1Weight and MeshSkin4Weight) with four vertex streams.
+  That is the hunter's silhouette in the dithered state, near the carts and
+  barrels of the second and third object layouts.
+- **Where they happened:** 69-99 s and 189-219 s of the recording. No ghost
+  is visible at the video's scale. The pieces are dithered and partial, but
+  they stayed at the render viewport.
+- **The engine's input assembly** (IDA, clean image: `sub_14259E470`, called
+  from the indexed execution `0x259d740` with packet +0x18) holds up to four
+  streams:
+  - owners at +0x00, +0x08, +0x10 and +0x18;
+  - strides as bytes at +0x20 to +0x23;
+  - offsets at +0x24, +0x28, +0x2c and +0x30;
+  - the index owner at +0x38 and its offset at +0x40.
+
+  It calls `IASetVertexBuffers(0, last + 1, views)`, with a zero view for a
+  null owner in between.
+- **v0.24.3:** `silhouette_buffers` admits one to four streams.
+  - The bound mask must be exactly the engine's streams.
+  - Each owned stream gets stream 0's checks: the resource contains the
+    engine range, and the view matches location, size and stride. Extra
+    streams may have strides of 4 to 128.
+  - A null stream must have a zero view.
+  - Every stream's resource is pinned.
+  - Failure codes: stream 0 6-12 as before, streams 1-3 20, 30 and 40 plus
+    0-7, the index buffer 14-18.
+  - The late-candidates fixture checks one and four streams, a wrong mask,
+    stride and location mismatches, and a null stream with a zero or non-zero
+    view, on real WARP buffers.
+
 The list of rejections and fixes continues:
    - `Simple_Mt_AlphaTest` stays native: it writes nothing (above, v0.24.1).
 

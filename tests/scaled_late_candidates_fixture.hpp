@@ -63,6 +63,38 @@ void check_late_candidates(fx::Fixture &f){
   require(silent==1&&written==1,"a draw that writes nothing is classified; a colour write is not");
   require(route::silhouette_unknown_draws==unknown&&route::silhouette_recipe_failed>failed,"no unknown program; the other pieces fail lookup");
   for(const auto o:{objects[1],objects[2]}){put(o+0x20,std::uintptr_t{});put(o+0x28,std::uintptr_t{});}}
+ // v0.24.3: the silhouette's vertex and index buffers, one to four streams.
+ // The engine's input-assembly object (sub_14259E470): stream owners at
+ // +0x00..+0x18, strides at +0x20..+0x23, offsets at +0x24..+0x30, the index
+ // owner at +0x38 and its offset at +0x40. Owner +0x60 is its backing: +0x20
+ // the D3D12 resource, +0x40 the GPU address, +0x10 the byte count.
+ {std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,5> resources;
+  for(auto &r:resources){D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};D3D12_RESOURCE_DESC d{};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
+   d.Width=65536;d.Height=d.DepthOrArraySize=d.MipLevels=1;d.SampleDesc.Count=1;d.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+   require(SUCCEEDED(f.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&r))),"silhouette buffer");}
+  const auto ia=a.take(0x48);std::array<std::uintptr_t,5> owners{};
+  const std::array<unsigned char,4> strides{32,8,16,4};const std::array<unsigned,4> offsets{256,512,1024,2048};
+  for(unsigned i=0;i<5;++i){const auto backing=a.take(0x48);owners[i]=a.take(0x68);put(owners[i]+0x60,backing);
+   put(backing+0x20,reinterpret_cast<std::uintptr_t>(resources[i].Get()));put(backing+0x40,resources[i]->GetGPUVirtualAddress()+4096);put(backing+0x10,32768U);}
+  route::LatePacket packet;packet.bindings[1]=ia;packet.arguments={600,0,0};
+  mhw::temporal_present::observer::RasterBindings raster;
+  raster.generation=1;raster.vertex_known=raster.viewport_known=raster.scissor_known=raster.topology_known=raster.index_known=true;
+  raster.topology=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+  const auto bind=[&](unsigned streams,unsigned hole){
+   for(unsigned k=0;k<4;++k){const bool on=k<streams&&k!=hole;put(ia+8*k,on?owners[k]:std::uintptr_t{});put(ia+0x20+k,strides[k]);put(ia+0x24+4*k,offsets[k]);
+    raster.vertex_buffers[k]=on?D3D12_VERTEX_BUFFER_VIEW{resources[k]->GetGPUVirtualAddress()+4096+offsets[k],32768U-offsets[k],strides[k]}:D3D12_VERTEX_BUFFER_VIEW{};}
+   raster.vertex_buffer=raster.vertex_buffers[0];raster.vertex_mask=(1U<<streams)-1;
+   put(ia+0x38,owners[4]);put(ia+0x40,128U);raster.index_buffer={resources[4]->GetGPUVirtualAddress()+4096+128,32768U-128,DXGI_FORMAT_R16_UINT};};
+  const auto admit=[&](std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,5> &pinned){std::array<std::uint64_t,5> seen{};return route::silhouette_buffers(packet,raster,pinned,seen);};
+  std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,5> pinned;
+  bind(1,9);require(admit(pinned)==0&&pinned[0]&&!pinned[1]&&pinned[4],"one vertex stream (as before v0.24.3)");
+  pinned={};bind(4,9);require(admit(pinned)==0&&pinned[0]&&pinned[1]&&pinned[2]&&pinned[3]&&pinned[4],"four vertex streams, all pinned");
+  bind(4,9);raster.vertex_mask=7;require(admit(pinned)==2,"a bound mask that is not the engine's streams");
+  bind(4,9);raster.vertex_buffers[2].StrideInBytes=20;require(admit(pinned)==36,"stream 2's stride mismatch");
+  bind(4,9);put(ia+0x2c,1024U+16);require(admit(pinned)==34,"stream 2's location mismatch");
+  pinned={};bind(4,1);require(admit(pinned)==0&&!pinned[1]&&pinned[2],"a null stream between bound ones has a zero view");
+  bind(4,1);raster.vertex_buffers[1]={resources[1]->GetGPUVirtualAddress(),16,8};require(admit(pinned)==27,"a null stream with a non-zero view");
+  bind(4,9);put(ia+0x21,static_cast<unsigned char>(6));raster.vertex_buffers[1].StrideInBytes=6;require(admit(pinned)==23,"stream 1's stride is not a multiple of 4");}
  std::ostringstream summary;route::write_summary(summary);
  require(summary.str().find("\"late_draws\":{\"planned\":")!=std::string::npos&&summary.str().find("\"max\":65,\"capacity\":64}")!=std::string::npos,"summary reports late draws");
  route::cfg=saved;

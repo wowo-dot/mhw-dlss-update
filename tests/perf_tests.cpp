@@ -12,6 +12,7 @@
 #include <string>
 #include "../src/perf/hook_timing.hpp"
 #include "../src/perf/in_flight.hpp"
+#include "../src/scaled_temporal/watch_filter.hpp"
 namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
 
 namespace {
@@ -256,6 +257,50 @@ void hook_timing_tests() {
           "every category has a name in the event");
     ht::enabled.store(false);
 }
+// v0.24.3: the stream route's watch filters. Every added address is found (no
+// false negative, the filters' contract); at a realistic load (one plan's ~40
+// packets in a plan filter, 32 plans' ~1,300 in the union) unrelated addresses
+// are mostly rejected; a filled filter admits everything, a cleared one
+// nothing; a union assigned from a local build matches its adds.
+void watch_filter_tests() {
+    using mhw::scaled_temporal::PlanFilter;
+    using mhw::scaled_temporal::UnionFilter;
+    static PlanFilter one;
+    static UnionFilter all, rebuilt;
+    std::uint64_t state = 0x243F6A8885A308D3ULL;
+    const auto next = [&] { state = state * 6364136223846793005ULL + 1442695040888963407ULL; return (state >> 8) & ~std::uint64_t(15); };
+    std::array<std::uintptr_t, 1300> added{};
+    std::array<std::uint64_t, UnionFilter::words> local{};
+    for (unsigned i = 0; i < added.size(); ++i) {
+        added[i] = static_cast<std::uintptr_t>(next());
+        if (i < 40) one.add(added[i]);
+        all.add(added[i]);
+        UnionFilter::set(local, added[i]);
+    }
+    rebuilt.assign(local);
+    bool found = true;
+    for (unsigned i = 0; i < added.size(); ++i)
+        found = found && all.may_contain(added[i]) && rebuilt.may_contain(added[i]) && (i >= 40 || one.may_contain(added[i]));
+    check(found, "every added address is found");
+    unsigned one_hits{}, all_hits{};
+    for (unsigned i = 0; i < 100000; ++i) {
+        const auto a = static_cast<std::uintptr_t>(next());
+        one_hits += one.may_contain(a);
+        all_hits += all.may_contain(a);
+    }
+    check(one_hits < 1000, "one plan: under 1% of unrelated addresses pass");
+    check(all_hits < 5000, "32 plans' union: under 5% of unrelated addresses pass");
+    // Neighbouring packets (one engine arena) spread over the bits.
+    static PlanFilter run;
+    for (unsigned i = 0; i < 40; ++i) run.add(0x7ff600000000ULL + 0x50 * i);
+    unsigned run_hits{};
+    for (unsigned i = 40; i < 10040; ++i) run_hits += run.may_contain(0x7ff600000000ULL + 0x50 * i);
+    check(run_hits < 300, "neighbouring packets are mostly rejected");
+    one.fill();
+    check(one.may_contain(0x1230) && one.may_contain(static_cast<std::uintptr_t>(next())), "a filled filter admits everything");
+    one.clear();
+    check(!one.may_contain(added[0]), "a cleared filter admits nothing");
+}
 // v0.23.10: the in-flight count without locked instructions. Eight threads
 // add and subtract; a held count is seen from another thread; and the drain
 // contract under a race: after the flag is cleared and zero() observed, no
@@ -323,6 +368,7 @@ void in_flight_tests() {
 
 int main() {
     in_flight_tests();
+    watch_filter_tests();
     hook_timing_tests();
     frame_stats_tests();
     region_tests();

@@ -19,6 +19,7 @@
 #include "overlay_extent.hpp"
 #include "silhouette_shader.hpp"
 #include "silhouette_draw.hpp"
+#include "watch_filter.hpp"
 #ifdef MHW_FG_SCENE_PROBE
 #include "../frame_generation/scene_trace.hpp"
 #endif
@@ -179,14 +180,28 @@ constexpr unsigned watch_packets=96;
 struct Watch {
  std::array<std::atomic<std::uintptr_t>,watch_packets> packets{};std::array<std::atomic<std::uintptr_t>,resource_capacity> resources{};
  std::atomic<unsigned> packet_count{},resource_count{};std::atomic<bool> all{};
+ PlanFilter packet_filter,resource_filter;  // v0.24.3: this slot's lists (watch_filter.hpp)
 };
 std::array<Watch,32> watches;
 std::atomic<std::uint32_t> watch_mask{};
+// The union of every watched slot's filters: most hooked calls (every engine
+// draw, every barrier) match no plan and are rejected here.
+UnionFilter any_packet,any_resource;
 static_assert(watches.size()==plans.size()&&plans.size()<=32,"one watch bit per plan slot");
 bool filtering() noexcept {return perf::on(perf::packet_filter);}
+// Under the route lock.
 void unwatch(unsigned slot) noexcept {
- watch_mask.fetch_and(~(1U<<slot),std::memory_order_acq_rel);auto &w=watches[slot];
+ const auto mask=watch_mask.fetch_and(~(1U<<slot),std::memory_order_acq_rel)&~(1U<<slot);auto &w=watches[slot];
  w.packet_count.store(0,std::memory_order_release);w.resource_count.store(0,std::memory_order_release);w.all.store(false,std::memory_order_release);
+ w.packet_filter.clear();w.resource_filter.clear();
+ // The unions rebuilt from the slots still watched.
+ std::array<std::uint64_t,UnionFilter::words> packets{},resources{};bool overflow=false;
+ for(auto m=mask;m;m&=m-1){const auto &x=watches[static_cast<unsigned>(std::countr_zero(m))];
+  overflow=overflow||x.all.load(std::memory_order_relaxed);
+  for(unsigned i=0,n=x.packet_count.load(std::memory_order_relaxed);i<n;++i)UnionFilter::set(packets,x.packets[i].load(std::memory_order_relaxed));
+  for(unsigned i=0,n=x.resource_count.load(std::memory_order_relaxed);i<n;++i)UnionFilter::set(resources,x.resources[i].load(std::memory_order_relaxed));}
+ if(overflow)packets.fill(~0ULL);
+ any_packet.assign(packets);any_resource.assign(resources);
 }
 template<class Fn> bool watched(Fn &&listed) noexcept {
  for(auto mask=watch_mask.load(std::memory_order_acquire);mask;mask&=mask-1){
@@ -194,24 +209,30 @@ template<class Fn> bool watched(Fn &&listed) noexcept {
  return false;
 }
 bool watched_packet(std::uintptr_t packet) noexcept {
- return watched([&](const Watch &w){const auto n=w.packet_count.load(std::memory_order_acquire);
+ if(!any_packet.may_contain(packet))return false;
+ return watched([&](const Watch &w){if(!w.packet_filter.may_contain(packet))return false;const auto n=w.packet_count.load(std::memory_order_acquire);
   for(unsigned i=0;i<n;++i)if(w.packets[i].load(std::memory_order_relaxed)==packet)return true;return false;});
 }
 bool watched_resource(std::uintptr_t resource) noexcept {
- return watched([&](const Watch &w){const auto n=w.resource_count.load(std::memory_order_acquire);
+ if(!any_resource.may_contain(resource))return false;
+ return watched([&](const Watch &w){if(!w.resource_filter.may_contain(resource))return false;const auto n=w.resource_count.load(std::memory_order_acquire);
   for(unsigned i=0;i<n;++i)if(w.resources[i].load(std::memory_order_relaxed)==resource)return true;return false;});
 }
 // Under the route lock: when a plan is built, and again when a dependency
 // refresh pins another resource for it. Rewritten entries keep their values.
 void watch(unsigned slot,const Plan &p) noexcept {
  auto &w=watches[slot];unsigned n{},r{};bool overflow=false;
- const auto add=[&](std::uintptr_t packet){if(!packet)return;if(n==watch_packets){overflow=true;return;}w.packets[n++].store(packet,std::memory_order_relaxed);};
+ // Filter bits first (only added while the slot is watched), then the lists.
+ const auto add=[&](std::uintptr_t packet){if(!packet)return;if(n==watch_packets){overflow=true;return;}
+  w.packet_filter.add(packet);any_packet.add(packet);w.packets[n++].store(packet,std::memory_order_relaxed);};
  for(const auto &d:p.draws)add(d.draw.packet);
  for(unsigned i=0;i<p.late_count&&i<p.late_packets.size();++i)add(p.late_packets[i]);
  if(p.dof)for(const auto &d:p.dof->passes)add(d.packet);
  add(p.copy);add(p.final_copy);add(p.temporal.object);
  for(unsigned i=0;i<resource_count(p)&&i<p.resources.size();++i)
-  if(auto *x=p.resources[i].Get())w.resources[r++].store(reinterpret_cast<std::uintptr_t>(x),std::memory_order_relaxed);
+  if(auto *x=p.resources[i].Get()){const auto address=reinterpret_cast<std::uintptr_t>(x);
+   w.resource_filter.add(address);any_resource.add(address);w.resources[r++].store(address,std::memory_order_relaxed);}
+ if(overflow){w.packet_filter.fill();any_packet.fill();}
  w.all.store(overflow,std::memory_order_release);
  w.packet_count.store(n,std::memory_order_release);w.resource_count.store(r,std::memory_order_release);
  watch_mask.fetch_or(1U<<slot,std::memory_order_release);
@@ -595,7 +616,7 @@ bool prepare_frame(Plan &p){
  return true;
 }
 bool retain_recording(Plan &p,ID3D12GraphicsCommandList *list,std::uint64_t gen,std::span<IUnknown *const> extra={}){
- std::array<IUnknown *,resource_capacity+12> pins{};unsigned count=resource_count(p);
+ std::array<IUnknown *,resource_capacity+16> pins{};unsigned count=resource_count(p);
  for(unsigned i=0;i<count;++i)pins[i]=p.resources[i].Get();
  if(p.selector)pins[count++]=p.selector.Get();else return false;
  if(extra.size()>pins.size()-count)return false;
