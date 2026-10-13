@@ -335,3 +335,8 @@ changes and 2 switches, then 10 switches) and game-125 (10 switches).
 The startup discovery queue (`projection_binding/provenance.cpp`, once) still
 takes one slot. With v0.25.11's paced-fault rule, a full table would no longer
 end routing under frame generation.
+
+**game-126 (v0.25.12):** 26 live aspect switches at 6x frame generation and
+Performance, all completed; 0 Reflex faults, frame generation never stopped,
+fault 0. 8,788 DLSS frames, all armed and planned by full_post. The user: "fix
+worked". 204 frames skipped DLSS during the rebuilds, by design.
