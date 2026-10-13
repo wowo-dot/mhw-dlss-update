@@ -194,3 +194,49 @@ A diagnostic build, with no rendering change, that logs the post census:
 
 A Quality run and a DLAA run answer questions 1-3. Then the prototype goes
 behind an ini key (`full_post = on`), with the census as its check.
+
+## Prototype results
+
+**game-114 (v0.25.0), hub, depth of field and motion blur off.**
+
+- The mechanics held: 25,052 frames armed, switched and restored; identity
+  plans built and resolved with DLSS; fault 0.
+- The scene showed the top-left render-size corner of the full-size chain,
+  stretched over the screen (a 1/scale zoom; the user's screenshots).
+- **Cause:** the tone map's final grade (`ToneMappingApply_ColorGrading`)
+  reuses the texture coordinates its exposure step computed from the
+  rectangle at the start of the callback. The endpoint-key switch therefore
+  gave a full viewport with render-size coordinates.
+- 4,714 armed frames never ran TAA's callback (title and loading screens).
+
+**v0.25.1:**
+
+- The tone map's callback runs entirely at the full rectangle. Its exposure
+  step (`AutoExposureApply*`, into TAA's input, before TAA) uses no CBScreen,
+  and its coordinates are linear in the pixel position, so the render region
+  is unchanged. The key-setter hook is gone.
+- A frame arms only when the previous one ran TAA's callback.
+
+**game-115 (v0.25.1), same test.** The user: "looks good to my eyes".
+
+| Measure | Count |
+| --- | --- |
+| Frames armed (final copies) | 15,068 |
+| Switched and restored | 15,064 |
+| Not switched (transitions) | 4 |
+| Not armed (no TAA in the previous frame) | 3,778 |
+| DLSS frames | 15,066 (fault 0, 2 single-frame skips) |
+| Frame generation tagged | 15,064 (0 exceptions) |
+
+- Frame rate is as before (224-274).
+- The HUD-less image skipped 150 frames (no_restore: no pipeline or graphics
+  root bound when the final copy opens a command list). This is the identity
+  path's existing behaviour: game-98 at DLAA had 112.
+
+**Still to do:**
+
+- upscale the render-size inputs (depth, GBuffer4/5, occlusion) for depth of
+  field, motion blur and the depth-based effects;
+- plan the late silhouette draws in armed frames;
+- the 4 frames armed at a transition;
+- an effects hunt with `full_post = on`.
