@@ -513,6 +513,12 @@ add_library(mhw_temporal_state STATIC src/temporal_present/observer.cpp)
 target_compile_features(mhw_temporal_state PUBLIC cxx_std_20)
 target_compile_options(mhw_temporal_state PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
 target_link_libraries(mhw_temporal_state PUBLIC mhw_temporal_present minhook mhw_astera_hooks)
+add_executable(observer_slots_tests tests/observer_slots_tests.cpp)
+target_compile_options(observer_slots_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+target_include_directories(observer_slots_tests PRIVATE "${minhook_SOURCE_DIR}/include")
+target_link_libraries(observer_slots_tests PRIVATE mhw_temporal_state d3d12 dxgi dxguid)
+set_target_properties(observer_slots_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_test(NAME observer_list_slots COMMAND observer_slots_tests)
 add_executable(mhw_temporal_input_replay tools/temporal_input_replay.cpp)
 target_link_libraries(mhw_temporal_input_replay PRIVATE mhw_temporal_gpu_inputs)
 target_compile_options(mhw_temporal_input_replay PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
@@ -909,7 +915,7 @@ if(TARGET mhw_dlss_sdk_live)
         target_link_libraries(continuous_runtime_tests PRIVATE minhook bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve)
         target_compile_options(continuous_runtime_tests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8>)
         set_target_properties(continuous_runtime_tests PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-        foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate pending-retirement unfiltered-copy reconstruction state-trace native-state-trace native-state-admission depth-eligibility depth-destination shutdown-success shutdown-partial
+        foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate pending-retirement released-lists held-lists unfiltered-copy reconstruction state-trace native-state-trace native-state-admission depth-eligibility depth-destination shutdown-success shutdown-partial
             requests-consumed requests-same-frame requests-wrap requests-blocked requests-unmatched requests-multiple requests-changed requests-reentrant requests-depth resolve-forward
             forwarded-wrap forwarded-overlap forwarded-early-reuse forwarded-stop forwarded-exception
             forwarded-changed-before forwarded-changed-after forwarded-stale-token forwarded-ambiguous forwarded-unmatched forwarded-reentrant)

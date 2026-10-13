@@ -43,6 +43,10 @@ public:
         if(!e||e->signal||e->retired||!signal||signal==UINT64_MAX)return false;
         e->signal=signal;++submitted_;return true;
     }
+    // A recording of this generation not yet submitted.
+    bool pending(ID3D12GraphicsCommandList *list,std::uint64_t generation) noexcept {
+        const auto *e=find(list,generation);return e&&!e->signal;
+    }
     bool reset(ID3D12GraphicsCommandList *list,std::uint64_t generation) noexcept {
         auto *e=find(list,generation);if(!e)return true;
         if(!e->signal||e->retired)return false;

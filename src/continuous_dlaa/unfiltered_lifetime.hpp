@@ -29,6 +29,7 @@ public:
         if(auto *s=find(list,generation))*s={};return true;
     }
     bool tracked(ID3D12GraphicsCommandList *list,std::uint64_t generation) noexcept {return find(list,generation)!=nullptr;}
+    bool pending(ID3D12GraphicsCommandList *list,std::uint64_t generation) noexcept {const auto *s=find(list,generation);return s&&!s->submitted;}
     bool before(ID3D12CommandQueue *queue,std::span<ID3D12CommandList *const> batch,Submission &token) noexcept {
         token={};
         for(auto *base:batch)for(const auto &s:slots_)if(s.list==base){

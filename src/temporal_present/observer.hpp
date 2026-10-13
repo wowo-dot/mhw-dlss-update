@@ -32,8 +32,12 @@ using ViewportListener=void(*)(ID3D12GraphicsCommandList *,unsigned,const D3D12_
 bool install(ID3D12Device *,Resolver,std::string &,bool raster=false,ViewportListener=nullptr,bool predicate=false,bool indexed=false);
 void begin() noexcept;
 // The owner supplies only successful, validated DIRECT-list Reset generations,
-// and pins every admitted command list for the entire observer interval.
+// and pins every admitted command list until it calls forget() for it.
 void reset(ID3D12GraphicsCommandList *,std::uint64_t,ID3D12PipelineState *) noexcept;
+// The owner's pin was the list's last reference (its creator released it): no
+// thread can record with it again. Its slot is freed before the owner drops
+// the pin, so a new list at the same address starts clean.
+void forget(ID3D12GraphicsCommandList *) noexcept;
 bool capture(unsigned,std::uint64_t,ID3D12GraphicsCommandList *,std::uintptr_t expected_root,std::uintptr_t expected_pipeline) noexcept;
 bool sample(unsigned,Bindings &) noexcept;
 bool matches_current(ID3D12GraphicsCommandList *,const Bindings &) noexcept;

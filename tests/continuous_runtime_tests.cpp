@@ -39,6 +39,22 @@ void queue_fixture(){
     D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;ComPtr<ID3D12Resource> resource;
     check(SUCCEEDED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&resource))),"owned queue fixture resource");
     const cd::ResourcePins pins{resource,resource,resource,resource};
+    if(mode=="released-lists"||mode=="held-lists"){
+        // Lists the creator releases are pruned from the registry (and the
+        // observer); lists it still holds are never evicted (fault 15).
+        const bool held=mode=="held-lists";std::vector<ComPtr<ID3D12GraphicsCommandList>> kept;
+        for(unsigned n=0;n<300;++n){ComPtr<ID3D12GraphicsCommandList> l;
+            check(SUCCEEDED(device->CreateCommandList(0,q.Type,allocators[0].Get(),nullptr,IID_PPV_ARGS(&l)))&&SUCCEEDED(l->Close()),"transient list");
+            check(SUCCEEDED(cd::reset_hook(l.Get(),allocators[0].Get(),nullptr))&&SUCCEEDED(cd::close_hook(l.Get())),"transient Reset and Close");
+            if(held){kept.push_back(l);if(cd::fault.load())break;}
+        }
+        if(held){check(cd::fault==15&&!cd::accepting&&kept.size()==129&&cd::lists_pruned==0,"held lists are never pruned");
+            std::cout<<"Held lists fail closed at 129\n";return;}
+        // Full at 128: the 129th and the 257th prune every released list.
+        check(cd::healthy()&&cd::lists_pruned==256&&cd::live_lists()==44&&cd::list_count==44&&cd::lists_peak==128,"released lists pruned");
+        check(cd::recording_pins.live()==0&&cd::lease.list==nullptr,"nothing retained for pruned lists");
+        std::cout<<"Released lists pruned: "<<cd::lists_pruned<<"\n";return;
+    }
     if(mode=="pending-retirement"){
         ComPtr<ID3D12Fence> gate;check(SUCCEEDED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gate))),"gate");
         auto *list=lists[0].Get();check(SUCCEEDED(cd::reset_hook(list,allocators[0].Get(),nullptr)),"initial Reset");
@@ -263,7 +279,7 @@ int main(int argc,char **argv){
     if(mode.starts_with("forwarded-")){forwarded_request_fixture();return 0;}
     if(mode=="resolve-forward"){resolve_forward_fixture();return 0;}
     if(mode.starts_with("requests-")){request_fixture();return 0;}
-    if(mode=="queues"||mode=="early-reset"||mode=="duplicate"||mode=="pending-retirement"){queue_fixture();return 0;}
+    if(mode=="queues"||mode=="early-reset"||mode=="duplicate"||mode=="pending-retirement"||mode=="released-lists"||mode=="held-lists"){queue_fixture();return 0;}
     Block image(0x55d3000),renderer(0x20000),backend(0x43000),view(0x1000);
     cd::cfg={image.p,renderer.p,backend.p,1234};
     put(image.p+0x51c4480,renderer.p);put(renderer.p+0x78,backend.p);put(backend.p+0x18,std::uintptr_t{1234});put(renderer.p+0x1f450,view.p);

@@ -12,8 +12,9 @@ namespace mhw::temporal_present::observer {
 namespace {
 constexpr unsigned raster_hooks=hook_count+5,predicate_hooks=raster_hooks+1,max_hooks=predicate_hooks+1;
 constexpr std::array<unsigned,max_hooks> methods{11,25,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,20,21,22,44,46,55,43};
-// Entries are appended under the process-wide lock and never reassigned, so
-// lists[i] identifies entries[i] for the life of the process.
+// Entries are assigned under the process-wide lock. lists[i] identifies
+// entries[i] until the owner reports the list released (forget()); the slot is
+// then free for another list, and `epoch` invalidates threads' cached lookups.
 struct Entry {SRWLOCK lock=SRWLOCK_INIT;Bindings state;RasterBindings raster;Predicate predicate;};
 #ifdef MHW_FG_SCENE_PROBE
 struct OutputObservation {
@@ -34,6 +35,7 @@ std::array<bool,max_hooks> created,enabled;
 // otherwise each call continues straight to AL's stored next method.
 std::atomic<bool> chain_live{};
 std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
+std::atomic<std::uint64_t> epoch{},forgotten{};
 std::atomic<unsigned> pending{},fault{};
 std::atomic<bool> accepting{};
 bool installed{},drained{};
@@ -48,13 +50,17 @@ bool enter() noexcept {
     if(!accepting.load(std::memory_order_acquire)){pending.fetch_sub(1,std::memory_order_release);return false;}
     return true;
 }
-// A recording thread uses one list for many calls; entries never change list.
+// A recording thread uses one list for many calls. A cached lookup holds while
+// no slot was freed since (epoch); a live list's own slot never changes.
 thread_local ID3D12GraphicsCommandList *last_list{};
 thread_local unsigned last_entry=UINT_MAX;
+thread_local std::uint64_t last_epoch{};
 Entry *find(ID3D12GraphicsCommandList *p) noexcept {
-    if(p&&p==last_list&&last_entry<list_limit)return &entries[last_entry];
+    if(!p)return nullptr;
+    const auto e=epoch.load(std::memory_order_acquire);
+    if(p==last_list&&last_entry<list_limit&&last_epoch==e)return &entries[last_entry];
     const auto n=entry_count.load(std::memory_order_acquire);
-    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==p){last_list=p;last_entry=i;return &entries[i];}
+    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==p){last_list=p;last_entry=i;last_epoch=e;return &entries[i];}
     return nullptr;
 }
 // Entry state is guarded by the entry's own lock. Without perf::list_locks the
@@ -274,11 +280,36 @@ void reset(ID3D12GraphicsCommandList *list,std::uint64_t generation,ID3D12Pipeli
 #endif
     };
     {Locked lock(list);if(auto *e=lock.get()){apply(e);return;}}
-    // First Reset of this list: append under the process-wide lock.
+    // First Reset of this list: a freed slot or a new one, under the
+    // process-wide lock. The entry's state is reset before the list is
+    // published in the slot.
     Lock lock;auto *e=find(list);
-    if(!e){const auto n=entry_count.load(std::memory_order_relaxed);if(n==list_limit){fail(1);return;}
-        e=&entries[n];lists[n].store(list,std::memory_order_relaxed);entry_count.store(n+1,std::memory_order_release);}
+    if(!e){
+        const auto n=entry_count.load(std::memory_order_relaxed);unsigned i=0;
+        while(i<n&&lists[i].load(std::memory_order_relaxed))++i;
+        if(i==list_limit){fail(1);return;}
+        e=&entries[i];
+        AcquireSRWLockExclusive(&e->lock);apply(e);ReleaseSRWLockExclusive(&e->lock);
+        lists[i].store(list,std::memory_order_release);
+        if(i==n)entry_count.store(n+1,std::memory_order_release);
+        return;
+    }
     AcquireSRWLockExclusive(&e->lock);apply(e);ReleaseSRWLockExclusive(&e->lock);
+}
+void forget(ID3D12GraphicsCommandList *list) noexcept {
+    if(!list)return;
+    Lock lock;
+    const auto n=entry_count.load(std::memory_order_relaxed);
+    for(unsigned i=0;i<n;++i)if(lists[i].load(std::memory_order_relaxed)==list){
+        auto &e=entries[i];AcquireSRWLockExclusive(&e.lock);
+        lists[i].store(nullptr,std::memory_order_release);
+        e.state={};e.raster={};e.predicate={};
+#ifdef MHW_FG_SCENE_PROBE
+        output_observations[i]={};
+#endif
+        epoch.fetch_add(1,std::memory_order_acq_rel);forgotten.fetch_add(1,std::memory_order_relaxed);
+        ReleaseSRWLockExclusive(&e.lock);return;
+    }
 }
 bool capture(unsigned i,std::uint64_t frame,ID3D12GraphicsCommandList *list,std::uintptr_t root,std::uintptr_t pipeline) noexcept {
     Lock lock;if(i>=sample_limit||samples[i].captured||!healthy()||!accepting.load())return false;
@@ -331,7 +362,7 @@ bool finish() noexcept {
     return ok&&healthy()&&settled();
 }
 void write(std::ostream &o){Lock lock;bool disabled=true;for(const auto e:enabled)disabled=disabled&&!e;
-    o<<"{\"schema\":1,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<disabled<<",\"drained\":"<<drained<<",\"list_count\":"<<entry_count.load()<<",\"hook_count\":"<<installed_hooks
+    o<<"{\"schema\":1,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<disabled<<",\"drained\":"<<drained<<",\"list_count\":"<<entry_count.load()<<",\"lists_forgotten\":"<<forgotten.load()<<",\"hook_count\":"<<installed_hooks
      <<",\"hook_control\":\"owned-targets-only\",\"viewport_listener\":"<<(viewport_listener!=nullptr)<<",\"viewport_notifications\":"<<viewport_notifications.load()<<",\"records\":[";bool comma=false;
     for(unsigned i=0;i<sample_limit;++i){const auto &v=samples[i];if(!v.captured)continue;if(comma)o<<',';comma=true;
         o<<"{\"receipt\":"<<i<<",\"frame\":"<<v.frame<<",\"command\":"<<v.list<<",\"generation\":"<<v.state.generation<<",\"ready\":"<<v.state.ready()<<",\"pipeline\":"<<v.state.pipeline

@@ -191,3 +191,67 @@ stopped and the game kept its own rendering.
 - `stop()` clears `live_installed`, so after a stop the menu changes the
   preset "from the next start".
 - `ModeChange::mode` starts at the requested mode.
+
+## game-86 (v0.23.1, 2026-10-13)
+
+One session of about 3 minutes. It started at 21:9 and Performance, and the
+user then tried to break it.
+
+**The aspect change works:**
+
+| Change | Preset | Rebuild | FG |
+|---|---|---|---|
+| 21:9 → 16:9 | Performance (1280x720) | 234 ms | configured again |
+| 16:9 → 21:9 | Quality (1696x715) | 188 ms | configured again |
+| 21:9 → 16:9 | Quality (1696x954) | 203 ms | DLSS faulted right after |
+
+- Six live preset changes in between all succeeded (141-188 ms).
+- A Reflex change, FG 2x to 6x, Dynamic and 16 target changes all applied
+  live.
+- DLSS fault 0 until the third change.
+
+**Then fault 15: the command-list registry was full.**
+- `continuous_dlaa` registers every DIRECT command list on the device at its
+  first Reset and keeps a reference to it, in 128 slots. Typical sessions use
+  31-52; game-86 reached 128. The observer keeps its own 128-slot table of
+  the same lists.
+- The game does create command lists after startup. In the clean database,
+  `ID3D12GraphicsCommandList` is created in `cD3DRender::initForD3D12` and in
+  `0x24e7420`. The latter is a proxy context with its own queue and list, made
+  by `0x2623760` for each `nDraw::ExternalRegion` (`0x25a00b0`, a vtable
+  method).
+- The registry's reference kept every released list alive, so the table only
+  grew. The many option-menu visits in this test are the likely cause. Which
+  screens create ExternalRegions is not reversed: the fix does not depend on
+  it.
+
+## v0.23.2: released lists are pruned
+
+- When the registry is full, `prune_released()` frees every list whose last
+  reference is the registry's own (AddRef/Release returns 1). Its creator
+  released it, so nothing can Reset, record or submit it again.
+- Its generation is retired in every per-list table as its next Reset would
+  retire it: the stream route, the recording pins, the unfiltered copies and
+  frame generation. `observer::forget()` frees its observer slot; then the
+  reference is dropped.
+- These lists are never pruned:
+  - one with our recording not yet submitted (the lease, or a pending pin);
+  - one pinned elsewhere (the stream route's lifetime, the spatial output),
+    because it has further references.
+- The observer reuses freed slots. A per-thread cached lookup is checked
+  against an epoch that every `forget()` advances, so it cannot point at a
+  reused slot.
+- `dlss_summary` and the status log `lists {live, peak, pruned}`; the
+  observer logs `lists_forgotten`.
+- A table of live lists still fails closed (fault 15).
+
+**Tests:**
+- `temporal_continuous_released-lists`: 300 transient lists through the real
+  Reset hook; the full table prunes, 256 are pruned, and 44 stay live.
+- `temporal_continuous_held-lists`: 129 held lists give fault 15, with
+  nothing pruned.
+- `observer_list_slots`:
+  - a forgotten list misses, through this thread's cache and on another
+    thread;
+  - a new list takes the slot;
+  - a full table of live lists fails.

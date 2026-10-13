@@ -108,7 +108,10 @@ struct List {ComPtr<ID3D12GraphicsCommandList> value;std::uint64_t generation{},
 // and orders the live rebuild's queue barrier with them (change_mode).
 SRWLOCK submission_lock=SRWLOCK_INIT;
 struct SubmissionGuard {SubmissionGuard(){AcquireSRWLockExclusive(&submission_lock);}~SubmissionGuard(){ReleaseSRWLockExclusive(&submission_lock);}};
+// list_count: the slots used so far; a slot whose list was pruned is empty
+// (value null) until another list takes it.
 std::array<List,128> lists;unsigned list_count{};std::uint64_t generation{},sequence{},signal_value{};
+std::uint64_t lists_pruned{};unsigned lists_peak{};
 ComPtr<ID3D12CommandQueue> last_queue;ComPtr<ID3D12Fence> fence;
 std::array<ComPtr<ID3D12Resource>,3> raw;
 std::unique_ptr<dlss_sdk::InlineFrame> pass;
@@ -180,7 +183,8 @@ thread_local std::uintptr_t current_recording{};
 thread_local unsigned current_kind{},barrier_count{},dispatch_count{},copy_count{};
 thread_local std::array<D3D12_RESOURCE_BARRIER,128> barriers;
 std::atomic_flag projection_busy=ATOMIC_FLAG_INIT;
-List *find(ID3D12GraphicsCommandList *l){for(unsigned i=0;i<list_count;++i)if(lists[i].value.Get()==l)return &lists[i];return nullptr;}
+List *find(ID3D12GraphicsCommandList *l){if(!l)return nullptr;for(unsigned i=0;i<list_count;++i)if(lists[i].value.Get()==l)return &lists[i];return nullptr;}
+unsigned live_lists(){unsigned n{};for(unsigned i=0;i<list_count;++i)n+=lists[i].value!=nullptr;return n;}
 bool child(ID3D12DeviceChild *p){if(!p)return false;std::uintptr_t target{};if(!pb::system_method(reinterpret_cast<std::uintptr_t>(p),7,target))return false;
     ComPtr<ID3D12Device> device;return SUCCEEDED(p->GetDevice(IID_PPV_ARGS(&device)))&&reinterpret_cast<std::uintptr_t>(device.Get())==cfg.device;}
 bool pin(std::uintptr_t address,unsigned format,ComPtr<ID3D12Resource> &owned,bool uav=false){
@@ -764,11 +768,52 @@ void dispatch_call(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::uin
     if(candidate){Lock lock;resolve_telemetry.end(result);}
 }
 void WINAPI dispatch_hook(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z){Guard guard;dispatch_call(list,x,y,z,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}
+// The game creates and releases command lists while it runs (the
+// nDraw::ExternalRegion proxies each own one; game-86 filled the 128 slots
+// over a few minutes), so the registry cannot pin every list it has seen.
+// A list whose last reference is the registry's own was released by its
+// creator: nothing can Reset, record or submit it again. Its generation is
+// retired in every per-list table as its next Reset would retire it, the
+// observer forgets it, and the slot is freed. A list with a recording of ours
+// not yet submitted, or pinned elsewhere (the stream route's lifetime, the
+// spatial output), has further references and stays. Under Lock.
+unsigned prune_released(){
+    unsigned pruned{};
+    for(unsigned i=0;i<list_count&&!fault.load();++i){
+        auto &l=lists[i];auto *p=l.value.Get();
+        if(!p||lease.list==p)continue;
+        p->AddRef();if(p->Release()!=1)continue;
+        if(recording_pins.pending(p,l.generation)||unfiltered_lifetime.pending(p,l.generation))continue;
+#ifdef MHW_CONTINUOUS_SCALED
+        if(!sr::reset(p,l.generation)){fail(42);break;}
+#endif
+        if(!recording_pins.reset(p,l.generation)){fail(16);break;}
+        if(!unfiltered_lifetime.reset(p,l.generation)){fail(35);break;}
+#ifdef MHW_FG_GAME
+        frame_generation::game::reset(reinterpret_cast<std::uintptr_t>(p),l.generation);
+#endif
+        obs::forget(p);
+        l=List{};++pruned;
+    }
+    while(list_count&&!lists[list_count-1].value)--list_count;
+    lists_pruned+=pruned;return pruned;
+}
+// A free slot for a newly seen list: an empty one, a new one, or one freed by
+// pruning the released lists. Under Lock.
+List *list_slot(){
+    const auto empty=[]()->List *{
+        for(unsigned i=0;i<list_count;++i)if(!lists[i].value)return &lists[i];
+        return list_count<lists.size()?&lists[list_count++]:nullptr;};
+    auto *l=empty();
+    if(!l&&prune_released())l=empty();
+    return l;
+}
 HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator *allocator,ID3D12PipelineState *pipeline){
     Guard guard;const auto result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *,ID3D12CommandAllocator *,ID3D12PipelineState *)>(originals[5])(list,allocator,pipeline);
     if(FAILED(result)||!child(list)||list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT)return result;
     Lock lock;auto *l=find(list);
-    if(!l){if(!accepting.load())return result;if(list_count==lists.size()){fail(15);return result;}l=&lists[list_count++];l->value=list;}
+    if(!l){if(!accepting.load())return result;l=list_slot();if(!l){fail(15);return result;}*l=List{};l->value=list;
+        if(const auto n=live_lists();n>lists_peak)lists_peak=n;}
     if(lease.list==list){if(!l->submitted)fail(16);lease={};}
     #ifdef MHW_CONTINUOUS_SCALED
     if(!sr::reset(list,l->generation))fail(42);
@@ -1306,6 +1351,7 @@ void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
 }
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
+       <<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<'}'
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";
@@ -1332,7 +1378,7 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
 #endif
     out<<std::boolalpha<<"{\"event\":\"continuous\",\"schema\":1,\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()<<",\"history_resets\":"<<reset_count.load()
        <<",\"jitter_injections\":"<<jitter_count.load()<<",\"jitter_restorations\":"<<restorations.load()<<",\"depth_copies\":"<<depth_count.load()<<",\"signal_value\":"<<signal_value<<",\"completed_value\":"<<completed
-       <<",\"last_skip\":"<<last_skip.load()<<",\"list_count\":"<<list_count<<",\"resource_count\":"<<4*recording_pins.live()<<",\"pending_private_recording\":"<<(lease.list!=nullptr)<<",\"hooks_disabled\":"<<disabled<<",\"retention\":\"reset-and-fence-v1\",\"width\":"<<runtime.width<<",\"height\":"<<runtime.height<<",\"format\":"<<runtime.format<<",\"luid_low\":"<<runtime.luid_low<<",\"luid_high\":"<<runtime.luid_high<<",\"sdk\":";
+       <<",\"last_skip\":"<<last_skip.load()<<",\"list_count\":"<<list_count<<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<"},\"resource_count\":"<<4*recording_pins.live()<<",\"pending_private_recording\":"<<(lease.list!=nullptr)<<",\"hooks_disabled\":"<<disabled<<",\"retention\":\"reset-and-fence-v1\",\"width\":"<<runtime.width<<",\"height\":"<<runtime.height<<",\"format\":"<<runtime.format<<",\"luid_low\":"<<runtime.luid_low<<",\"luid_high\":"<<runtime.luid_high<<",\"sdk\":";
     if(pass)pass->write(out);else out<<"null";out<<",\"history\":";history_telemetry.write(out);
     out<<",\"requests\":";request_telemetry.write(out);out<<",\"recordings\":";recording_pins.write(out,completed);
     out<<",\"resolve\":";resolve_telemetry.write(out);
