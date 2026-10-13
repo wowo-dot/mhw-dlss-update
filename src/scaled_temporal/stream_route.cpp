@@ -140,8 +140,9 @@ struct Plan {
  bool identity{},final_copied{};std::uintptr_t final_copy{};std::array<std::byte,64> final_copy_fields{};
  // full_post: the inputs' upscale slot (full_post.inl), in the hand-off
  // between the TAA copy and the final copy (node 2; the final copy is then
- // node 3), and the depth's state at the TAA consumer (its admission's).
- std::uintptr_t full_slot{},full_depth_resource{};bool full_slot_done{},full_depth_known{};unsigned full_depth_state{};
+ // node 3), and the depth's and GBuffer4's states at the TAA consumer.
+ std::uintptr_t full_slot{},full_depth_resource{},full_gbuffer4_resource{};bool full_slot_done{},full_states_known{};
+ unsigned full_depth_state{},full_gbuffer4_state{};
  // Late indexed packets are frozen before recording workers start, sorted
  // in native key/insertion order and included in GPU ownership. About 17 per
  // frame in combat; Alatreon's arrival exceeded the former 32 (game-45).
@@ -673,7 +674,8 @@ bool build_identity_plan(Plan &p,OutputDiagnostics::Graph &observation){
  // queue exactly once.
  std::uintptr_t slot{};unsigned slots{};
  if(full_frame.load()==s.frame&&!(render_w==width&&render_h==height)){const auto &q=full_slots[s.frame%full_slots.size()];
-  if(q.frame==s.frame&&q.context==s.context&&q.valid&&!q.executed)slot=q.packet;}
+  if(q.frame==s.frame&&q.context==s.context&&q.valid&&!q.executed&&q.source.object==s.inputs[4].object&&
+     q.gbuffer4.object==s.inputs[5].object)slot=q.packet;}
  std::array<Command,256> block;unsigned handoffs{},finals{};
  for(unsigned base=0;base<commands;base+=256){const auto n=(std::min)(256U,commands-base);
   if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Command))){plan_rejection=9;return false;}
@@ -1162,7 +1164,8 @@ namespace ht=perf::hook_timing;
 void full_post_enter(std::uintptr_t context) noexcept {full_enter(context);}
 void full_post_taa(std::uintptr_t context) noexcept {full_taa(context);}
 void full_post_exit(std::uintptr_t context) noexcept {full_exit(context);}
-void full_post_depth(const tb::Snapshot &s,unsigned state,std::uintptr_t resource) noexcept {full_depth(s,state,resource);}
+void full_post_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth,unsigned gbuffer4_state,std::uintptr_t gbuffer4) noexcept {
+ full_states(s,depth_state,depth,gbuffer4_state,gbuffer4);}
 void post_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_post);++pending;const auto receipt=post_before(*f);bool returned=false;
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[0],f);ht::forward_end(timing);returned=true;}
  __finally{post_after(receipt,returned);--pending;ht::end(timing);}}

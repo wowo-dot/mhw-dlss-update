@@ -39,10 +39,11 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
 void full_post_enter(std::uintptr_t context) noexcept;
 void full_post_taa(std::uintptr_t context) noexcept;
 void full_post_exit(std::uintptr_t context) noexcept;
-// From the continuous runtime's TAA consumer, once its depth admission proved
-// the scene depth's state there and the depth was copied for DLSS: the state
-// full_post's input upscale starts from (full_post_slot.inl).
-void full_post_depth(const temporal_bindings::Snapshot &,unsigned state,std::uintptr_t resource) noexcept;
+// From the continuous runtime's TAA consumer, once it proved the scene depth's
+// and GBuffer4's states there and copied both for DLSS: the states full_post's
+// input upscale starts from (full_post_slot.inl).
+void full_post_states(const temporal_bindings::Snapshot &,unsigned depth_state,std::uintptr_t depth,
+                      unsigned gbuffer4_state,std::uintptr_t gbuffer4) noexcept;
 bool ready(ID3D12GraphicsCommandList *,std::uint64_t generation,const temporal_bindings::Snapshot &,std::uintptr_t recording) noexcept;
 bool full_contract(const temporal_bindings::Snapshot &) noexcept;
 bool owns_packet(std::uintptr_t) noexcept;

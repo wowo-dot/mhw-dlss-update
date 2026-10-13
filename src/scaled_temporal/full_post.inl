@@ -33,15 +33,21 @@ struct FullPostCounters {
 FullPostInputs full_inputs;std::string full_inputs_failure;
 // The upscale slot: an engine copy packet the post scheduler records right
 // after TAA's callback, at key (15, 3) -- after TAA's (15, 2) and before every
-// later post effect -- from GBuffer4 into GBuffer5. The game's barrier planner
-// gives that packet GBuffer5 in COPY_DEST and GBuffer4 in COPY_SOURCE; its
-// copy never runs: the copy hook records the upscale there instead
-// (full_post_slot.inl), or nothing. The depth is not part of the packet: a
-// new state span on it after TAA could have its transition hoisted before the
-// TAA consumer, whose depth admission accepts only reads there.
+// later post effect -- into GBuffer5, from TAA's output. The game's barrier
+// planner gives that packet GBuffer5 in COPY_DEST; its copy never runs: the
+// copy hook records the upscale there instead (full_post_slot.inl), or nothing.
+// - The source is the TAA copy's own source, already in COPY_SOURCE at
+//   (15, 2): the planner merges consecutive read uses into one state (native
+//   read states are bit sets, converter 0x259ba50), so the slot's read joins
+//   that span and changes no state.
+// - The depth and GBuffer4 are not part of the packet. Read by the slot, either
+//   would join its read span with COPY_SOURCE, and TAA's consumer would see
+//   that merged state (game-116: GBuffer4 as the source, PSR|NPSR|COPY_SOURCE
+//   at TAA, DLSS refused every armed frame). Their states are the ones proven
+//   at TAA's consumer, when no planner node of theirs lies up to the slot.
 struct FullSlot {
  std::uint64_t frame{};std::uintptr_t context{},packet{};
- tb::Owner depth,gbuffer4,gbuffer5;
+ tb::Owner depth,gbuffer4,gbuffer5,source;
  bool valid{},executed{};
 };
 std::array<FullSlot,8> full_slots;  // frame % 8, under the route lock
@@ -68,29 +74,40 @@ unsigned full_slot_record(std::uintptr_t context,std::uint64_t frame) noexcept {
   if(!field(filters,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order))return 5;
   if(stage==15&&order==3)return 5;}
  if(!field(context,0x2b80,count)||!field(context,0x2b78,array)||!array||count>=65535)return 6;
+ // TAA's copy (opcode 13 at (15, 2), recorded by the scheduler's first loop):
+ // its source, TAA's output, is the slot's.
+ struct Command {unsigned key{},padding{};std::uintptr_t packet{};} c;static_assert(sizeof(Command)==16);
+ {std::array<Command,256> block;std::uintptr_t source{};unsigned taa_copies{};
+  for(unsigned base=0;base<count;base+=256){const auto n=(std::min)(256U,count-base);
+   if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Command)))return 6;
+   for(unsigned j=0;j<n;++j){unsigned raw{};if(block[j].key!=0x78000002)continue;
+    if(!field(block[j].packet,0,raw))return 6;if((raw&31)==13&&field(block[j].packet,0x18,source))++taa_copies;}}
+  if(taa_copies!=1||!tb::read_owner(reader,source,slot.source)||slot.source.width!=width||slot.source.height!=height||slot.source.kind==6||
+     slot.source.resource==slot.gbuffer5.resource)return 6;}
  // The game's own order change (as the scheduler makes for each filter), for
  // this one packet; TAA's key is restored right after.
  auto *order=reinterpret_cast<volatile unsigned *>(context+0x154);
  const unsigned xy[2]{},rect[4]{0,0,1,1};
- *order=(key&31)|(3U<<5);full_copy(context,slot.gbuffer5.object,0,xy,slot.gbuffer4.object,0,rect,nullptr);*order=key;
+ *order=(key&31)|(3U<<5);full_copy(context,slot.gbuffer5.object,0,xy,slot.source.object,0,rect,nullptr);*order=key;
  // The command array entry the helper appended, found by its owners: it is
  // registered even when it does not verify, so that its copy never runs. Not
  // found, the route stops (fault 15).
- struct Command {unsigned key{},padding{};std::uintptr_t packet{};} c;static_assert(sizeof(Command)==16);
  unsigned after{},raw{};std::uintptr_t destination{},source{};
  if(!pb::copy_memory(array+16ULL*count,&c,sizeof(c))||!c.packet||!field(c.packet,0x10,destination)||destination!=slot.gbuffer5.object||
-    !field(c.packet,0x18,source)||source!=slot.gbuffer4.object){fail(15);return 6;}
+    !field(c.packet,0x18,source)||source!=slot.source.object){fail(15);return 6;}
  slot.packet=c.packet;
  slot.valid=c.key==full_slot_key&&field(context,0x2b80,after)&&after==count+1&&field(c.packet,0,raw)&&(raw&31)==13;
  if(!slot.valid)++full_counts.slot_unverified;
  {Lock lock;auto &q=full_slots[frame%full_slots.size()];if(q.packet&&!q.executed)++full_counts.slot_stale;q=slot;}
  ++full_counts.slots;return slot.valid?0:7;
 }
-// The depth's state at the TAA consumer, from its admission (published by the
-// continuous runtime with the depth copy for DLSS).
-void full_depth(const tb::Snapshot &s,unsigned state,std::uintptr_t resource) noexcept {
+// The depth's and GBuffer4's states at the TAA consumer, as it proved them
+// (the depth admission; GBuffer4's transition in TAA's own barriers), published
+// by the continuous runtime with its copies for DLSS.
+void full_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth,unsigned gbuffer4_state,std::uintptr_t gbuffer4) noexcept {
  Lock lock;auto &p=plans[s.frame%plans.size()];
- if(p.prepared&&p.stamp==s&&p.full_slot){p.full_depth_state=state;p.full_depth_resource=resource;p.full_depth_known=true;}
+ if(p.prepared&&p.stamp==s&&p.full_slot){p.full_depth_state=depth_state;p.full_depth_resource=depth;
+  p.full_gbuffer4_state=gbuffer4_state;p.full_gbuffer4_resource=gbuffer4;p.full_states_known=true;}
 }
 // The final quad of a scaled frame becomes the game's DLAA copy (the same
 // owners as the quad: tBaseMap's texture into the view's attachment, the full

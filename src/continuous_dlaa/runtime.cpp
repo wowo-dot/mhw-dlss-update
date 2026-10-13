@@ -645,7 +645,9 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
             static_cast<D3D12_RESOURCE_STATES>(depth_state),reinterpret_cast<DepthBarrierFn>(originals[8]),reinterpret_cast<DepthCopyFn>(originals[10]))){
             fail(44);return locked_skip(11);}
         ++depth_count;depth_consumer_admission.copied();
-        sr::full_post_depth(s,depth_state,reinterpret_cast<std::uintptr_t>(depth_resource));
+        // GBuffer4's state was proven above (state_of, TAA's own barriers).
+        sr::full_post_states(s,depth_state,reinterpret_cast<std::uintptr_t>(depth_resource),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,s.inputs[5].resource);
     }
     #endif
     const bool qualified_depth=lease.depth

@@ -143,9 +143,9 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   require(viewports.size()==2&&route::full_counts.rect_mismatch.load()==mismatches+1,"rectangle mismatch refused");
   route::full_post_exit(context);
   // v0.25.2: the inputs' upscale slot. After TAA's callback, in its key, the
-  // scheduler's context records an engine copy GBuffer4 -> GBuffer5 at
-  // (15, 3); the armed frame's identity plan takes it between the TAA copy and
-  // the final copy. The helper stand-in appends packets as the game's does
+  // scheduler's context records an engine copy from TAA's output (the TAA
+  // copy's source) into GBuffer5 at (15, 3); the armed frame's identity plan
+  // takes it between the TAA copy and the final copy. The helper stand-in appends packets as the game's does
   // (key (stage << 27) | ((+0x154 >> 5) + (+0x15c >> 5))).
   {static Arena *helper_arena{};helper_arena=&a;
    route::full_copy=[](std::uintptr_t c,std::uintptr_t d,int ds,const unsigned *xy,std::uintptr_t s_,int ss,const unsigned *r,const unsigned *o){
@@ -169,7 +169,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
     const auto quad=route::final_before(frame);require(route::full_final(frame,quad),"armed for the slot");route::final_after(quad,true);
     put(context+0x718,owners[1]);put(context+0x5c,render_rect);put(context+0x154,taa_key);
     route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);};
-   const auto plan_for=[&](std::uint64_t armed){auto plan=std::make_unique<route::Plan>();plan->stamp=s;plan->stamp.frame=armed;
+   const auto plan_for=[&](std::uint64_t armed){auto plan=std::make_unique<route::Plan>();plan->stamp=s;plan->stamp.frame=armed;plan->stamp.inputs[5].object=input_owners[1];
     require(route::build_plan(*plan,motion)&&plan->identity,"armed frame planned as at DLAA");return plan;};
    const auto armed_slot=armed_frame+1;const auto slots=route::full_counts.slots.load();arm(armed_slot,0x12U);
    const auto &q=route::full_slots[armed_slot%route::full_slots.size()];
@@ -177,13 +177,14 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    require(route::field(context,0x154,key)&&key==taa_key,"TAA's key restored");
    require(route::full_counts.slots.load()==slots+1&&q.valid&&q.frame==armed_slot&&q.context==context&&!q.executed&&
            q.depth.resource==input_resources[0]&&q.gbuffer4.resource==input_resources[1]&&q.gbuffer5.resource==input_resources[2],"slot recorded and verified");
-   require(copies.back().destination==input_owners[2]&&copies.back().source==input_owners[1]&&copies.back().rect==std::array<unsigned,4>{0,0,1,1},"GBuffer4 into GBuffer5, 1x1");
+   require(copies.back().destination==input_owners[2]&&copies.back().source==owners[0]&&copies.back().rect==std::array<unsigned,4>{0,0,1,1}&&
+           q.source.object==owners[0],"TAA's output into GBuffer5, 1x1");
    require(route::field(context,0x2b80,count)&&count==6&&route::field(context,0x2b78,array)&&route::field(array+16ULL*5,0,entry_key)&&entry_key==0x78000003U&&
            route::field(array+16ULL*5,8,entry_packet)&&entry_packet==q.packet,"slot packet at key (15, 3)");
    {const auto plan=plan_for(armed_slot);
     require(plan->full_slot==q.packet&&route::handoff_count(*plan)==4&&route::final_node(*plan)==3,"the plan takes the slot before the final copy");
-    // The depth stays in its consumer state only if no planner node of its
-    // backing lies after TAA's dispatch, up to the slot.
+    // The depth and GBuffer4 stay in their consumer states only if no planner
+    // node of their backings lies after TAA's dispatch, up to the slot.
     Arena planner(0x80000);const auto saved_renderer=route::cfg.renderer;route::cfg.renderer=planner.base;
     const auto planned=a.take(16*5),taa=a.take(0x40),after_slot=a.take(0x40),other=a.take(0x40),depth_node=a.take(0x20),other_node=a.take(0x20),other_backing=a.take(0x40);
     put(taa,6U);put(other,6U);put(after_slot,6U);put(other_backing+0x20,a.take(0x10));
@@ -192,13 +193,15 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
     put(planner.base+0x7af18,planned);put(planner.base+0x7af28,5U);put(planner.base+0x1f208,s.epoch+1);
     plan->temporal.object=taa;
     put(depth_node+8,input_backings[0]);put(other_node+8,other_backing);
-    require(route::full_depth_quiet(*plan,q),"no node: quiet");
+    require(route::full_inputs_quiet(*plan,q),"no node: quiet");
     put(taa+8,depth_node);put(after_slot+8,depth_node);put(copy+8,other_node);
-    require(route::full_depth_quiet(*plan,q),"nodes at TAA, after the slot or of other resources: quiet");
-    put(copy+8,depth_node);require(!route::full_depth_quiet(*plan,q),"a depth node between: not quiet");put(copy+8,std::uintptr_t{});
-    put(q.packet+8,depth_node);require(!route::full_depth_quiet(*plan,q),"a depth node at the slot: not quiet");put(q.packet+8,std::uintptr_t{});
-    put(copy,10U);require(!route::full_depth_quiet(*plan,q),"an unqualified nested copy between: not quiet");put(copy,13U);
-    put(planner.base+0x1f208,s.epoch);require(!route::full_depth_quiet(*plan,q),"another planner epoch: not quiet");
+    require(route::full_inputs_quiet(*plan,q),"nodes at TAA, after the slot or of other resources: quiet");
+    put(copy+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a depth node between: not quiet");put(copy+8,std::uintptr_t{});
+    put(depth_node+8,input_backings[1]);put(copy+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a GBuffer4 node between: not quiet");
+    put(copy+8,std::uintptr_t{});put(depth_node+8,input_backings[0]);
+    put(q.packet+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a depth node at the slot: not quiet");put(q.packet+8,std::uintptr_t{});
+    put(copy,10U);require(!route::full_inputs_quiet(*plan,q),"an unqualified nested copy between: not quiet");put(copy,13U);
+    put(planner.base+0x1f208,s.epoch);require(!route::full_inputs_quiet(*plan,q),"another planner epoch: not quiet");
     put(taa+8,std::uintptr_t{});put(after_slot+8,std::uintptr_t{});route::cfg.renderer=saved_renderer;}
    // Refusals record no packet; the chain still switches.
    const auto refused=[&](std::uint64_t armed,unsigned reason,unsigned sub,unsigned grade_order,const char *why){
@@ -207,6 +210,13 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
     require(route::full_counts.slot_refusals[reason].load()==before+1&&route::full_counts.switches.load()==switches+1&&
             route::field(context,0x2b80,count)&&count==5,why);
     const auto plan=plan_for(armed);require(!plan->full_slot&&route::handoff_count(*plan)==3&&route::final_node(*plan)==2,"no slot in the plan");};
+   // Without TAA's copy there is no slot source.
+   {const auto before=route::full_counts.slot_refusals[6].load();put(queue,0x78000001U);arm(armed_slot+3,0x12U);put(queue,0x78000002U);
+    require(route::full_counts.slot_refusals[6].load()==before+1&&route::field(context,0x2b80,count)&&count==5,"no TAA copy refuses the slot");}
+   // A slot whose source is not the TAA output stays out of the plan.
+   {arm(armed_slot+4,0x12U);auto &r=route::full_slots[(armed_slot+4)%route::full_slots.size()];require(r.valid,"slot recorded");
+    const auto real=r.source.object;r.source.object=owners[1];const auto plan=plan_for(armed_slot+4);r.source.object=real;
+    require(!plan->full_slot&&route::handoff_count(*plan)==3,"a slot on another source is not planned");}
    refused(armed_slot+1,5,0x12U,3U,"a filter at order 3 refuses the slot");
    refused(armed_slot+2,4,0x32U,0U,"an added order refuses the slot");
    put(context+0x2b80,4U);put(context+0x154,0U);put(context+0x15c,0U);put(view+0x620,std::uintptr_t{});put(view+0x628,std::uintptr_t{});route::full_slots={};
