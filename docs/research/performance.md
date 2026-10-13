@@ -1,7 +1,8 @@
 # Performance check (roadmap step 3)
 
-Goal: measure what the mod costs and gives, against the unmodded game and the
-game's built-in DLSS. Other mods are out of scope.
+Goal: measure what the mod costs and gives, against the unmodded game. The
+game's built-in DLSS cannot be used for the comparison (the user, 2026-10-13).
+Other mods are out of scope.
 
 ## Tools
 
@@ -48,12 +49,11 @@ rendered; the rendered rate comes from `frame_stats`.
   - V-Sync off in the game and in the NVIDIA profile.
 - **Recordings:** 30 s each, after the frame rate settles. Two recordings per
   scenario, so variation shows.
-- **Runs:**
-  1. **Unmodded:** the mod disabled in MO2; the game's own AA at its usual
-     setting.
-  2. **The game's built-in DLSS:** the mod disabled; the game's DLSS on at
-     each quality it offers.
-  3. **The mod:** DLAA, Quality, Balanced and Performance with FG off, then
-     FG 2x at Quality. The presets change live, so this is one launch.
+- **Runs** (the same graphics settings in all of them):
+  1. **Unmodded:** the mod disabled in MO2 (Astera Loader stays).
+  2. **The mod, FG off, Reflex Boost:** DLAA, Quality, Balanced and
+     Performance, switched live in one launch.
+  3. **The mod, FG 2x, at Quality.** Turning FG on or off applies only from
+     the next start, so this is its own launch.
 - **Next:** the mod's own GPU timestamps for the passes it adds, and the CPU
   time in its hooks (a separate build).
