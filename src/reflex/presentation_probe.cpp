@@ -1109,6 +1109,12 @@ DWORD WINAPI worker(void*) noexcept {
                 }
 #endif
                 const auto started=GetTickCount64();auto last=started;
+                // v0.24.7: Reflex is confirmed running at the first heartbeat
+                // with frames. The mod can arm before the game's first frame,
+                // and a first launch after a driver install can compile
+                // shaders for longer than a heartbeat (game-105: no frame in
+                // the first 20 s, the check failed and DLSS stayed off).
+                constexpr std::uint64_t reflex_check_frames=60;bool reflex_confirmed=false;
 #ifdef MHW_ALPHA
                 // After a live mode change: the sleep count at which the driver is
                 // asked whether it took the change (it applies at the next sleep).
@@ -1141,6 +1147,17 @@ DWORD WINAPI worker(void*) noexcept {
                     if(frames.closed && !frames.faults){
                         // The game destroyed its window (its exit); logged at once, the process ends soon.
                         log << "{\"event\":\"game_exit\",\"completed\":" << frames.completed << "}\n" << std::flush;
+#if defined(MHW_ALPHA)&&defined(MHW_REFLEX_TEMPORAL)
+                        // v0.24.7: a last summary, so a session shorter than
+                        // one heartbeat still records its counters. Built in
+                        // memory and written at once: the process may end.
+                        {std::ostringstream summary;
+                         mhw::reflex::temporal::sample();
+                         summary << "{\"event\":\"fg_status\",\"display_hz\":" << mhw::frame_generation::display_refresh_hz() << ",\"session\":";
+                         mhw::frame_generation::game::write(summary);summary << "}\n";
+                         summary << "{\"event\":\"dlss_summary\",\"runtime\":";mhw::reflex::temporal::summary(summary);summary << "}\n";
+                         log << summary.str() << std::flush;}
+#endif
                         stop_reason="game_exit";break;
                     }
                     if(!frames.running || frames.faults){
@@ -1239,7 +1256,8 @@ DWORD WINAPI worker(void*) noexcept {
                         log_frames(log, "armed");log_latency(log);mhw::perf::sampler::write(log);
 #endif
 #endif
-                        if(last==started)require(driver_mode("running_on",reflex_applied.load()!=0),"driver-On-not-enabled");
+                        if(!reflex_confirmed&&frames.completed>=reflex_check_frames){
+                            require(driver_mode("running_on",reflex_applied.load()!=0),"driver-On-not-enabled");reflex_confirmed=true;}
                         log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed << ",\"tokens\":" << frames.tokens
                             << ",\"sleeps\":" << frames.sleeps << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults
                             << ",\"owner\":" << frames.owner << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents << "}\n" << std::flush;
