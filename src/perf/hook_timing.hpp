@@ -30,11 +30,21 @@ enum Category : unsigned {
     indexed,       // DrawIndexedInstanced (the stream route's draw admission)
     dispatch,      // Dispatch
     copy,          // CopyResource
+    // v0.24.2: the game-function hooks. Their forwarded time is the game's own
+    // function, including the D3D12 calls the API hooks above time again.
+    route_post,     // the post-filter dispatch (stream route)
+    route_draw,     // the engine's draw execution: every draw packet (effect replays)
+    route_indexed,  // the engine's indexed execution: every indexed packet (silhouettes)
+    route_copy,     // the engine's copy execution (the TAA hand-off and DLAA final copies)
+    route_final,    // the final scene draw (and the haze capture)
+    route_queue,    // the post queue's completion: plan build, silhouette scan, preparation
+    native_frame,   // the continuous runtime's game hooks: TAA, DLSS consumers, depth, projection
     category_count
 };
 inline constexpr const char *names[category_count]{
     "observer", "observer_root", "observer_table", "observer_constants", "observer_view", "observer_raster",
-    "observer_predicate", "reset_close", "execute", "barrier", "draw", "indexed", "dispatch", "copy"};
+    "observer_predicate", "reset_close", "execute", "barrier", "draw", "indexed", "dispatch", "copy",
+    "route_post", "route_draw", "route_indexed", "route_copy", "route_final", "route_queue", "native_frame"};
 // The observer's method index (observer.cpp's `which`) to its category.
 constexpr Category observer_category(unsigned which) noexcept {
     return which == 4 || which == 5   ? observer_root

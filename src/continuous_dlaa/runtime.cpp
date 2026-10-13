@@ -955,6 +955,7 @@ bool observe_prepared_resolve(const NativeFrame &f){
 }
 #endif
 void native_seh(unsigned kind,NativeFrame *f){
+    auto timing=perf::hook_timing::begin(perf::hook_timing::native_frame);
     bool admitted=false,returned=false;
 #ifdef MHW_CONTINUOUS_SCALED
     // Forwarding saves native RETURN registers into f->call. R8 is volatile;
@@ -969,7 +970,7 @@ void native_seh(unsigned kind,NativeFrame *f){
     else if(kind==2)admitted=depth_before(*f);
     else if(kind==3)admitted=consumer_before(*f,true);
     else admitted=projection_before(*f);
-    __try{mhw_binding_forward(originals[kind],&f->call);returned=true;}
+    __try{perf::hook_timing::forward_begin(timing);mhw_binding_forward(originals[kind],&f->call);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{
 #ifdef MHW_CONTINUOUS_SCALED
         if(prepared)sr::finish_resolve(prepared_packet,returned);
@@ -979,6 +980,7 @@ void native_seh(unsigned kind,NativeFrame *f){
         else if(kind==1||kind==3){finish_forwarded(forwarded,returned);consumer_after(admitted,returned);}
         else if(kind==2)depth_after(admitted,returned);
         else projection_after(admitted,returned,*f);
+        perf::hook_timing::end(timing);
     }
 }
 }

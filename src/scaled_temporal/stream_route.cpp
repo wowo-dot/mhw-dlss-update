@@ -25,6 +25,7 @@
 #include "../projection_binding/memory.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../perf/toggles.hpp"
+#include "../perf/hook_timing.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
@@ -1059,10 +1060,12 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_L
 #endif
 }
 }
-void post_dispatch(pb::Frame *f){++pending;const auto receipt=post_before(*f);bool returned=false;
- __try{mhw_binding_forward(originals[0],f);returned=true;}__finally{post_after(receipt,returned);--pending;}}
+namespace ht=perf::hook_timing;
+void post_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_post);++pending;const auto receipt=post_before(*f);bool returned=false;
+ __try{ht::forward_begin(timing);mhw_binding_forward(originals[0],f);ht::forward_end(timing);returned=true;}
+ __finally{post_after(receipt,returned);--pending;ht::end(timing);}}
 void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uintptr_t view,std::uintptr_t taa) noexcept {
- Guard guard;Lock lock;if(!accepting.load())return;
+ const ht::Scope timing(ht::route_queue);Guard guard;Lock lock;if(!accepting.load())return;
  std::uint64_t frame{};std::uintptr_t current_manager{};
  if(!field(cfg.renderer,0x1f210,frame)||!field(cfg.image,0x51cc238,current_manager)||manager!=current_manager)return;
  // Observe the shared preparation contract before applying the prototype's
@@ -1080,30 +1083,31 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
 }
 bool haze_before_safe(const pb::Frame &f) noexcept{try{return haze_before(f);}catch(...){Lock lock;haze_reject(11);return false;}}
 void haze_after_safe(bool entered,bool returned) noexcept{try{haze_after(entered,returned);}catch(...){Lock lock;haze_reject(11);}}
-void final_dispatch(pb::Frame *f){++pending;const auto slot=final_before(*f);const bool capture=haze_before_safe(*f);bool returned=false;
- __try{mhw_binding_forward(originals[3],f);returned=true;}__finally{final_after(slot,returned);haze_after_safe(capture,returned);--pending;}}
-void draw_dispatch(pb::Frame *f){++pending;unsigned stage=UINT_MAX;
+void final_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_final);++pending;const auto slot=final_before(*f);const bool capture=haze_before_safe(*f);bool returned=false;
+ __try{ht::forward_begin(timing);mhw_binding_forward(originals[3],f);ht::forward_end(timing);returned=true;}
+ __finally{final_after(slot,returned);haze_after_safe(capture,returned);--pending;ht::end(timing);}}
+void draw_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_draw);++pending;unsigned stage=UINT_MAX;
  const auto slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:draw_before(*f,stage);bool returned=false;
 #ifdef MHW_FG_SCENE_PROBE
  const auto previous_scene=scene_scope;scene_scope=scene_enter(*f);
 #endif
  const auto old_slot=api_slot,old_stage=api_stage;api_slot=slot;api_stage=stage;
- __try{mhw_binding_forward(originals[1],f);returned=true;}__finally{draw_after(slot,stage,returned);
+ __try{ht::forward_begin(timing);mhw_binding_forward(originals[1],f);ht::forward_end(timing);returned=true;}__finally{draw_after(slot,stage,returned);
 #ifdef MHW_FG_SCENE_PROBE
   scene_exit(returned);scene_scope=previous_scene;
 #endif
-  api_slot=old_slot;api_stage=old_stage;--pending;}}
+  api_slot=old_slot;api_stage=old_stage;--pending;ht::end(timing);}}
 void indexed_dispatch(pb::Frame *f){
- ++pending;const auto previous=indexed_scope;indexed_scope=filtering()&&!watched_packet(f->gpr[3])?IndexedScope{}:indexed_before(*f);bool returned=false;
+ auto timing=ht::begin(ht::route_indexed);++pending;const auto previous=indexed_scope;indexed_scope=filtering()&&!watched_packet(f->gpr[3])?IndexedScope{}:indexed_before(*f);bool returned=false;
 #ifdef MHW_FG_SCENE_PROBE
  const auto previous_scene=scene_scope;scene_scope=scene_enter(*f);
 #endif
- __try{mhw_binding_forward(originals[5],f);returned=true;}
+ __try{ht::forward_begin(timing);mhw_binding_forward(originals[5],f);ht::forward_end(timing);returned=true;}
  __finally{indexed_after(returned);silhouette_after(returned);
 #ifdef MHW_FG_SCENE_PROBE
   scene_exit(returned);scene_scope=previous_scene;
 #endif
-  indexed_scope=previous;--pending;}
+  indexed_scope=previous;--pending;ht::end(timing);}
 }
 bool indexed_draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,unsigned first,int base,unsigned instance,std::uintptr_t caller) noexcept {
 #ifdef MHW_FG_SCENE_PROBE
@@ -1136,12 +1140,12 @@ unsigned copy_before(const pb::Frame &f){
 void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;
  if(!returned||copy_calls!=1||!(copy_final?plans[copy_slot].final_copied:plans[copy_slot].copied))fail(5);}}
 void copy_dispatch(pb::Frame *f){
- ++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;const auto old_final=copy_final;
+ auto timing=ht::begin(ht::route_copy);++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;const auto old_final=copy_final;
  copy_final=false;copy_slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:copy_before(*f);bool returned=false;
- __try{mhw_binding_forward(originals[4],f);returned=true;}
+ __try{ht::forward_begin(timing);mhw_binding_forward(originals[4],f);ht::forward_end(timing);returned=true;}
  __finally{
   copy_after(returned);
-  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;--pending;
+  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;--pending;ht::end(timing);
  }
 }
 void observe_final_scene(FinalSceneObserver observer) noexcept {final_scene_observer.store(observer);}

@@ -249,6 +249,11 @@ void hook_timing_tests() {
     const auto text = out.str();
     check(text.find("\"event\":\"hook_timing\"") != std::string::npos && text.find("\"draw\":{\"calls_per_frame\":100") != std::string::npos,
           "6,400 calls over 64 frames: 100 a frame");
+    // v0.24.2: every category is named, the game-function hooks included.
+    bool named = true;
+    for (const auto *n : ht::names) named = named && n && *n;
+    check(named && text.find("\"route_indexed\":{") != std::string::npos && text.find("\"native_frame\":{") != std::string::npos,
+          "every category has a name in the event");
     ht::enabled.store(false);
 }
 // v0.23.10: the in-flight count without locked instructions. Eight threads
