@@ -21,6 +21,9 @@ namespace mhw::alpha {
 //   log_dir = logs          ; log files of each launch
 //   profile = off           ; on: the CPU stack sampler for performance work
 //                           ; ("profile" events in the log; a little overhead)
+//   perf_ab = off           ; on: DLSS alternates every 30 s between running and
+//                           ; paused (hooks installed), for A/B timing in one
+//                           ; launch; needs frame_generation = off
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
@@ -43,6 +46,7 @@ struct Config {
     bool generation_auto{};      // frame_generation_auto = on
     ReflexMode reflex = ReflexMode::on;
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
+    bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -157,6 +161,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "frame_generation_auto") {
             if (value == "on" || value == "off") c.generation_auto = value == "on";
             else c.warnings.push_back(where + "frame_generation_auto must be on or off");
+        } else if (key == "perf_ab") {
+            if (value == "on" || value == "off") c.perf_ab = value == "on";
+            else c.warnings.push_back(where + "perf_ab must be on or off");
         } else if (key == "profile") {
             if (value == "on" || value == "off") c.profile = value == "on";
             else c.warnings.push_back(where + "profile must be on or off");
@@ -176,6 +183,10 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         }
     }
     // The keys may come in any order, so this is decided once all are read.
+    if (c.perf_ab && c.frame_generation) {
+        c.perf_ab = false;
+        c.warnings.push_back("perf_ab needs frame_generation = off; off");
+    }
     if (c.reflex == ReflexMode::off && c.frame_generation) {
         c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
         c.reflex = ReflexMode::on;

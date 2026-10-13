@@ -53,6 +53,11 @@ ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept;
 // game renders at its own scale. A failure before anything changed is
 // retried (`retry`); after, the runtime stops (fault 48).
 ModeChange change_scene() noexcept;
+// Diagnostic (the alpha's perf_ab): pause stops admitting frames as the live
+// rebuild's pause does, so the game renders natively with every hook still
+// installed; resume admits them again (refused after a fault). Worker only,
+// frame generation off.
+bool diagnostic_pause(bool pause) noexcept;
 bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
 // install()'s qualification of the game (renderer discovery, code gates and,
 // for the scaled build, the native sizing admission) without side effects.

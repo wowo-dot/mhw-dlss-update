@@ -49,7 +49,8 @@ from pathlib import Path
 
 GAME = 'monsterhunterworld.exe'
 DATE_TIME = re.compile(r'(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)(?:\.(\d+))?')
-MENU = re.compile(r'^(\d\d):(\d\d):(\d\d)\.(\d{3}) INFO menu: (\w+) = (\S+) \(applied now\)')
+# Live menu changes, and the perf_ab diagnostic's "perf: dlss = paused" lines.
+MENU = re.compile(r'^(\d\d):(\d\d):(\d\d)\.(\d{3}) INFO (?:menu|perf): (\w+) = (\S+) \(applied now\)')
 
 
 def number(value: str | None) -> float | None:

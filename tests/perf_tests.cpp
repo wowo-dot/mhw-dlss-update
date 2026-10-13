@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cstdio>
 #include <span>
+#include <string>
+namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
 
 namespace {
 int failures{};
@@ -164,6 +166,65 @@ void region_level_tests() {
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);
 }
+// v0.23.6: the refresher renews a region readers use, so a new block of it is
+// answered past the first window without a read-path query; a region made
+// inaccessible is dropped and its next read queries again. Timing checks are
+// skipped (not failed) when the machine stalls past their margins.
+void refresher_tests() {
+    namespace bp = mhw::bridge_probe;
+    mhw::perf::toggles.store(mhw::perf::cached_reads);
+    Sleep(150);
+    constexpr std::size_t size = std::size_t{1} << 20;
+    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(block != nullptr, "1 MB region");
+    if (!block) return;
+    const auto base = reinterpret_cast<std::uintptr_t>(block);
+    const auto tick = [] { return static_cast<std::uint32_t>(GetTickCount64()); };
+    const auto first = tick();
+    check(bp::readable_end(base + 100) == base + size, "first read");
+    Sleep(60);
+    auto before = bp::read_cache_stats();
+    const auto refreshed_at = tick();
+    check(bp::refresh_regions(refreshed_at) >= 1, "the refresher renews the region in use");
+    auto after = bp::read_cache_stats();
+    check(after.background_queries > before.background_queries && after.queries == before.queries,
+          "the refresher's queries are its own");
+    Sleep(60);
+    before = bp::read_cache_stats();
+    const auto read_at = tick();
+    check(bp::readable_end(base + 5 * 65536 + 8) == base + size, "the renewed region answers");
+    after = bp::read_cache_stats();
+    if (read_at - first >= 100 && read_at - refreshed_at < 90)
+        check(after.queries == before.queries && after.region_hits == before.region_hits + 1,
+              "past the first window, no read-path query");
+    else
+        std::printf("skipped: refresher window check (timing)\n");
+    DWORD old{};
+    check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");
+    Sleep(50);
+    bp::refresh_regions(tick());
+    Sleep(110);
+    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + 5 * 65536 + 8) == 0,
+          "a dropped region is queried again");
+    VirtualFree(block, 0, MEM_RELEASE);
+    mhw::perf::toggles.store(0);
+}
+// v0.23.6: SHA-256 with one provider and the memo. Repeated input, one byte
+// changed (the memo must not answer for other bytes), and back.
+void sha_memo_tests() {
+    std::array<unsigned char, 1024> data{};
+    for (unsigned i = 0; i < data.size(); ++i) data[i] = static_cast<unsigned char>(i);
+    const auto hash = [&] { return mhw::projection_binding::bytes_sha256(data.data(), static_cast<unsigned>(data.size())); };
+    const std::string expected = "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9";
+    check(hash() == expected, "SHA-256 of 0..255 four times");
+    check(hash() == expected, "the memo returns the same hash for the same bytes");
+    data[700] ^= 1;
+    check(hash() == "de9209846e2e263052a811d6b682a8654e4dbb1a2bfce5ed95d992bd8fa48bee", "one byte changed: its own hash");
+    data[700] ^= 1;
+    check(hash() == expected, "back to the first bytes");
+    check(mhw::projection_binding::bytes_sha256("abc", 3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+          "short input (not memoized)");
+}
 }  // namespace
 
 int main() {
@@ -171,6 +232,8 @@ int main() {
     region_tests();
     shared_cache_tests();
     region_level_tests();
+    refresher_tests();
+    sha_memo_tests();
     if (failures) return 1;
     std::printf("perf tests passed\n");
     return 0;

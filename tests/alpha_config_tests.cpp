@@ -100,6 +100,10 @@ int main() {
         check(!a::parse_config("", folder).profile && a::parse_config("profile = on\n", folder).profile, "profile off by default; on");
         const auto bad_profile = a::parse_config("profile = sometimes\n", folder);
         check(!bad_profile.profile && bad_profile.warnings.size() == 1, "a bad profile value warns and stays off");
+        const auto ab = a::parse_config("frame_generation = off\nperf_ab = on\n", folder);
+        check(ab.perf_ab && ab.warnings.empty(), "perf_ab with frame generation off");
+        const auto ab_fg = a::parse_config("frame_generation = 2x\nperf_ab = on\n", folder);
+        check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1, "perf_ab refused with frame generation on");
 
         const auto edited = a::with_value(a::with_value("frame_generation = 2x\r\n", "dynamic_target", "165"), "frame_generation_auto", "on");
         check(edited == "frame_generation = 2x\r\ndynamic_target = 165\r\nframe_generation_auto = on\r\n", "new keys appended with CRLF");

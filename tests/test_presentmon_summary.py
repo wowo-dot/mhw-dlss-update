@@ -87,13 +87,24 @@ class Summary(unittest.TestCase):
         log = folder / 'mhw_dlss.log'
         log.write_text('04:59:00.000 INFO menu: dlss_mode = balanced (applied now)\n'
                        '05:00:10.000 INFO menu: dlss_mode = quality (applied now)\n'
-                       '05:00:11.000 INFO menu: mhw_dlss.ini saved with dlss_mode = quality\n', encoding='utf-8')
+                       '05:00:11.000 INFO menu: mhw_dlss.ini saved with dlss_mode = quality\n'
+                       '05:00:12.000 INFO menu: frame_generation = 2x (from the next start)\n', encoding='utf-8')
         whole, start, quality = pm.summarise(path, log=log)
         self.assertEqual(whole['presents'], 4500)
         self.assertEqual(start['label'], 'capture-MonsterHunterWorld-1 05:00:00 start')
         self.assertEqual((start['presents'], start['displayed_fps']), (1000, 200.0))
         self.assertEqual(quality['label'], 'capture-MonsterHunterWorld-1 05:00:10 dlss_mode=quality')
         self.assertEqual((quality['presents'], quality['displayed_fps']), (1250, 250.0))
+
+    def test_perf_ab_segments(self):
+        # perf_ab's plugin-log lines cut the capture like menu changes.
+        text = V2 + frames(START, 2000, 5.0) + frames(START + dt.timedelta(seconds=10), 2500, 4.0)
+        folder, path = self.write(text)
+        log = folder / 'mhw_dlss.log'
+        log.write_text('05:00:10.000 INFO perf: dlss = paused (applied now)\n', encoding='utf-8')
+        _, running, paused = pm.summarise(path, log=log, settle=0)
+        self.assertEqual(paused['label'], 'capture-MonsterHunterWorld-1 05:00:10 dlss=paused')
+        self.assertEqual((running['presents'], paused['presents']), (2000, 2500))
 
     def test_presentmon_26_columns_and_clock(self):
         # 2.6.0's names, and its clock three hours ahead of local time: the

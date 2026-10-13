@@ -79,10 +79,14 @@ struct Region {
 };
 constexpr unsigned region_count = 256U;
 std::array<Region, region_count> region_list{};
+// When a reader last took each entry (tick); the refresher renews entries
+// used within the last second.
+std::array<std::atomic<std::uint32_t>, region_count> region_used{};
 unsigned region_next{};
 SRWLOCK region_lock = SRWLOCK_INIT;
 std::atomic<std::uint64_t> level1_misses{}, region_hits{}, refreshes{},
-    queries{};
+    queries{}, background_queries{};
+constexpr std::uint32_t refresh_age_ms = 40U, hot_ms = 1000U;
 
 // The region holding address: `known` within the window, `expired` (out is
 // the expired entry, to refresh) or `none`.
@@ -91,11 +95,13 @@ Known known_region(std::uintptr_t address, std::uint32_t now,
                    Region &out) noexcept {
   Known found = Known::none;
   AcquireSRWLockShared(&region_lock);
-  for (const auto &r : region_list)
+  for (unsigned i = 0; i < region_count; ++i) {
+    const auto &r = region_list[i];
     if (address >= r.base && address < r.end) {
       if (now - r.tick < cache_ms) {
         out = r;
         found = Known::known;
+        region_used[i].store(now, std::memory_order_relaxed);
         break;
       }
       if (found == Known::none) {
@@ -103,6 +109,7 @@ Known known_region(std::uintptr_t address, std::uint32_t now,
         found = Known::expired;
       }
     }
+  }
   ReleaseSRWLockShared(&region_lock);
   return found;
 }
@@ -118,15 +125,18 @@ void add_region(const Region &r) noexcept {
     region_next = (region_next + 1U) % region_count;
   }
   region_list[at] = r;
+  region_used[at].store(r.tick, std::memory_order_relaxed);
   ReleaseSRWLockExclusive(&region_lock);
 }
 // The run of pages with one state and protection from the page holding
 // address. With `whole`, when the run reaches back to the allocation base (a
 // query from there ends at the same place with the same state and
-// protection), the region starts at the allocation base.
-bool query(std::uintptr_t address, bool whole, Region &out) noexcept {
+// protection), the region starts at the allocation base. Each VirtualQuery
+// counts in `counter` (the read path's, or the refresher's).
+bool query(std::uintptr_t address, bool whole, Region &out,
+           std::atomic<std::uint64_t> &counter = queries) noexcept {
   MEMORY_BASIC_INFORMATION memory{};
-  queries.fetch_add(1, std::memory_order_relaxed);
+  counter.fetch_add(1, std::memory_order_relaxed);
   if (VirtualQuery(reinterpret_cast<const void *>(address), &memory,
                    sizeof(memory)) != sizeof(memory) ||
       !readable(memory))
@@ -141,7 +151,7 @@ bool query(std::uintptr_t address, bool whole, Region &out) noexcept {
       reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
   if (whole && allocation != 0U && allocation < base) {
     MEMORY_BASIC_INFORMATION first{};
-    queries.fetch_add(1, std::memory_order_relaxed);
+    counter.fetch_add(1, std::memory_order_relaxed);
     if (VirtualQuery(memory.AllocationBase, &first, sizeof(first)) ==
             sizeof(first) &&
         readable(first) &&
@@ -184,11 +194,66 @@ std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
   return r.end;
 }
 
+unsigned refresh_regions(const std::uint32_t now) noexcept {
+  if (!perf::on(perf::cached_reads))
+    return 0U;
+  // Candidates under the shared lock; the queries run without a lock.
+  std::array<Region, region_count> due{};
+  unsigned count = 0;
+  AcquireSRWLockShared(&region_lock);
+  for (unsigned i = 0; i < region_count; ++i) {
+    const auto &r = region_list[i];
+    if (r.end && now - region_used[i].load(std::memory_order_relaxed) < hot_ms &&
+        now - r.tick >= refresh_age_ms)
+      due[count++] = r;
+  }
+  ReleaseSRWLockShared(&region_lock);
+  unsigned renewed = 0;
+  for (unsigned k = 0; k < count; ++k) {
+    Region fresh;
+    const bool same = query(due[k].base, false, fresh, background_queries) &&
+                      fresh.base == due[k].base && fresh.end == due[k].end;
+    AcquireSRWLockExclusive(&region_lock);
+    for (auto &r : region_list)
+      if (r.base == due[k].base && r.end == due[k].end) {
+        // Changed or no longer readable: dropped; its next reader queries.
+        if (same)
+          r.tick = now;
+        else
+          r = Region{};
+        break;
+      }
+    ReleaseSRWLockExclusive(&region_lock);
+    renewed += same ? 1U : 0U;
+  }
+  return renewed;
+}
+
+namespace {
+std::atomic<bool> refresher_started{};
+DWORD WINAPI refresher(void *) noexcept {
+  for (;;) {
+    refresh_regions(static_cast<std::uint32_t>(GetTickCount64()));
+    Sleep(20);
+  }
+}
+} // namespace
+
+void start_region_refresher() noexcept {
+  if (refresher_started.exchange(true))
+    return;
+  if (const auto thread = CreateThread(nullptr, 0, refresher, nullptr, 0, nullptr))
+    CloseHandle(thread);
+  else
+    refresher_started.store(false);
+}
+
 ReadCacheStats read_cache_stats() noexcept {
   return {level1_misses.load(std::memory_order_relaxed),
           region_hits.load(std::memory_order_relaxed),
           refreshes.load(std::memory_order_relaxed),
-          queries.load(std::memory_order_relaxed)};
+          queries.load(std::memory_order_relaxed),
+          background_queries.load(std::memory_order_relaxed)};
 }
 
 ScalarReadResult

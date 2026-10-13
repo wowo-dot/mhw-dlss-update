@@ -225,3 +225,52 @@ Quality; FG off; Reflex Boost; `profile = on`.
   of 249, but the unmodded slices ranged 237-262 standing still. The
   remaining difference is close to the launch-to-launch spread, so a
   back-to-back A/B in one PresentMon session decides it.
+
+## Session 20261013-perf5: back-to-back A/B (v0.23.5)
+
+One PresentMon session: unmodded, then the mod (Quality, FG off, Boost,
+profiler off). Both launches show two standing plateaus:
+
+| Plateau | Unmodded | v0.23.5 | Difference |
+|---|---|---|---|
+| First, after loading | 241 fps (CPU busy 4.02 ms) | 208 (4.67) | -14% |
+| Settled | 257-266 (3.64-3.80) | 229-232 (4.18-4.23) | -11% |
+| 1% low, settled | 183-196 | 150-155 | |
+| GPU busy | 3.2 ms | 2.86 ms | |
+
+The A/B shows a cost of 0.4-0.6 ms of CPU a frame, more than the profile's
+own-code share (about 0.25 ms). The rest is probably work the mod causes
+inside the driver and the game (extra submissions, DLSS's CPU side, Reflex
+markers), which the sampler attributes to the game or the driver.
+
+## v0.23.6
+
+1. **The region refresher.**
+   - A thread (every 20 ms) renews, from its base, each region a reader took
+     within the last second once its answer is 40 ms old.
+   - Hot regions therefore stay within the 100 ms window, and the render
+     thread rarely queries. A region that changed or is no longer readable
+     is dropped, and its next reader queries it.
+   - `reads.background_queries` counts the refresher's queries.
+2. **SHA-256.**
+   - One BCrypt provider for the process; one was opened for every hash
+     before.
+   - A memo of 32 inputs (256 B-256 KB) with their hashes, answered only for
+     byte-identical input. The stream route hashed the same overlay and haze
+     shaders on every plan build, that is, every frame.
+3. **`perf_ab = on`** (diagnostic; needs FG off):
+   - DLSS alternates every 30 s between running and paused (the live
+     rebuild's pause: every hook stays installed and the game renders
+     natively);
+   - each switch goes to the plugin log as `perf: dlss = paused (applied
+     now)`, which `presentmon_summary.py --log` cuts on.
+
+   One launch then separates the per-frame DLSS work from the fixed cost of
+   the installed hooks, in the same scene.
+
+Tests:
+- `perf_tests`: the refresher (renews a used region, its queries are its own,
+  answers past the first window, drops an inaccessible region), and the
+  memo's hashes;
+- `alpha_config_tests`: `perf_ab` and its FG refusal;
+- `test_presentmon_summary`: the `perf:` lines.

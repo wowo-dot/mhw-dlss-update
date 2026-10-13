@@ -35,6 +35,7 @@
 #include "../continuous_dlaa/runtime.hpp"
 #include "../render_resolution/runtime.hpp"
 #include "../scaled_temporal/stream_route.hpp"
+#include "../bridge_probe/readable_region.hpp"
 #include <cstddef>
 #include <iterator>
 #include <vector>
@@ -49,6 +50,8 @@ mhw::alpha::Config alpha_config;
 std::wstring alpha_home;
 // Folder holding mhw_dlss.ini: a failure before the log opens is recorded there.
 std::filesystem::path alpha_base;
+// The plugin log (defined with the Astera Loader entry below).
+void loader_log(al_log_level_t level, const std::string& text) noexcept;
 }
 #endif
 #include <cstdio>
@@ -976,6 +979,8 @@ DWORD WINAPI worker(void*) noexcept {
             mhw::perf::sampler::start();
 #else
             if(alpha_config.profile)mhw::perf::sampler::start();
+            // Hot game-memory regions stay validated off the render thread.
+            mhw::bridge_probe::start_region_refresher();
 #endif
 #endif
 #ifdef MHW_ALPHA
@@ -1106,6 +1111,9 @@ DWORD WINAPI worker(void*) noexcept {
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
                 DlssRetry dlss_retry;SceneRetry scene_retry;
+                // perf_ab (diagnostic, FG off): DLSS paused and running in
+                // turn, 30 s each, logged with the time to the plugin log.
+                std::uint64_t perf_ab_next=alpha_config.perf_ab&&!fg_plugin?GetTickCount64()+30000:0;bool perf_ab_paused=false;
 #endif
 #ifdef MHW_FG_SCENE_PROBE
                 unsigned scene_requested{};
@@ -1151,6 +1159,13 @@ DWORD WINAPI worker(void*) noexcept {
                         require(driver_mode("live",reflex_applied.load()!=0),"driver-live-mode");
                     }
                     mhw::render_resolution::write_captures(log);
+                    if(perf_ab_next&&GetTickCount64()>=perf_ab_next){
+                        perf_ab_paused=!perf_ab_paused;perf_ab_next+=30000;
+                        const bool applied=mhw::continuous_dlaa::diagnostic_pause(perf_ab_paused);
+                        loader_log(AL_LOG_INFO,std::string("perf: dlss = ")+(perf_ab_paused?"paused":"running")+(applied?" (applied now)":" (refused)"));
+                        log<<"{\"event\":\"perf_ab\",\"paused\":"<<perf_ab_paused<<",\"applied\":"<<applied<<"}\n"<<std::flush;
+                        if(!applied)perf_ab_next=0;
+                    }
                     // The game's own aspect switch (render_resolution yielded).
                     if(mhw::render_resolution::scene_changed()&&GetTickCount64()>=scene_retry.at)change_dlss_scene(scene_retry);
                     {   // A live preset change from the menu, or its retry.

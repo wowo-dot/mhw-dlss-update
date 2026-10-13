@@ -4,9 +4,11 @@
 #include <bcrypt.h>
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
+#include <vector>
 namespace mhw::projection_binding {
 bool executable(std::uintptr_t at, std::uintptr_t base) noexcept {
   MEMORY_BASIC_INFORMATION m{};
@@ -15,14 +17,25 @@ bool executable(std::uintptr_t at, std::uintptr_t base) noexcept {
   return m.State == MEM_COMMIT && m.Type == MEM_IMAGE && reinterpret_cast<std::uintptr_t>(m.AllocationBase) == base &&
       !(m.Protect & (PAGE_GUARD | PAGE_NOACCESS)) && (p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY);
 }
+// One SHA-256 provider for the process (v0.23.6): opening one for every hash
+// showed in the per-frame profile (perf4). An algorithm handle may be shared by
+// threads; each Hash has its own hash object. It is never closed.
+BCRYPT_ALG_HANDLE sha256_provider() noexcept {
+  static const BCRYPT_ALG_HANDLE provider = [] {
+    BCRYPT_ALG_HANDLE h{};
+    return BCryptOpenAlgorithmProvider(&h, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0 ? h : nullptr;
+  }();
+  return provider;
+}
 struct Hash {
-  BCRYPT_ALG_HANDLE algorithm{};
   BCRYPT_HASH_HANDLE handle{};
   Hash() {
-    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return;
-    if (BCryptCreateHash(algorithm, &handle, nullptr, 0, nullptr, 0, 0) != 0) handle = nullptr;
+    const auto algorithm = sha256_provider();
+    if (!algorithm || BCryptCreateHash(algorithm, &handle, nullptr, 0, nullptr, 0, 0) != 0) handle = nullptr;
   }
-  ~Hash() { if (handle) BCryptDestroyHash(handle); if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0); }
+  ~Hash() { if (handle) BCryptDestroyHash(handle); }
+  Hash(const Hash &) = delete;
+  Hash &operator=(const Hash &) = delete;
   bool add(const void *p, ULONG size) { return handle && BCryptHashData(handle, static_cast<PUCHAR>(const_cast<void *>(p)), size, 0) == 0; }
   std::string finish() {
     std::array<UCHAR, 32> bytes{};
@@ -57,7 +70,45 @@ std::string file_sha256(const std::wstring &path) {
     if (n > 0 && !hash.add(buffer.data(), static_cast<ULONG>(n))) return {}; }
   return file.eof() ? hash.finish() : std::string{};
 }
-std::string bytes_sha256(const void *data,unsigned size) { Hash h; return h.add(data,size)?h.finish():std::string{}; }
+// Memo (v0.23.6): the stream route identifies overlay and haze shaders by their
+// SHA-256 on every plan build, so the same few bytecodes were hashed every
+// frame (perf4). Inputs from 256 bytes to 256 KB are kept with their hash (32,
+// in turn); a lookup compares the whole input, so a kept hash is returned only
+// for identical bytes.
+namespace {
+struct Memo {
+  std::vector<std::byte> bytes;
+  std::string sha;
+};
+std::array<Memo, 32> memos;
+unsigned memo_next{};
+SRWLOCK memo_lock = SRWLOCK_INIT;
+}  // namespace
+std::string bytes_sha256(const void *data,unsigned size) {
+  const bool memo = data && size >= 256 && size <= 262144;
+  if (memo) {
+    std::string kept;
+    AcquireSRWLockShared(&memo_lock);
+    for (const auto &m : memos)
+      if (m.bytes.size() == size && std::memcmp(m.bytes.data(), data, size) == 0) { kept = m.sha; break; }
+    ReleaseSRWLockShared(&memo_lock);
+    if (!kept.empty()) return kept;
+  }
+  Hash h;
+  auto sha = h.add(data, size) ? h.finish() : std::string{};
+  if (memo && sha.size() == 64) {
+    try {
+      const auto *first = static_cast<const std::byte *>(data);
+      std::vector<std::byte> copy(first, first + size);
+      AcquireSRWLockExclusive(&memo_lock);
+      memos[memo_next] = {std::move(copy), sha};
+      memo_next = (memo_next + 1) % static_cast<unsigned>(memos.size());
+      ReleaseSRWLockExclusive(&memo_lock);
+    } catch (...) {
+    }
+  }
+  return sha;
+}
 bool host_identity(std::uintptr_t base, std::string &reason, bool hash_file) {
   wchar_t path[32768]{};
   const auto n = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));

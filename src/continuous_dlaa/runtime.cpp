@@ -1128,6 +1128,12 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
 }
 ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{return rebuild(requested,false);}
 ModeChange change_scene() noexcept{return rebuild(configured_mode,true);}
+bool diagnostic_pause(bool pause) noexcept{
+    if(!live_modes())return false;
+    if(pause){accepting.store(false);sr::stop();return true;}
+    if(!healthy())return false;
+    sr::begin();accepting.store(true);return true;
+}
 void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept{if(!pass)configured_mode=m;}
 // Worker: the mode DLSS runs (after install; it may differ from the configured
 // one, see install) or will run.
@@ -1136,6 +1142,7 @@ dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_g
 bool live_modes() noexcept{return false;}
 ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept{ModeChange r;r.reason="unscaled build";return r;}
 ModeChange change_scene() noexcept{ModeChange r;r.reason="unscaled build";return r;}
+bool diagnostic_pause(bool) noexcept{return false;}
 // The unscaled build always runs DLAA.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
@@ -1353,7 +1360,7 @@ void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;const auto reads=bridge_probe::read_cache_stats();
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
        <<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<'}'
-       <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"refreshes\":"<<reads.refreshes<<",\"queries\":"<<reads.queries<<'}'
+       <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"refreshes\":"<<reads.refreshes<<",\"queries\":"<<reads.queries<<",\"background_queries\":"<<reads.background_queries<<'}'
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";
