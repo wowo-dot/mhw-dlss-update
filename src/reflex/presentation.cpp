@@ -282,7 +282,11 @@ HRESULT lifecycle_call(unsigned method, IUnknown* self, std::array<std::uint64_t
 HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUEUE_DESC* desc, REFIID iid, void** out) {
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     auto& s = *dispatch.load(); Call call(s);
-    if (!bypass_depth && s.accepting.load() && self == s.device.Get() && desc && out && iid == __uuidof(ID3D12CommandQueue)) {
+    // The game's queues only: the mod's own private queues (astera::Internal)
+    // are not proxied, nor kept in the 16 slots (game-125: the DLSS context's
+    // queue, one per live rebuild, filled them; the 17th faulted routing off).
+    if (!bypass_depth && !astera::internal_call() && s.accepting.load() && self == s.device.Get() && desc && out &&
+        iid == __uuidof(ID3D12CommandQueue)) {
         std::lock_guard lock(s.mutex);
         if (s.accepting.load()) {
             Bypass bypass(true);

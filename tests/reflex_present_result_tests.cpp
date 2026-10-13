@@ -2,6 +2,7 @@
 #include "reflex/resize_contract.hpp"
 #include "reflex/presentation_route.hpp"
 #include "reflex/frame_generation_policy.hpp"
+#include "astera/astera_hooks.hpp"
 #include <dxgi.h>
 #include <stdexcept>
 #include <iostream>
@@ -24,6 +25,13 @@ int main() {
         require(parse_multiplier("2x") == 2 && parse_multiplier("6X") == 6 && parse_multiplier("8x") == 8, "multiplier text");
         require(!parse_multiplier("off") && !parse_multiplier("1x") && !parse_multiplier("9x") && !parse_multiplier("") &&
             !parse_multiplier("4") && !parse_multiplier("10x"), "non-multiplier text rejected");
+        // game-125: the mod's private device calls are marked on this thread,
+        // without AL too, so its own queue hook does not proxy them.
+        require(!mhw::astera::internal_call(), "no internal scope");
+        {mhw::astera::Internal outer;require(mhw::astera::internal_call(), "inside an internal scope");
+         {mhw::astera::Internal inner;require(mhw::astera::internal_call(), "nested");}
+         require(mhw::astera::internal_call(), "still inside the outer scope");}
+        require(!mhw::astera::internal_call(), "after the scope");
         // game-124: a fault under SDK pacing keeps the game on the SDK's chain.
         require(fault_keeps_routing(PresentationContract::sdk_paced) && !fault_keeps_routing(PresentationContract::synchronous_native),
             "paced faults keep routing; synchronous faults fall back to the physical chain");

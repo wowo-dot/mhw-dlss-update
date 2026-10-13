@@ -2,6 +2,7 @@
 #include "../temporal_present/output.hpp"
 #include "../temporal_gpu_inputs/shader.hpp"
 #include "../perf/toggles.hpp"
+#include "../astera/astera_hooks.hpp"
 #include <nvsdk_ngx_helpers.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -110,7 +111,11 @@ InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array
         hr(D3DCompile(temporal_gpu_inputs::shader_source,sizeof(temporal_gpu_inputs::shader_source)-1,nullptr,nullptr,nullptr,"main","cs_5_0",D3DCOMPILE_ENABLE_STRICTNESS|D3DCOMPILE_WARNINGS_ARE_ERRORS|D3DCOMPILE_OPTIMIZATION_LEVEL3,0,&shader,&errors),"inline converter compile");
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};pd.pRootSignature=p.root.Get();pd.CS={shader->GetBufferPointer(),shader->GetBufferSize()};hr(device->CreateComputePipelineState(&pd,IID_PPV_ARGS(&p.pipeline)),"inline converter pipeline");
         D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
-        hr(device->CreateCommandQueue(&q,IID_PPV_ARGS(&p.queue)),"inline create queue");hr(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&p.allocator)),"inline create allocator");
+        // A private queue, never one of the game's: past every detour, so the
+        // presentation layer neither proxies it through the SDK nor keeps it
+        // (game-125: one per live rebuild filled its 16 slots).
+        {astera::Internal internal;hr(device->CreateCommandQueue(&q,IID_PPV_ARGS(&p.queue)),"inline create queue");}
+        hr(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&p.allocator)),"inline create allocator");
         hr(device->CreateCommandList(0,q.Type,p.allocator.Get(),nullptr,IID_PPV_ARGS(&p.create_list)),"inline create list");hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&p.create_fence)),"inline create fence");
         require(NVSDK_NGX_D3D12_GetCapabilityParameters(&p.parameters)==NVSDK_NGX_Result_Success,"inline capabilities");int available{},update{},init{};
         require(p.parameters->Get(NVSDK_NGX_Parameter_SuperSampling_Available,&available)==NVSDK_NGX_Result_Success&&available==1&&

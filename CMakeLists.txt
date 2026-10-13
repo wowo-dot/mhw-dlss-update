@@ -544,7 +544,7 @@ set_target_properties(mhw_temporal_input_replay PROPERTIES RUNTIME_OUTPUT_DIRECT
 if(TARGET mhw_dlss_sdk_live)
     add_library(mhw_dlss_inline STATIC src/dlss_sdk/inline.cpp)
     target_include_directories(mhw_dlss_inline SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
-    target_link_libraries(mhw_dlss_inline PUBLIC mhw_temporal_present mhw_dlss_sdk_live)
+    target_link_libraries(mhw_dlss_inline PUBLIC mhw_temporal_present mhw_dlss_sdk_live mhw_astera_hooks)
     target_compile_options(mhw_dlss_inline PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /external:W0)
     set_target_properties(mhw_dlss_inline PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
     add_library(mhw_native_taa_resolve STATIC src/continuous_dlaa/resolve.cpp)

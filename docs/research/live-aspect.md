@@ -306,3 +306,32 @@ path already intended ("routing stays live until exit"). The synchronous
 Reflex-only contract still falls back. The fault's site and HRESULT are logged
 in `presentation_state` (`fault_site`, `fault_hr`), to find out why the paced
 Present failed during the switch.
+
+## game-125 (v0.25.11): the queue table
+
+The same crash after 10 switches. `presentation_state` again showed
+`faults: 1, routing: false`, but `fault_site: 0`: the fault was not one of the
+runtime sites. In the game-125 dump, `PresentationStats::queues` was **16**:
+the proxy queue table was full. The 17th `CreateCommandQueue` on the game's
+device threw `presentation-queue-capacity`, and `fault()` turned routing off.
+
+**Who creates them.** The presentation layer's queue hook proxies every queue
+created on the game's device and keeps the proxy for good. The DLSS inline
+context (`dlss_sdk/inline.cpp`) creates a private direct queue on that device
+at every live rebuild (each preset or aspect change). Each one was proxied
+through the SDK and kept, so the startup queues plus about ten rebuilds filled
+the 16 slots. All three crashes came after 10 rebuilds: game-124 (5 preset
+changes and 2 switches, then 10 switches) and game-125 (10 switches).
+
+**v0.25.12:**
+
+- `astera::Internal` now also keeps a per-thread depth (`internal_call()`),
+  with or without AL. The presentation queue hook ignores calls inside it.
+- The inline context creates its private queue inside `astera::Internal`.
+  Under AL that call goes straight to the original method; without AL, the
+  queue hook passes it on.
+- `presentation_state` logs `queues`.
+
+The startup discovery queue (`projection_binding/provenance.cpp`, once) still
+takes one slot. With v0.25.11's paced-fault rule, a full table would no longer
+end routing under frame generation.

@@ -1350,7 +1350,7 @@ DWORD WINAPI worker(void*) noexcept {
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes
                        <<",\"width\":"<<stats.width<<",\"height\":"<<stats.height<<",\"buffers\":"<<stats.buffers<<",\"faults\":"<<stats.faults
-                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr<<"}\n"<<std::flush;
+                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"queues\":"<<stats.queues<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr<<"}\n"<<std::flush;
                     last_resizes=stats.resizes;last_swapchains=stats.swapchains;
                 }
                 Sleep(100);

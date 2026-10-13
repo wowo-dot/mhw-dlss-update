@@ -15,8 +15,10 @@ void activate(void (*begin)(void *),void (*end)(void *),void *context) noexcept 
     begin_call=begin;end_call=end;call_context=context;running.store(begin&&end,std::memory_order_release);
 }
 bool active() noexcept {return running.load(std::memory_order_acquire);}
-void begin_internal() noexcept {if(active())begin_call(call_context);}
-void end_internal() noexcept {if(active())end_call(call_context);}
+thread_local unsigned internal_depth{};
+void begin_internal() noexcept {++internal_depth;if(active())begin_call(call_context);}
+void end_internal() noexcept {if(active())end_call(call_context);--internal_depth;}
+bool internal_call() noexcept {return internal_depth!=0;}
 
 void provide_game_hooks(const void *table,void *self) noexcept {
     const auto *hooks=static_cast<const al_hooks_t *>(table);

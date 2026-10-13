@@ -29,6 +29,9 @@ void activate(void (*begin)(void *),void (*end)(void *),void *context) noexcept;
 bool active() noexcept;
 void begin_internal() noexcept;
 void end_internal() noexcept;
+// Inside an Internal scope on this thread, with or without AL: the mod's own
+// MinHook detours pass such calls on, as AL's chain does.
+bool internal_call() noexcept;
 // Calls the SDK proxies make into DXGI/D3D12 (creation, upgrade) reach the
 // original methods once, past every plugin's detour. No-op without AL.
 struct Internal {

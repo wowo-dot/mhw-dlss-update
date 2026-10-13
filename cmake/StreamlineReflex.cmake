@@ -124,6 +124,7 @@ if(BUILD_TESTING)
     target_include_directories(reflex_present_result_tests PRIVATE src)
     target_compile_definitions(reflex_present_result_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(reflex_present_result_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_link_libraries(reflex_present_result_tests PRIVATE mhw_astera_hooks)
     add_test(NAME reflex_present_result COMMAND reflex_present_result_tests)
 
     add_executable(reflex_owned_interface_tests tests/reflex_owned_interface_tests.cpp)
