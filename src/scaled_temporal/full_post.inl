@@ -9,16 +9,16 @@ using FullCopyFn=void(*)(std::uintptr_t context,std::uintptr_t destination,int d
 // The game's setViewport (0x23d0330) and copy helper (0x23c9250), set when
 // the hooks are installed. Fixtures may supply their own.
 FullViewportFn full_viewport{};FullCopyFn full_copy{};
+// A frame's candidate is the final quad (pending); it is armed at the post
+// scheduler's entry, once the registration pass has shown TAA's callback will
+// run (v0.25.5).
 struct FullPostState {
  std::uint64_t frame{};std::uintptr_t context{};
- bool armed{},in_scheduler{},switched{},tone_map_full{};
+ bool pending{},armed{},in_scheduler{},switched{},tone_map_full{};
  std::array<int,4> render_rect{},full_rect{};
+ std::uintptr_t source{},destination{};unsigned key{},order{};  // the final quad's owners and key fields
 };
 thread_local FullPostState full_state;
-// The frame of this thread's last TAA callback: a frame is armed only when the
-// previous one ran TAA, so the switch will happen (the final copy is recorded
-// before the post chain).
-thread_local std::uint64_t full_taa_frame{UINT64_MAX};
 std::atomic<std::uint64_t> full_frame{UINT64_MAX};  // the last armed frame (plan builder)
 struct FullPostCounters {
  std::atomic<std::uint64_t> final_copies{},schedulers{},switches{},tone_map_switches{},projections{},restores{},
@@ -130,31 +130,55 @@ void full_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth
  if(p.prepared&&p.stamp==s&&p.full_slot){p.full_depth_state=depth_state;p.full_depth_resource=depth;
   p.full_gbuffer4_state=gbuffer4_state;p.full_gbuffer4_resource=gbuffer4;p.full_states_known=true;}
 }
-// The final quad of a scaled frame becomes the game's DLAA copy (the same
-// owners as the quad: tBaseMap's texture into the view's attachment, the full
-// rectangle), which arms this thread's post chain for the frame. slot: the
-// final quad's capture (final_before), entered.
-bool full_final(const pb::Frame &f,unsigned slot){
- if(!full_post_enabled.load()||!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return false;
- FinalQuad q;{Lock lock;q=final_quads[slot];if(!q.entered||q.stamp.context!=f.gpr[2]){++full_counts.declined;return false;}
-  if(full_taa_frame+1!=q.stamp.frame){++full_counts.no_taa;return false;}
-  final_quads[slot].full_post=true;}
- const unsigned xy[2]{},rect[4]{0,0,width,height};
- full_copy(f.gpr[2],q.destination.object,0,xy,q.source.object,0,rect,nullptr);
- auto &s=full_state;s=FullPostState{};s.frame=q.stamp.frame;s.context=f.gpr[2];s.armed=true;
+// sCamera::draw records the scene (with the final quad), then runs the post
+// filters' registration pass (their callbacks with sFilterSwapchain +57 set add
+// their descriptors, sub_1424F2350), then the scheduler. Whether TAA's
+// callback runs this frame is known only after the final quad: at a
+// transition it may not (game-118: 11 frames armed without the switch, the
+// render-size chain under the full copy).
+//
+// So the final quad stays native and is only remembered here (the candidate:
+// its owners, tBaseMap's texture and the view's attachment, and its key).
+// slot: the final quad's capture (final_before), entered.
+void full_candidate(const pb::Frame &f,unsigned slot){
+ auto &s=full_state;s=FullPostState{};
+ if(!full_post_enabled.load()||!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return;
+ FinalQuad q;{Lock lock;q=final_quads[slot];}
+ if(!q.entered||q.stamp.context!=f.gpr[2]||!field(f.gpr[2],0x154,s.key)||!field(f.gpr[2],0x15c,s.order)){++full_counts.declined;return;}
+ s.frame=q.stamp.frame;s.context=f.gpr[2];s.source=q.source.object;s.destination=q.destination.object;s.pending=true;
  s.render_rect={0,0,static_cast<int>(render_w),static_cast<int>(render_h)};s.full_rect={0,0,static_cast<int>(width),static_cast<int>(height)};
- full_frame.store(q.stamp.frame);++full_counts.final_copies;return true;
 }
+// TAA's descriptor in this frame's scheduler list (sFilterSwapchain +0x3c
+// count, +0x40 descriptors; the unit's vtable 0x351bda8, stage 15, order 2),
+// with a callback (descriptor +0x20 clear: the scheduler calls it).
+bool full_taa_registered() noexcept {
+ std::uintptr_t manager{};unsigned count{};
+ if(!field(cfg.image,0x51cc238,manager)||!field(manager,0x3c,count)||count>64)return false;
+ for(unsigned i=0;i<count;++i){std::uintptr_t e{},unit{},type{};unsigned stage{},order{};unsigned char skipped{};
+  if(!field(manager,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,unit)||!unit||!field(unit,0,type)||!field(e,0x20,skipped))return false;
+  if(type==cfg.image+0x351bda8&&stage==15&&order==2&&!skipped)return true;}
+ return false;
+}
+// At the scheduler's entry the candidate is armed: the final copy becomes the
+// game's DLAA copy (the same owners, the full rectangle), recorded in the
+// final quad's key (stage 16, order 0) after the quad, which it overwrites.
+// Without TAA's callback this frame, nothing is armed: the frame stays native.
 void full_enter(std::uintptr_t context) noexcept {
- auto &s=full_state;if(!s.armed||context!=s.context)return;
+ auto &s=full_state;if(!s.pending||context!=s.context)return;
+ s.pending=false;
  std::uint64_t frame{};std::array<int,4> rect{};
- if(!field(cfg.renderer,0x1f210,frame)||frame!=s.frame){s.armed=false;++full_counts.stale;return;}
+ if(!field(cfg.renderer,0x1f210,frame)||frame!=s.frame){++full_counts.stale;return;}
  ++full_counts.schedulers;
- if(!field(context,0x5c,rect)||rect!=s.render_rect){s.armed=false;++full_counts.rect_mismatch;return;}
- s.in_scheduler=true;
+ if(!field(context,0x5c,rect)||rect!=s.render_rect){++full_counts.rect_mismatch;return;}
+ if(!full_taa_registered()){++full_counts.no_taa;return;}
+ unsigned key{},order{};
+ if(!field(context,0x154,key)||!field(context,0x15c,order)){++full_counts.declined;return;}
+ auto *k=reinterpret_cast<volatile unsigned *>(context+0x154),*o=reinterpret_cast<volatile unsigned *>(context+0x15c);
+ const unsigned xy[2]{},full[4]{0,0,width,height};
+ *k=s.key;*o=s.order;full_copy(context,s.destination,0,xy,s.source,0,full,nullptr);*k=key;*o=order;
+ s.armed=true;s.in_scheduler=true;full_frame.store(s.frame);++full_counts.final_copies;
 }
 void full_taa(std::uintptr_t context) noexcept {
- if(std::uint64_t frame{};field(cfg.renderer,0x1f210,frame))full_taa_frame=frame;
  auto &s=full_state;if(!s.in_scheduler||s.switched||context!=s.context)return;
  // The inputs' upscale slot first, in TAA's key. Without it the chain still
  // switches: its depth- and motion-based effects then read the render-size

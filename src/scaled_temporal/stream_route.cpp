@@ -256,7 +256,6 @@ void watch(unsigned slot,const Plan &p) noexcept {
 struct FinalQuad {
  tb::Snapshot stamp;tb::Owner source,destination;std::uintptr_t attachment{},packet{},queue{};
  unsigned before{},after{},base_id{};bool entered{},valid{};
- bool full_post{};  // replaced by the DLAA copy (full_post.inl)
 };
 std::array<FinalQuad,32> final_quads;
 std::array<Pipeline,4> pipelines;
@@ -539,7 +538,6 @@ unsigned final_before(const pb::Frame &f){
 }
 void final_after(unsigned slot,bool returned){
  if(slot==UINT_MAX)return;Lock lock;auto &q=final_quads[slot];
- if(q.full_post){q.entered=q.valid=q.full_post=false;return;}  // the DLAA copy: planned as at DLAA
  std::uintptr_t source{},queue{},packet{};unsigned key{},opcode{};
  q.valid=returned&&q.entered&&same_stamp(q.stamp)&&field(q.stamp.context,0x710+8*(q.base_id&0xfff),source)&&source==q.source.object&&
   field(q.stamp.context,0x2b80,q.after)&&q.after==q.before+1&&field(q.stamp.context,0x2b78,queue)&&queue==q.queue&&
@@ -1199,7 +1197,7 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
 bool haze_before_safe(const pb::Frame &f) noexcept{try{return haze_before(f);}catch(...){Lock lock;haze_reject(11);return false;}}
 void haze_after_safe(bool entered,bool returned) noexcept{try{haze_after(entered,returned);}catch(...){Lock lock;haze_reject(11);}}
 void final_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_final);++pending;const auto slot=final_before(*f);const bool capture=haze_before_safe(*f);bool returned=false;
- __try{ht::forward_begin(timing);if(!full_final(*f,slot))mhw_binding_forward(originals[3],f);ht::forward_end(timing);returned=true;}
+ __try{ht::forward_begin(timing);full_candidate(*f,slot);mhw_binding_forward(originals[3],f);ht::forward_end(timing);returned=true;}
  __finally{final_after(slot,returned);haze_after_safe(capture,returned);--pending;ht::end(timing);}}
 void draw_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_draw);++pending;unsigned stage=UINT_MAX;
  const auto slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:draw_before(*f,stage);bool returned=false;

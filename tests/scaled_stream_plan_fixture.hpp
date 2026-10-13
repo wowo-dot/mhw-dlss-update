@@ -104,44 +104,52 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   std::ostringstream first,second;route::write_summary(first);route::census_write(second);
   require(first.str().find("\"post_census\":{\"captured\":2,\"samples\":[{")!=std::string::npos&&first.str().find("\"packets\":[[2013265922,13,0,0,64,32,")!=std::string::npos&&second.str()=="{\"captured\":2,\"samples\":[]}","census written once, in the route summary");
   std::cout<<"PASS post census: descriptors, copy, draws and targets of the native queue, written once\n";}
- // full_post (v0.25.0): the final quad becomes the DLAA copy and arms the
- // frame; the post scheduler then switches to the full rectangle after TAA and
+ // full_post (v0.25.5): the final quad stays native and is the frame's
+ // candidate; at the post scheduler's entry, with TAA's callback in the
+ // registration list, the DLAA copy is recorded in the quad's key and the
+ // frame armed. The scheduler then switches to the full rectangle after TAA and
  // restores the render rectangle at its exit. The game's setViewport and copy
  // helper are stand-ins here.
- {struct Call {std::uintptr_t context{},destination{},source{};std::array<unsigned,4> rect{};};
+ {struct Call {std::uintptr_t context{},destination{},source{};std::array<unsigned,4> rect{};unsigned key{},order{};};
   static std::vector<Call> copies;static std::vector<std::array<int,4>> viewports;copies.clear();viewports.clear();
   route::full_copy=[](std::uintptr_t c,std::uintptr_t d,int,const unsigned *xy,std::uintptr_t s_,int,const unsigned *r,const unsigned *o){
-   require(!xy[0]&&!xy[1]&&!o,"DLAA copy origin");copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]}});};
+   require(!xy[0]&&!xy[1]&&!o,"DLAA copy origin");unsigned key{},order{};require(route::field(c,0x154,key)&&route::field(c,0x15c,order),"copy key");
+   copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]},key,order});};
   route::full_viewport=[](std::uintptr_t c,const int *r){viewports.push_back({r[0],r[1],r[2],r[3]});std::memcpy(reinterpret_cast<void *>(c+0x5c),r,16);};
   mhw::scaled_temporal::full_post_enabled.store(true);
   {std::string why;require(route::full_inputs.prepare(f.device.Get(),128,64,why),"full_post inputs prepared");}
-  const auto armed_frame=s.frame+1;
-  // A frame arms only after one that ran TAA's callback.
-  const auto no_taa=route::full_counts.no_taa.load();put(renderer+0x1f210,armed_frame);
-  {const auto unarmed=route::final_before(frame);require(!route::full_final(frame,unarmed)&&route::full_counts.no_taa.load()==no_taa+1,"no TAA last frame, not armed");
-   route::final_after(unarmed,true);route::final_quads[unarmed]={};}
-  put(renderer+0x1f210,armed_frame-1);route::full_post_taa(context);put(renderer+0x1f210,armed_frame);
-  const auto slot=route::final_before(frame);require(slot==armed_frame%32,"full_post final quad entry");
-  std::uintptr_t source_object{};require(route::field(context,0x718,source_object),"final tBaseMap");
-  require(route::full_final(frame,slot)&&copies.size()==1&&copies[0].context==context&&copies[0].destination==owners[4]&&
-          copies[0].source==source_object&&copies[0].rect==std::array<unsigned,4>{0,0,128,64}&&route::full_frame.load()==armed_frame,"final quad becomes the DLAA copy");
-  route::final_after(slot,true);require(!route::final_quads[slot].entered&&!route::final_quads[slot].valid,"DLAA copy left to the identity plan");
-  const std::array<int,4> render_rect{0,0,64,32},full_rect{0,0,128,64};
-  put(context+0x5c,render_rect);
-  route::full_post_enter(context);route::full_post_taa(context);
+  put(layer,image.base+0x351bda8);  // TAA's unit, for the registration list
+  const std::array<int,4> render_rect{0,0,64,32},full_rect{0,0,128,64};const unsigned taa_key=15U|(2U<<5);
+  std::uint64_t next_frame=s.frame+1;std::uintptr_t source_object{};
+  // The final quad, recorded natively (the queue grows by its draw) in key
+  // (16, 0); the scheduler's context then holds TAA's key.
+  const auto candidate=[&]{const auto armed=next_frame++;
+   put(renderer+0x1f210,armed);put(context+0x2b80,3U);put(context+0x5c,full_rect);put(context+0x154,16U);put(context+0x15c,0x12U);
+   const auto quad=route::final_before(frame);require(quad!=UINT_MAX,"final quad entry");require(route::field(context,0x718,source_object),"final tBaseMap");
+   route::full_candidate(frame,quad);put(context+0x2b80,4U);route::final_after(quad,true);require(route::final_quads[quad].valid,"the final quad stays native");
+   put(context+0x5c,render_rect);put(context+0x154,taa_key);put(context+0x15c,0U);return armed;};
+  const auto armed_frame=candidate();require(copies.empty()&&route::full_frame.load()!=armed_frame,"nothing armed at the final quad");
+  route::full_post_enter(context);
+  unsigned key{};require(route::field(context,0x154,key)&&key==taa_key,"the scheduler's key restored");
+  require(copies.size()==1&&copies[0].context==context&&copies[0].destination==owners[4]&&copies[0].source==source_object&&
+          copies[0].rect==std::array<unsigned,4>{0,0,128,64}&&copies[0].key==16&&copies[0].order==0x12&&route::full_frame.load()==armed_frame,
+          "the DLAA copy in the final quad's key at the scheduler's entry");
+  route::full_post_taa(context);
   std::array<int,4> now{};require(route::field(context,0x5c,now)&&now==full_rect&&viewports.size()==1,"full rectangle after TAA");
   route::full_post_taa(context);require(viewports.size()==1,"one switch per frame");
   route::full_post_exit(context);require(route::field(context,0x5c,now)&&now==render_rect&&viewports.size()==2,"render rectangle restored at the exit");
-  route::full_post_enter(context);route::full_post_taa(context);require(viewports.size()==2,"disarmed after the exit");
-  // A rectangle other than the render one at the scheduler's entry, or a
-  // stale frame, leaves the chain native.
-  put(renderer+0x1f210,armed_frame-1);route::full_post_taa(context);put(renderer+0x1f210,armed_frame);
-  put(context+0x5c,full_rect);const auto again=route::final_before(frame);
-  require(route::full_final(frame,again)&&copies.size()==2,"re-armed");route::final_after(again,true);
-  const auto mismatches=route::full_counts.rect_mismatch.load();
-  route::full_post_enter(context);route::full_post_taa(context);
-  require(viewports.size()==2&&route::full_counts.rect_mismatch.load()==mismatches+1,"rectangle mismatch refused");
-  route::full_post_exit(context);
+  route::full_post_enter(context);route::full_post_taa(context);require(viewports.size()==2&&copies.size()==1,"disarmed after the exit");
+  // TAA's callback not in this frame's list (a transition), a rectangle other
+  // than the render one, or a stale frame: nothing armed, the frame native.
+  {const auto no_taa=route::full_counts.no_taa.load();put(layer+0x160,static_cast<unsigned char>(1));const auto unarmed=candidate();
+   route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);put(layer+0x160,static_cast<unsigned char>(0));
+   require(copies.size()==1&&viewports.size()==2&&route::full_counts.no_taa.load()==no_taa+1&&route::full_frame.load()!=unarmed,"TAA without a callback: not armed");}
+  {const auto mismatches=route::full_counts.rect_mismatch.load();candidate();put(context+0x5c,full_rect);
+   route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);
+   require(copies.size()==1&&viewports.size()==2&&route::full_counts.rect_mismatch.load()==mismatches+1,"rectangle mismatch refused");}
+  {const auto stale=route::full_counts.stale.load();const auto f2=candidate();put(renderer+0x1f210,f2+1);
+   route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);
+   require(copies.size()==1&&route::full_counts.stale.load()==stale+1,"a stale candidate refused");}
   // v0.25.2: the inputs' upscale slot. After TAA's callback, in its key, the
   // scheduler's context records an engine copy from TAA's output (the TAA
   // copy's source) into GBuffer5 at (15, 3); the armed frame's identity plan
@@ -161,20 +169,20 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
     put(input_owners[i],image.base+0x3537870);put(input_owners[i]+0x58,2U);put(input_owners[i]+0x60,input_backings[i]);put(input_owners[i]+0x88,128U+(64U<<16));
     put(input_owners[i]+0x90,i==0?16U:i==1?38U:40U);put(input_backings[i]+0x20,input_resources[i]);}
    put(view+0x628,container);put(container+0xa0,input_owners[0]);put(view+0x620,gbuffer);put(gbuffer+0x78,input_owners[1]);put(gbuffer+0x80,input_owners[2]);
-   const unsigned taa_key=15U|(2U<<5);
    // The final quad's tBaseMap is the grade's output here, as in the game.
    const auto arm=[&](std::uint64_t armed,unsigned sub){
-    put(context+0x2b80,4U);put(renderer+0x1f210,armed-1);route::full_post_taa(context);put(renderer+0x1f210,armed);
-    put(context+0x154,16U);put(context+0x15c,sub);put(context+0x5c,full_rect);put(context+0x718,owners[3]);
-    const auto quad=route::final_before(frame);require(route::full_final(frame,quad),"armed for the slot");route::final_after(quad,true);
-    put(context+0x718,owners[1]);put(context+0x5c,render_rect);put(context+0x154,taa_key);
+    put(renderer+0x1f210,armed);put(context+0x2b80,3U);
+    put(context+0x154,16U);put(context+0x15c,0x12U);put(context+0x5c,full_rect);put(context+0x718,owners[3]);
+    const auto quad=route::final_before(frame);require(quad!=UINT_MAX,"final quad for the slot");route::full_candidate(frame,quad);
+    put(context+0x2b80,4U);route::final_after(quad,true);
+    put(context+0x718,owners[1]);put(context+0x5c,render_rect);put(context+0x154,taa_key);put(context+0x15c,sub);
     route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);};
    const auto plan_for=[&](std::uint64_t armed){auto plan=std::make_unique<route::Plan>();plan->stamp=s;plan->stamp.frame=armed;plan->stamp.inputs[5].object=input_owners[1];
     require(route::build_plan(*plan,motion)&&plan->identity,"armed frame planned as at DLAA");return plan;};
-   const auto armed_slot=armed_frame+1;const auto slots=route::full_counts.slots.load();arm(armed_slot,0x12U);
+   const auto armed_slot=next_frame+1;const auto slots=route::full_counts.slots.load();arm(armed_slot,0x12U);
    const auto &q=route::full_slots[armed_slot%route::full_slots.size()];
-   unsigned key{},count{};std::uintptr_t array{},entry_packet{};std::uint32_t entry_key{};
-   require(route::field(context,0x154,key)&&key==taa_key,"TAA's key restored");
+   unsigned slot_key{},count{};std::uintptr_t array{},entry_packet{};std::uint32_t entry_key{};
+   require(route::field(context,0x154,slot_key)&&slot_key==taa_key,"TAA's key restored");
    require(route::full_counts.slots.load()==slots+1&&q.valid&&q.frame==armed_slot&&q.context==context&&!q.executed&&
            q.depth.resource==input_resources[0]&&q.gbuffer4.resource==input_resources[1]&&q.gbuffer5.resource==input_resources[2],"slot recorded and verified");
    require(copies.back().destination==input_owners[2]&&copies.back().source==owners[0]&&copies.back().rect==std::array<unsigned,4>{0,0,1,1}&&
@@ -245,9 +253,9 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    std::ostringstream summary;route::full_post_write(summary);
    require(summary.str().find("\"inputs\":{\"ready\":1,\"failure\":\"\",\"bytes\":")!=std::string::npos,"inputs in the summary");
    std::cout<<"PASS full_post inputs: slot at (15, 3) in TAA's key, planned before the final copy, plan states, refusals\n";}
-  put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});
+  put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});put(layer,std::uintptr_t{});
   mhw::scaled_temporal::full_post_enabled.store(false);route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;
-  std::cout<<"PASS full_post: final quad to the DLAA copy, full rectangle after TAA, restored at the exit, refusals\n";}
+  std::cout<<"PASS full_post: armed at the scheduler's entry with TAA registered, the DLAA copy in the quad's key, full rectangle after TAA, restored at the exit, refusals\n";}
  check_queue_completion(s,filters,motion,4);
  if(!dependency_dir.empty()){
  #include "scaled_dependency_plan_fixture.inl"
