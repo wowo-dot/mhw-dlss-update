@@ -250,15 +250,27 @@ bool provider(pb::Provider &p) noexcept {
     pb::read(p.backend+0x42700,p.wrapper) && !p.wrapper;
   p.use=use;return p.valid;
 }
+// The projections captured per sCamera viewport (index 0..7).
+std::array<std::atomic<std::uint64_t>,8> projection_viewports{};
+// sCamera::draw (0x228e770) computes the projection of each visible viewport
+// it draws (sub_14228F3B0; sCamera::Viewport, 0x1a0 bytes each from camera
+// +0x50: +0x18 mpSceneTexture, +0x20 mVisible, +0x25 mDisplay). The main scene
+// is the visible viewport of display 0 without a scene texture (drawn into the
+// view the frame owns). sMhCamera's camera switch (sub_141AC3840) shows
+// viewport 0, 1 or 2: the tent's and the map's cameras use another than 0
+// (game-123: only viewport 0 was accepted, so every tent frame lacked its
+// projection and TAA's producer refused it).
 bool anchor(pb::Source &s,const NativeFrame &f) noexcept {
-  auto &a=s.anchor;unsigned char active{},display{},async{};unsigned stamp{},flags{};std::uint64_t zero{};
+  auto &a=s.anchor;unsigned char active{},display{},async{};unsigned stamp{},flags{};std::uint64_t zero{};std::uintptr_t scene_texture{};
   if(!pb::read(cfg.image+0x51c4480,a.renderer) || a.renderer!=cfg.renderer || a.renderer>UINTPTR_MAX-0x1f570 ||
      !pb::read(cfg.image+0x51c4368,a.table) || !a.table || a.table>UINTPTR_MAX-0xe740 ||
-     !pb::read(cfg.image+0x51c4400,s.camera) || !s.camera || s.camera>UINTPTR_MAX-0x100 ||
-     f.call.gpr[1]!=s.camera+0x50 || f.call.gpr[2]!=a.renderer+0x710)return false;
-  a.context=f.call.gpr[2];
+     !pb::read(cfg.image+0x51c4400,s.camera) || !s.camera || s.camera>UINTPTR_MAX-0x2000 ||
+     f.call.gpr[1]<s.camera+0x50 || (f.call.gpr[1]-s.camera-0x50)%0x1a0 || (f.call.gpr[1]-s.camera-0x50)/0x1a0>=8 ||
+     f.call.gpr[2]!=a.renderer+0x710)return false;
+  a.context=f.call.gpr[2];const auto viewport=f.call.gpr[1];
   if(!pb::read(s.camera,s.camera_type) || (s.camera_type!=cfg.image+0x350d188 && s.camera_type!=cfg.image+0x33f82a8) ||
-     !pb::read(s.camera+0x70,active) || !active || !pb::read(s.camera+0x75,display) || display ||
+     !pb::read(viewport+0x20,active) || !active || !pb::read(viewport+0x25,display) || display ||
+     !pb::read(viewport+0x18,scene_texture) || scene_texture ||
      !pb::read(s.camera+0x38,zero) || zero || !pb::read(s.camera+0x40,stamp) ||
      !pb::read(a.renderer+0x1f210,a.frame) || !pb::read(a.renderer+0x1f208,a.epoch) || stamp!=static_cast<unsigned>(a.epoch) ||
      !pb::read(a.renderer+0x1f450,a.view) || !a.view || a.view>UINTPTR_MAX-0x60 ||
@@ -276,6 +288,7 @@ bool projection_before(const NativeFrame &f){
     auto &s=projection.source;
     if(!anchor(s,f)||!provider(provider_state)||!pb::read(s.anchor.table+0xe6a0+8*(s.anchor.frame%20),projection.candidate)||!pb::jitter_finite(projection.candidate)){
         projection_busy.clear();return false;}
+    ++projection_viewports[(f.call.gpr[1]-s.camera-0x50)/0x1a0];
     if(!reconstruction.jitter()){projection.candidate=0;++zero_jitter_projections;}
     if(!pb::jitter_exchange(s.camera+0x38,0,projection.candidate)){fail(3);projection_busy.clear();return false;}
     ++jitter_count;return true;
@@ -1453,6 +1466,7 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<",\"producer_refusals\":[";for(unsigned i=0;i<producer_refusals.size();++i){if(i)out<<',';out<<producer_refusals[i].load();}
     {const auto &l=last_producer_refusal;  // write_summary holds the lock
      out<<"],\"producer_last\":{\"frame\":"<<l.frame<<",\"reason\":"<<l.reason<<",\"values\":["<<l.values[0]<<','<<l.values[1]<<','<<l.values[2]<<','<<l.values[3]<<"]}";}
+    out<<",\"projection_viewports\":[";for(unsigned i=0;i<projection_viewports.size();++i){if(i)out<<',';out<<projection_viewports[i].load();}out<<']';
 #ifdef MHW_CONTINUOUS_SCALED
     // Skip reason 7 is a missing depth lease or a route readiness rejection.
     {DepthTraceLock trace_lock;out<<",\"depth_missing\":"<<scaled_depth_trace.missing_count<<",\"route_not_ready\":"<<scaled_depth_trace.readiness_rejected;}
