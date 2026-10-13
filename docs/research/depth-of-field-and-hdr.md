@@ -63,14 +63,29 @@ first heartbeat. The user attributes it to a corrupted NVIDIA cache or driver
 state, a known MHW issue, and will do a clean driver reinstall. See
 `game-105/NOTES.md`.
 
-**Next:**
-1. After the driver reinstall, a title-only run on v0.24.6. Read
-   `route.latest_rejection.command_gate[6]`.
-2. Fix the title's variant, then confirm the hub depth of field visually:
-   the blur's size and position.
-3. Check whether arming before the game's first frame makes the
-   `driver-On-not-enabled` check a race of its own. Should it wait for
-   presented frames?
+**After the clean NVIDIA driver reinstall:**
+- **game-106 (v0.24.6):** the first launch, slow while shaders compiled.
+  Astera Loader hooked about 26 s in. The game exited about 10 s after
+  arming, before the first 20 s summary, so it logged nothing.
+- **v0.24.7:**
+  - The worker writes a last `fg_status` and `dlss_summary` on the game's
+    exit.
+  - Reflex is confirmed at the first heartbeat with at least 60 frames.
+    Before, it was checked at the first heartbeat. game-105 rendered no frame
+    in its first 20 s, so a slow first launch after any driver update would
+    have left DLSS off for the session.
+- **game-107 (v0.24.7, title only):**
+  - **0 plan rejections.** The pre-motion depth of field qualified on all
+    5,482 title frames (six passes, 0 failures), and DLSS ran 5,479 frames.
+  - Reflex was confirmed running (`low_latency: true`), and the exit summary
+    was written.
+  - game-104's title refusal (898 frames) did not recur, and nothing since
+    changed the admission. It was transient: the corrupted cache, or the
+    first seconds after boot. v0.24.6's gate reason stays in, to name it if
+    it returns.
+
+**Next:** confirm the hub's depth of field visually (the blur's size and
+position) in the long session.
 
 ## HDR (game-103, v0.24.4)
 
