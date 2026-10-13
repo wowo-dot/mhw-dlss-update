@@ -791,11 +791,15 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
     // composition draw, as in the chain (dof_native_sequence.hpp), and read
     // the TAA output: DLSS's full-size result.
     if((raw&31)==6){
-     if(p.pre_stage!=UINT_MAX||(p.dof&&(p.dof->key!=c.key||p.dof->count==6)))
-      return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
+     // The gate's `seen` word: 0x100 * why + the passes read so far (why: 1 a
+     // dispatch after the composition draw, 2 another sequence's key, 3 a
+     // seventh dispatch, 4 an unreadable dispatch).
+     const unsigned read=p.dof?p.dof->count:0U;
+     const unsigned why=p.pre_stage!=UINT_MAX?1U:p.dof&&p.dof->key!=c.key?2U:p.dof&&p.dof->count==6?3U:0U;
+     if(why)return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true,0x100U*why+read);
      if(!p.dof){p.dof=std::make_shared<DofNativeSequence>();p.dof->key=c.key;}
      auto &dispatch=p.dof->passes[p.dof->count];dispatch.packet=c.packet;dispatch.index=base+j;
-     if(!dof_read(dispatch))return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
+     if(!dof_read(dispatch))return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true,0x400U+read);
      ++p.dof->count;continue;
     }
     if((raw&31)!=0||p.pre_stage!=UINT_MAX)return overlay_failure(OutputCommands::unsupported_opcode,c.key,c.packet,base+j,raw,true);
