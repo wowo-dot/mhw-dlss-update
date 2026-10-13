@@ -15,9 +15,10 @@
 // - When TAA's callback returns, the context is set to the full rectangle
 //   (setViewport 0x23d0330). Every later callback inherits it, and a full-size
 //   CBScreen with it.
-// - The tone map's callback (0x24d0780) runs before TAA's. Its endpoint key
-//   (table index 324, set by 0x2585410) switches to the full rectangle; its
-//   return restores the render rectangle.
+// - The tone map's callback (0x24d0780) runs before TAA's; it runs entirely
+//   at the full rectangle (its grade reuses coordinates from its start), and
+//   its return restores the render rectangle.
+// - A frame is armed only when the previous one ran TAA's callback.
 // - The projection helper (0x23cb520) divides by the view scale; while
 //   switched, that division is undone (radial blur, god rays).
 // - At the scheduler's exit, the render rectangle is restored.

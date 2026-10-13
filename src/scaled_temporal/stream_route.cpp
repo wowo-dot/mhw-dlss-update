@@ -45,7 +45,6 @@ extern "C" void scaled_draw_execution_entry();
 extern "C" void scaled_stream_final_entry();
 extern "C" void scaled_copy_execution_entry();
 extern "C" void scaled_indexed_execution_entry();
-extern "C" void scaled_full_key_entry();
 extern "C" void scaled_full_tone_map_entry();
 extern "C" void scaled_full_project_entry();
 extern "C" void mhw_binding_forward(void *,mhw::projection_binding::Frame *);
@@ -274,7 +273,7 @@ std::uint64_t overlay_extended_draws{};std::array<unsigned,6> overlay_extended_l
 prepared_queue::Recorder prepared_queues;
 struct Active {unsigned slot{};ID3D12GraphicsCommandList *list{};std::uint64_t generation{};std::uintptr_t recording{};
  bool resolved{},copied{};unsigned draws{};std::array<bool,9> known{};std::array<unsigned,9> states{};} active;
-// 6-8: full_post (key setter, tone map callback, projection helper), only when on.
+// 7-8: full_post (tone map callback, projection helper), only when on; 6 unused.
 std::array<std::uintptr_t,9> targets{};std::array<void *,9> originals{};std::array<bool,9> enabled{};
 // AL: hook 2 (CopyTextureRegion) is an AL chain, live while the runtime
 // has the stream hooks applied (chains_live), otherwise continuing straight on.
@@ -1286,16 +1285,15 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
   {0x23c7831,740,"0da63ff39cc114c78483728e19221e1dd22806398522ec0095ec6c6349801247"}};
  for(const auto &g:gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="stream code gate";return false;}
  targets[0]=c.image+0x24ca1f0;targets[1]=c.image+0x259d670;targets[3]=c.image+0x2297e20;targets[4]=c.image+0x259c650;targets[5]=c.image+0x259d740;
- // full_post (full_post.hpp): the key setter, the tone map's callback and the
- // projection helper are hooked; setViewport and the copy helper are called.
+ // full_post (full_post.hpp): the tone map's callback and the projection
+ // helper are hooked; setViewport and the copy helper are called.
  if(full_post_enabled.load()){
   constexpr Gate full_gates[]{
    {0x23c9250,313,"48dc45a224fa9a3d25c884c46039221b34a7b8e21e880889250fd997f3ecb283"},
    {0x23d0330,1271,"cd3085a7946eaef138f9c0af8b882a4fbc9c8df969107b954b278e157c0d907e"},
-   {0x2585410,77,"dfab8df5aedb0445313fa5f69484effd9b1f2b1882d2e4cf1a973bfd67535be9"},
    {0x23cb520,301,"4fa9724b3eff99c5bddb0295302b6f73d1836521129f59f911ad7b94bb910ac8"}};
   for(const auto &g:full_gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="full_post code gate";return false;}
-  targets[6]=c.image+0x2585410;targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
+  targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
   full_viewport=reinterpret_cast<FullViewportFn>(c.image+0x23d0330);full_copy=reinterpret_cast<FullCopyFn>(c.image+0x23c9250);
  }
  auto *device=reinterpret_cast<ID3D12Device *>(c.device);ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
@@ -1307,7 +1305,7 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
  if(FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)))||
     FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||
     !pb::system_method(reinterpret_cast<std::uintptr_t>(list.Get()),16,targets[2])){reason="stream method discovery";return false;}
- const std::array<void *,9> detours{reinterpret_cast<void *>(scaled_postfilter_entry),reinterpret_cast<void *>(scaled_draw_execution_entry),reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry),reinterpret_cast<void *>(scaled_full_key_entry),reinterpret_cast<void *>(scaled_full_tone_map_entry),reinterpret_cast<void *>(scaled_full_project_entry)};
+ const std::array<void *,9> detours{reinterpret_cast<void *>(scaled_postfilter_entry),reinterpret_cast<void *>(scaled_draw_execution_entry),reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry),nullptr,reinterpret_cast<void *>(scaled_full_tone_map_entry),reinterpret_cast<void *>(scaled_full_project_entry)};
  for(unsigned i=0;i<targets.size();++i){
   if(!targets[i])continue;  // full_post's hooks when off
   if(astera::active()&&i==api_hook){if(!originals[i]){reason="stream AL chain";return false;}enabled[i]=true;continue;}
@@ -1745,7 +1743,6 @@ extern "C" void mhw_scaled_draw_execution(mhw::projection_binding::Frame *f){mhw
 extern "C" void mhw_scaled_stream_final(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::final_dispatch(f);}
 extern "C" void mhw_scaled_copy_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::copy_dispatch(f);}
 extern "C" void mhw_scaled_indexed_execution(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::indexed_dispatch(f);}
-extern "C" void mhw_scaled_full_key(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_key_dispatch(f);}
 extern "C" void mhw_scaled_full_tone_map(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_tone_map_dispatch(f);}
 extern "C" void mhw_scaled_full_project(mhw::projection_binding::Frame *f){mhw::scaled_temporal::stream_route::full_project_dispatch(f);}
 namespace mhw::scaled_temporal::stream_route {

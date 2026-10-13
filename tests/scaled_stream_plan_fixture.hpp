@@ -114,7 +114,12 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    require(!xy[0]&&!xy[1]&&!o,"DLAA copy origin");copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]}});};
   route::full_viewport=[](std::uintptr_t c,const int *r){viewports.push_back({r[0],r[1],r[2],r[3]});std::memcpy(reinterpret_cast<void *>(c+0x5c),r,16);};
   mhw::scaled_temporal::full_post_enabled.store(true);
-  const auto armed_frame=s.frame+1;put(renderer+0x1f210,armed_frame);
+  const auto armed_frame=s.frame+1;
+  // A frame arms only after one that ran TAA's callback.
+  const auto no_taa=route::full_counts.no_taa.load();put(renderer+0x1f210,armed_frame);
+  {const auto unarmed=route::final_before(frame);require(!route::full_final(frame,unarmed)&&route::full_counts.no_taa.load()==no_taa+1,"no TAA last frame, not armed");
+   route::final_after(unarmed,true);route::final_quads[unarmed]={};}
+  put(renderer+0x1f210,armed_frame-1);route::full_post_taa(context);put(renderer+0x1f210,armed_frame);
   const auto slot=route::final_before(frame);require(slot==armed_frame%32,"full_post final quad entry");
   std::uintptr_t source_object{};require(route::field(context,0x718,source_object),"final tBaseMap");
   require(route::full_final(frame,slot)&&copies.size()==1&&copies[0].context==context&&copies[0].destination==owners[4]&&
@@ -129,6 +134,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   route::full_post_enter(context);route::full_post_taa(context);require(viewports.size()==2,"disarmed after the exit");
   // A rectangle other than the render one at the scheduler's entry, or a
   // stale frame, leaves the chain native.
+  put(renderer+0x1f210,armed_frame-1);route::full_post_taa(context);put(renderer+0x1f210,armed_frame);
   put(context+0x5c,full_rect);const auto again=route::final_before(frame);
   require(route::full_final(frame,again)&&copies.size()==2,"re-armed");route::final_after(again,true);
   const auto mismatches=route::full_counts.rect_mismatch.load();

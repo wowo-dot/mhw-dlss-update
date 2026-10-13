@@ -11,14 +11,18 @@ using FullCopyFn=void(*)(std::uintptr_t context,std::uintptr_t destination,int d
 FullViewportFn full_viewport{};FullCopyFn full_copy{};
 struct FullPostState {
  std::uint64_t frame{};std::uintptr_t context{};
- bool armed{},in_scheduler{},switched{},in_tone_map{},tone_map_full{};
+ bool armed{},in_scheduler{},switched{},tone_map_full{};
  std::array<int,4> render_rect{},full_rect{};
 };
 thread_local FullPostState full_state;
+// The frame of this thread's last TAA callback: a frame is armed only when the
+// previous one ran TAA, so the switch will happen (the final copy is recorded
+// before the post chain).
+thread_local std::uint64_t full_taa_frame{UINT64_MAX};
 std::atomic<std::uint64_t> full_frame{UINT64_MAX};  // the last armed frame (plan builder)
 struct FullPostCounters {
  std::atomic<std::uint64_t> final_copies{},schedulers{},switches{},tone_map_switches{},projections{},restores{},
-  not_switched{},rect_mismatch{},stale{},declined{},identity_plans{};
+  not_switched{},rect_mismatch{},stale{},declined{},no_taa{},identity_plans{};
 } full_counts;
 // The final quad of a scaled frame becomes the game's DLAA copy (the same
 // owners as the quad: tBaseMap's texture into the view's attachment, the full
@@ -26,7 +30,9 @@ struct FullPostCounters {
 // final quad's capture (final_before), entered.
 bool full_final(const pb::Frame &f,unsigned slot){
  if(!full_post_enabled.load()||!full_copy||!full_viewport||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return false;
- FinalQuad q;{Lock lock;q=final_quads[slot];if(!q.entered||q.stamp.context!=f.gpr[2]){++full_counts.declined;return false;}final_quads[slot].full_post=true;}
+ FinalQuad q;{Lock lock;q=final_quads[slot];if(!q.entered||q.stamp.context!=f.gpr[2]){++full_counts.declined;return false;}
+  if(full_taa_frame+1!=q.stamp.frame){++full_counts.no_taa;return false;}
+  final_quads[slot].full_post=true;}
  const unsigned xy[2]{},rect[4]{0,0,width,height};
  full_copy(f.gpr[2],q.destination.object,0,xy,q.source.object,0,rect,nullptr);
  auto &s=full_state;s=FullPostState{};s.frame=q.stamp.frame;s.context=f.gpr[2];s.armed=true;
@@ -42,6 +48,7 @@ void full_enter(std::uintptr_t context) noexcept {
  s.in_scheduler=true;
 }
 void full_taa(std::uintptr_t context) noexcept {
+ if(std::uint64_t frame{};field(cfg.renderer,0x1f210,frame))full_taa_frame=frame;
  auto &s=full_state;if(!s.in_scheduler||s.switched||context!=s.context)return;
  full_viewport(context,s.full_rect.data());s.switched=true;++full_counts.switches;
 }
@@ -51,23 +58,21 @@ void full_exit(std::uintptr_t context) noexcept {
  if(!s.switched)++full_counts.not_switched;
  s=FullPostState{};
 }
-// The tone map's callback (unit, context): it runs before TAA's, at the
-// render rectangle, until its endpoint key.
+// The tone map's callback (unit, context) runs before TAA's. Its final grade
+// (key (15, 0x7fffff1), ToneMappingApply_ColorGrading) reuses the texture
+// coordinates its exposure step computed from the rectangle at its start
+// (game-114: at the render rectangle the grade sampled only that corner of the
+// full-size chain, a 1/scale zoom). So the whole callback runs at the full
+// rectangle. Its exposure step (key (15, 0), AutoExposureApply*, into TAA's
+// input) is per-pixel: no CBScreen, coordinates linear in the pixel position.
+// It then also covers pixels outside the render region, which DLSS never
+// reads.
 void full_tone_map_dispatch(pb::Frame *f){
  const auto context=f->gpr[2];auto &s=full_state;
- const bool mine=s.in_scheduler&&!s.switched&&context==s.context;
- if(mine)s.in_tone_map=true;
+ const bool mine=s.in_scheduler&&!s.switched&&!s.tone_map_full&&context==s.context;
+ if(mine){full_viewport(context,s.full_rect.data());s.tone_map_full=true;++full_counts.tone_map_switches;}
  __try{mhw_binding_forward(originals[7],f);}
- __finally{if(mine){if(s.tone_map_full){full_viewport(context,s.render_rect.data());s.tone_map_full=false;}s.in_tone_map=false;}}
-}
-// The key-table setter (context, index): index 324 is the tone map's
-// endpoint, (15, 0x7fffff1).
-void full_key_dispatch(pb::Frame *f){
- const auto context=f->gpr[1];const auto index=static_cast<unsigned>(f->gpr[2]);
- mhw_binding_forward(originals[6],f);
- auto &s=full_state;
- if(s.in_tone_map&&!s.tone_map_full&&index==324&&context==s.context){
-  full_viewport(context,s.full_rect.data());s.tone_map_full=true;++full_counts.tone_map_switches;}
+ __finally{if(mine){full_viewport(context,s.render_rect.data());s.tone_map_full=false;}}
 }
 // The projection helper (context, out float4, in position): it returns screen
 // coordinates divided by the view's scale product (view +0x6b8), the render
@@ -85,5 +90,5 @@ void full_post_write(std::ostream &o){
  o<<"{\"enabled\":"<<full_post_enabled.load()<<",\"final_copies\":"<<full_counts.final_copies<<",\"schedulers\":"<<full_counts.schedulers
   <<",\"switches\":"<<full_counts.switches<<",\"tone_map_switches\":"<<full_counts.tone_map_switches<<",\"projections\":"<<full_counts.projections
   <<",\"restores\":"<<full_counts.restores<<",\"not_switched\":"<<full_counts.not_switched<<",\"rect_mismatch\":"<<full_counts.rect_mismatch
-  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"identity_plans\":"<<full_counts.identity_plans<<'}';
+  <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"identity_plans\":"<<full_counts.identity_plans<<'}';
 }
