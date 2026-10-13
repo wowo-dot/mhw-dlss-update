@@ -435,6 +435,12 @@ static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) &&
                   choice_names_fit(mm::multiplier_names, std::size(mm::multiplier_names)) &&
                   choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
               "CMFM: a choice name is at most 32 bytes");
+// CMFM refuses a whole page whose CHOICE default is not one of its choices
+// (v0.27.0 lost its Settings page so: Off made Performance the fifth choice).
+static_assert(mm::choice_of(dlss_sdk::ReconstructionMode::performance) < static_cast<int>(std::size(mm::mode_names)) &&
+                  mm::choice_of(2U) < static_cast<int>(std::size(mm::multiplier_names)) &&
+                  mm::choice_of(ReflexMode::on) < static_cast<int>(mm::reflex_modes.size()),
+              "CMFM: a default is one of its choices");
 // The target names are built at start: "Display refresh" or "<n> fps" with n
 // up to 1000, and at most CMFM_MAX_CHOICES of them.
 static_assert(mm::targets.size() + 1 <= CMFM_MAX_CHOICES && max_dynamic_target <= 9999, "CMFM: target choices");
@@ -505,7 +511,7 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             throw std::logic_error("menu row");
         };
         setting(dlss_mode_row).choices = mm::mode_names;
-        setting(dlss_mode_row).choice_count = static_cast<std::uint32_t>(mm::modes.size());
+        setting(dlss_mode_row).choice_count = static_cast<std::uint32_t>(std::size(mm::mode_names));
         setting(dlss_mode_row).default_value.i = mm::choice_of(dlss_sdk::ReconstructionMode::performance);
         setting(frame_generation_row).default_value.i = 1;
         setting(multiplier_row).choices = mm::multiplier_names;
