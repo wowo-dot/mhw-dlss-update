@@ -46,6 +46,18 @@ constexpr unsigned dof_typeless(unsigned typed){
 constexpr bool dof_format_matches(unsigned actual,unsigned typed){return actual==typed||(dof_typeless(typed)&&actual==dof_typeless(typed));}
 // The game computes the reciprocals on the CPU; allow one unit in the last place.
 inline bool dof_near(float a,float b){std::int32_t x{},y{};std::memcpy(&x,&a,4);std::memcpy(&y,&b,4);return x==y||x==y+1||x+1==y;}
+// CBNewDOFFilter words 11-14: far_ignore and near_ignore (bools: nonzero keeps
+// that side's blur; both zero, no blur), far_coef and near_coef (scales of a
+// positive and a negative CoC). Only passes 0 and 3 read them, in per-texel CoC
+// math the route runs unchanged (pass 3's adaptation changes colour loads
+// only), so any value gives the game's own result. Gameplay has 1, 1, 1.0,
+// 1.0; the equipment box differs (game-110). Fail closed on what the game
+// would not write: booleans other than 0 or 1, and coefficients that are not
+// finite or are negative.
+constexpr bool dof_blur_supported(const std::array<unsigned,4> &w){
+ const auto coefficient=[](unsigned v){return (v&0x7f800000U)!=0x7f800000U&&!(v>>31);};
+ return w[0]<=1&&w[1]<=1&&coefficient(w[2])&&coefficient(w[3]);
+}
 
 // Six native dispatches followed by the already-qualified composition draw.
 // Native views/constants/states remain bound. No descriptor is reconstructed.
@@ -74,6 +86,8 @@ struct DofNativeSequence {
  // 5 resource size), and the roles whose engine extent carries flag bits.
  unsigned failed_at{},miss_count{},flagged{};
  std::array<std::array<unsigned,4>,8> misses{};
+ // CBNewDOFFilter words 11-14 of the last qualify that reached them (raw).
+ std::array<unsigned,4> blur_config{};
  void note(unsigned check,unsigned index,unsigned observed,unsigned expected){
   if(miss_count<misses.size())misses[miss_count]={check,index,observed,expected};++miss_count;}
  // width/height: the output (the DOF textures' allocation); render_w/render_h:
@@ -85,12 +99,13 @@ struct DofNativeSequence {
  // truncated half, Quality, Balanced). At identity (DLAA) the native passes
  // already read full size and run unchanged.
  bool qualify(unsigned width,unsigned height,unsigned render_w,unsigned render_h,std::uint64_t scene_owner,std::span<const std::uint64_t,5> composite){
-  failed_at=miss_count=flagged=0;misses={};
+  failed_at=miss_count=flagged=0;misses={};blur_config={};
   // Structural codes: 1 shape, 10+p pass recipe, 20+p dispatch order, 30+p
   // owners, 40+p binding ids, 50+p binding register/role/views, 60+p texture
   // owner/format, 70+p role conflict, 80+p constants, 90 missing texture,
   // 91 shared texture, 92 composition inputs, 93 scene/constants, 94 screen
-  // zero words, 95 blur constants, 96 render extent that no single scale gives.
+  // zero words, 95 blur flags/coefficients (dof_blur_supported), 96 render
+  // extent that no single scale gives.
   const auto bad=[&](unsigned code){failed_at=code;return false;};
   // An odd scene (3413x1440 pillarboxed) takes the truncated half; the size
   // and constant checks below record the game's actual sizes if it differs.
@@ -144,7 +159,8 @@ struct DofNativeSequence {
   if(screen[8]||screen[9]||screen[12]||screen[13]||screen[26])return bad(94);
   if(miss_count)return false;
   std::array<unsigned,24> blur{};std::memcpy(blur.data(),constants[3]->bytes.data(),96);
-  return blur[11]==1&&blur[12]==1&&blur[13]==0x3f800000&&blur[14]==0x3f800000?true:bad(95);
+  blur_config={blur[11],blur[12],blur[13],blur[14]};
+  return dof_blur_supported(blur_config)?true:bad(95);
  }
 };
 }

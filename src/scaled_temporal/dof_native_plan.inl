@@ -6,9 +6,19 @@ struct DofCounters {
  std::uint64_t qualified{},warmups{},dispatches{},adapted{},completed{},rejected{},restored{};
  std::array<std::uint64_t,6> passes{};
  unsigned reason{},pass{};
- // Failed qualifications, and the first one's diagnostics (DofNativeSequence).
+ // Failed qualifications, and the first one's diagnostics (DofNativeSequence);
+ // the last one's structural code and blur words.
  std::uint64_t failures{};unsigned failed_at{},miss_count{},flagged{};std::array<std::array<unsigned,4>,8> misses{};
- void latch(const DofNativeSequence &d){if(failures++)return;failed_at=d.failed_at;miss_count=d.miss_count;flagged=d.flagged;misses=d.misses;}
+ std::array<unsigned,4> failed_config{},last_failed_config{};unsigned last_failed_at{};
+ // Qualified frames per CBNewDOFFilter blur configuration (words 11-14), the
+ // first four distinct ones; later ones count as other_configs.
+ std::array<std::array<unsigned,4>,4> configs{};std::array<std::uint64_t,4> config_frames{};std::uint64_t other_configs{};
+ void latch(const DofNativeSequence &d){last_failed_at=d.failed_at;last_failed_config=d.blur_config;if(failures++)return;
+  failed_at=d.failed_at;miss_count=d.miss_count;flagged=d.flagged;misses=d.misses;failed_config=d.blur_config;}
+ void qualified_config(const std::array<unsigned,4> &c){
+  for(unsigned i=0;i<configs.size();++i)if(config_frames[i]&&configs[i]==c){++config_frames[i];return;}
+  for(unsigned i=0;i<configs.size();++i)if(!config_frames[i]){configs[i]=c;config_frames[i]=1;return;}
+  ++other_configs;}
 } dof_stats;
 bool dof_read(OutputDependencies::Compute &d){
  if(!OutputDependencies::compute_reread(d,dof_scratch,[](std::uint64_t at,void *out,std::size_t size){
@@ -64,7 +74,7 @@ bool dof_qualify(Plan &p){
  }
  if(!described){dof_stats.latch(d);return reject(9);}
  for(const auto &pass:d.passes)if(!dof_stable(pass))return reject(11);
- ++dof_stats.qualified;return true;
+ ++dof_stats.qualified;dof_stats.qualified_config(d.blur_config);return true;
 }
 void dof_write(std::ostream &o){
  o<<"{\"schema\":1,\"policy\":\"native-six-compute-preserved-views-v1\",\"qualified\":"<<dof_stats.qualified
@@ -75,5 +85,13 @@ void dof_write(std::ostream &o){
  o<<"],\"failures\":"<<dof_stats.failures<<",\"failed_at\":"<<dof_stats.failed_at<<",\"flagged\":"<<dof_stats.flagged
   <<",\"miss_count\":"<<dof_stats.miss_count<<",\"misses\":[";
  for(unsigned i=0;i<dof_stats.misses.size()&&i<dof_stats.miss_count;++i){const auto &m=dof_stats.misses[i];if(i)o<<',';o<<'['<<m[0]<<','<<m[1]<<','<<m[2]<<','<<m[3]<<']';}
- o<<"]}";
+ // Blur configurations as far_ignore, near_ignore, far_coef, near_coef: the
+ // qualified ones with their frames (coefficients finite there), the failed
+ // ones as raw words.
+ const auto raw=[&](const std::array<unsigned,4> &c){o<<'['<<c[0]<<','<<c[1]<<','<<c[2]<<','<<c[3]<<']';};
+ o<<"],\"last_failed_at\":"<<dof_stats.last_failed_at<<",\"failed_config\":";raw(dof_stats.failed_config);
+ o<<",\"last_failed_config\":";raw(dof_stats.last_failed_config);o<<",\"configs\":[";
+ for(unsigned i=0;i<dof_stats.configs.size()&&dof_stats.config_frames[i];++i){const auto &c=dof_stats.configs[i];if(i)o<<',';
+  o<<'['<<c[0]<<','<<c[1]<<','<<std::bit_cast<float>(c[2])<<','<<std::bit_cast<float>(c[3])<<','<<dof_stats.config_frames[i]<<']';}
+ o<<"],\"other_configs\":"<<dof_stats.other_configs<<'}';
 }

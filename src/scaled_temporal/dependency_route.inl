@@ -220,7 +220,9 @@ bool dependency_order(const Plan &p){
  for(unsigned start=0;start<p.ordered_count;){const auto base=p.order[start++];
   // The depth-color draw precedes the motion filter: it reads the TAA copy
   // (checked at discovery) and writes the motion filter's input (plan graph).
-  if(base>=4){if(start==1&&base==p.pre_stage)continue;return false;}
+  // v0.24.9: pre-motion overlays (no dependency; the plan checked their
+  // targets) may follow it, before the motion filter.
+  if(base>=4){if((start==1&&base==p.pre_stage)||(!p.draws[base].dependency&&p.keys[base]<0x78000064U))continue;return false;}
   auto end=start;while(end<p.ordered_count&&p.order[end]>=4)++end;
   std::array<Draw,8> nodes{};unsigned count{};
   for(unsigned i=start;i<end;++i){const auto stage=p.order[i];const auto &r=p.draws[stage];if(!r.dependency)continue;

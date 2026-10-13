@@ -192,6 +192,31 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   put(queue+72,packet);put(context+0x2b80,5U);accept();
   const auto words=a.take(4);put(set,words);put(set+0x14,std::array<unsigned short,2>{1,0});put(set+0x88,1U);put(words,2U);put(graphics+0x30,owners[2]);reject_overlay();
   put(set+0x14,std::array<unsigned short,2>{0,0});put(set+0x88,0U);accept();
+  // v0.24.9: a source-free effect between TAA and the motion filter (the
+  // cutscenes' blink, order 17) draws in place on the TAA output (owners[1],
+  // plan resource 1), before the motion filter.
+  {const auto pre_rect=a.take(0x60),pre_view_owner=a.take(0x80),pre_native_view=a.take(0x30);
+   std::memcpy(reinterpret_cast<void *>(pre_rect),reinterpret_cast<void *>(rectangles[0]),0x60);
+   put(pre_rect,pre_view_owner);put(pre_view_owner+0x60,pre_native_view);
+   put(pre_native_view+0x18,reinterpret_cast<std::uintptr_t>(resources[1].Get()));put(pre_native_view+0x20,26U);
+   put(overlay+0x144,17U);put(overlay+0x158,owners[1]);put(queue+64,0x78000011U);put(packet+0x10,pre_rect);
+   const auto accept_pre=[&]{auto q=std::make_unique<route::Plan>();q->stamp=s;
+    if(!route::build_plan(*q,motion)){std::cerr<<"pre-motion overlay reason="<<route::plan_rejection<<" detail="<<route::plan_detail<<" qualification="<<route::plan_qualification<<"\n";
+     throw std::runtime_error("pre-motion overlay admitted");}
+    require(q->overlay_count==1&&q->order[0]==4&&q->order[1]==0&&q->order[2]==1&&q->order[3]==2&&q->targets[4]==1,"pre-motion overlay first, in place on the TAA output");};
+   const auto reject_pre=[&](unsigned rejection){auto q=std::make_unique<route::Plan>();q->stamp=s;
+    require(!route::build_plan(*q,motion)&&route::plan_rejection==rejection,"malformed pre-motion overlay rejected");};
+   accept_pre();
+   // Another target than the TAA output; other flags; an input (then it is a
+   // pre-motion filter whose input is its output); an RTV on another resource.
+   put(overlay+0x158,owners[2]);reject_pre(6);require(route::plan_detail==9,"pre-motion overlay target");put(overlay+0x158,owners[1]);
+   put(overlay+0x160,std::array<unsigned char,3>{1,0,0});reject_pre(6);put(overlay+0x160,std::array<unsigned char,3>{0,1,0});
+   put(overlay+0x150,owners[1]);reject_pre(6);put(overlay+0x150,std::uintptr_t{});
+   put(pre_native_view+0x18,reinterpret_cast<std::uintptr_t>(resources[2].Get()));reject_pre(17);
+   put(pre_native_view+0x18,reinterpret_cast<std::uintptr_t>(resources[1].Get()));
+   accept_pre();
+   put(overlay+0x144,1024U);put(overlay+0x158,owners[2]);put(queue+64,0x78000400U);put(packet+0x10,rectangles[0]);accept();
+   std::cout<<"PASS pre-motion overlay: in place on the TAA output before the motion filter; 4 malformed variants rejected\n";}
   put(filters+0x3c,4U);put(context+0x2b80,4U);
  }
  if(!haze_vs.empty()){

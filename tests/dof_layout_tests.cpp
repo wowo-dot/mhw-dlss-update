@@ -25,6 +25,15 @@ int main(){
  // TYPELESS family members are accepted (1080p CoC: R16G16B16A16_TYPELESS).
  static_assert(sf::dof_format_matches(10,10)&&sf::dof_format_matches(9,10)&&sf::dof_format_matches(39,41)&&sf::dof_format_matches(39,42)&&sf::dof_format_matches(60,61));
  static_assert(!sf::dof_format_matches(9,26)&&!sf::dof_format_matches(11,10)&&!sf::dof_format_matches(40,41)&&sf::dof_format_matches(26,26)&&!sf::dof_format_matches(0,26));
+ // CBNewDOFFilter far/near flags and coefficients (words 11-14): gameplay's
+ // 1,1,1.0,1.0, either side off, no blur, other scales; not other booleans,
+ // non-finite or negative coefficients.
+ constexpr unsigned one=0x3f800000U,half=0x3f000000U,big=0x40200000U;
+ static_assert(sf::dof_blur_supported({1,1,one,one})&&sf::dof_blur_supported({1,0,one,one})&&sf::dof_blur_supported({0,1,one,one})&&
+  sf::dof_blur_supported({0,0,one,one})&&sf::dof_blur_supported({1,1,big,half})&&sf::dof_blur_supported({1,1,0,0}));
+ static_assert(!sf::dof_blur_supported({2,1,one,one})&&!sf::dof_blur_supported({1,0xffffffffU,one,one})&&
+  !sf::dof_blur_supported({1,1,0x7f800000U,one})&&!sf::dof_blur_supported({1,1,one,0x7fc00000U})&&!sf::dof_blur_supported({1,1,0xbf800000U,one})&&
+  !sf::dof_blur_supported({1,1,one,0x80000000U}));
  const float third=1.F/3;std::int32_t bits{};std::memcpy(&bits,&third,4);
  float next{},far{};const std::int32_t n=bits+1,f=bits+2;std::memcpy(&next,&n,4);std::memcpy(&far,&f,4);
  check(sf::dof_near(third,third)&&sf::dof_near(third,next)&&sf::dof_near(next,third)&&!sf::dof_near(third,far),"one-ULP reciprocal tolerance");

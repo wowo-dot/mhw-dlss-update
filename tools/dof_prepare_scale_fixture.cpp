@@ -12,9 +12,12 @@
 //             (negative control: it must not match).
 // The prepared colour is checked against an independent double-precision CPU
 // oracle; the CoC writer must be bit-identical between adapted and proxy runs.
+// The flag cases repeat this on patterned depth for every far/near setting of
+// CBNewDOFFilter (dof_blur_supported), with an oracle of the sample choice.
 #include "dof_fixture_support.hpp"
 #include "../src/scaled_temporal/dof_compute_shader.hpp"
 #include <bcrypt.h>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -44,6 +47,39 @@ std::array<double,3> area(const Geometry &g,unsigned cx,unsigned cy){
    for(unsigned k=0;k<3;++k)sum[k]+=weight*v[k];}}
  return sum;
 }
+// Flag cases: 2x2 quads (the pass reads texels min(2t,view-2)+{0,1}^2) all
+// near (0.2), all in focus (0.5), mixed (0.8, 0.2, 0.5) or all far (0.8).
+// With bias -0.5, unit slope and a 0.05 focus threshold their CoC is -0.3, 0
+// or +0.3.
+constexpr float focus_bias=-.5F,focus_pcoc=.05F;
+float patterned_depth(unsigned x,unsigned y){
+ switch((x/2+y/2)%4){
+  case 0:return .2F;
+  case 1:return .5F;
+  case 3:return .8F;
+  default:return x%2==0&&y%2==0?.8F:x%2?.2F:.5F;
+ }
+}
+// The native pass's CoC and sample choice, read from its instructions
+// (DepthOfField_DownSample): the quad's CoC comes from the farthest of its
+// four depths, zero within the focus threshold. far_ignore/near_ignore nonzero
+// keep a positive/negative CoC; otherwise it becomes zero and the depths the
+// focus depth (both zero: always). far_coef/near_coef then scale it. A sample
+// is averaged when its own CoC (zero within the threshold) times the quad's
+// is not negative.
+struct Quad {float coc{};std::array<bool,4> used{};};
+Quad quad_oracle(const std::array<unsigned,4> &w,std::array<float,4> d){
+ const float focal=-focus_bias;
+ float coc=(std::max)({d[0],d[1],d[2],d[3]})+focus_bias;
+ if(!(focus_pcoc<std::abs(coc)))coc=0;
+ const bool keep_far=w[0]!=0,keep_near=w[1]!=0;
+ if((!keep_far&&!keep_near)||(coc>0&&!keep_far)||(coc<0&&!keep_near)){coc=0;d.fill(focal);}
+ if(coc>0)coc*=std::bit_cast<float>(w[2]);
+ else if(coc<0)coc*=std::bit_cast<float>(w[3]);
+ Quad q{coc,{}};
+ for(unsigned i=0;i<4;++i){float c=d[i]+focus_bias;if(!(focus_pcoc<std::abs(c)))c=0;q.used[i]=coc*c>=0;}
+ return q;
+}
 struct Output {std::vector<float> coc,color;};
 struct Fixture : Gpu {
  ComPtr<ID3D12RootSignature> root;ComPtr<ID3D12PipelineState> native,adapted;std::vector<ComPtr<IUnknown>> retained;
@@ -62,8 +98,9 @@ struct Fixture : Gpu {
   d.CS={variant.data(),variant.size()};hr(device->CreateComputePipelineState(&d,IID_PPV_ARGS(&adapted)),"adapted PSO");
  }
  // mode 0 adapted, 1 proxy, 2 native on the output scene. view overrides the
- // CBScreen render size (the hostile-constants case).
- Output run(const Geometry &g,unsigned mode,std::array<unsigned,2> view={}){
+ // CBScreen render size (the hostile-constants case). blur: the flag cases'
+ // CBNewDOFFilter words 11-14, with the patterned depth and focus constants.
+ Output run(const Geometry &g,unsigned mode,std::array<unsigned,2> view={},const std::array<unsigned,4> *blur_words=nullptr){
   if(!view[0])view={g.w,g.h};
   hr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(allocator.ReleaseAndGetAddressOf())),"allocator");
   hr(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(list.ReleaseAndGetAddressOf())),"list");
@@ -76,7 +113,7 @@ struct Fixture : Gpu {
   for(unsigned i=0;i<3;++i){uploads.emplace_back(device.Get(),descs[i],D3D12_HEAP_TYPE_UPLOAD);auto &u=uploads.back();
    std::vector<std::byte> bytes(static_cast<std::size_t>(u.row)*descs[i].Height);
    for(unsigned y=0;y<descs[i].Height;++y)for(unsigned x=0;x<descs[i].Width;++x){const auto at=static_cast<std::size_t>(u.row)*y;
-    if(i==0){const float depth=.5F;std::memcpy(bytes.data()+at+4*x,&depth,4);}
+    if(i==0){const float depth=blur_words?patterned_depth(x,y):.5F;std::memcpy(bytes.data()+at+4*x,&depth,4);}
     else if(i==2){const std::array<float,4> zero{};std::memcpy(bytes.data()+at+16*x,zero.data(),16);}
     else {std::array<float,4> v{1000.F,-1000.F,1000.F,1.F};  // poison outside the proxy's render region
      if(mode!=1)v=scene(x,y);
@@ -102,6 +139,7 @@ struct Fixture : Gpu {
   // The game's flags (dof_native_sequence: blur[11..14]); with a zero bias and
   // unit slope every one of the four colour samples is included.
   auto blur=cb.data()+384;blur[0]=0;blur[1]=1;blur[9]=1;blur[11]=blur[12]=std::bit_cast<float>(1U);blur[13]=blur[14]=1;
+  if(blur_words){blur[0]=focus_bias;blur[2]=focus_pcoc;for(unsigned k=0;k<4;++k)blur[11+k]=std::bit_cast<float>((*blur_words)[k]);}
   auto constants=buffer(device.Get(),sizeof(cb),D3D12_HEAP_TYPE_UPLOAD);{void *p{};D3D12_RANGE none{};hr(constants->Map(0,&none,&p),"cb map");std::memcpy(p,cb.data(),sizeof(cb));constants->Unmap(0,nullptr);}
   ID3D12DescriptorHeap *heaps[]{heap.Get()};list->SetDescriptorHeaps(1,heaps);list->SetComputeRootSignature(root.Get());
   for(unsigned i=0;i<3;++i)list->SetComputeRootConstantBufferView(i,constants->GetGPUVirtualAddress()+(i==0?0:i==1?1280:1536));
@@ -127,6 +165,24 @@ double oracle_error(const Geometry &g,const std::vector<float> &color){
   const auto at=(static_cast<std::size_t>(ty)*hw+tx)*4;
   for(unsigned k=0;k<3;++k){require(std::isfinite(color[at+k]),"finite prepared colour");worst=(std::max)(worst,std::abs(double(color[at+k])-expected[k]));}
   require(color[at+3]==1.F,"native alpha");
+ }
+ return worst;
+}
+// Flag cases: the CoC writer's first channel against quad_oracle, and the
+// prepared colour as the average of the chosen samples' area values.
+double flag_oracle_error(const Geometry &g,const std::array<unsigned,4> &w,const Output &o){
+ const unsigned hw=g.W/2,hh=g.H/2;double worst=0;
+ for(unsigned ty=0;ty<hh;++ty)for(unsigned tx=0;tx<hw;++tx){
+  const unsigned x0=(std::min)(2*tx,g.w-2),y0=(std::min)(2*ty,g.h-2);
+  const std::array<std::array<unsigned,2>,4> at{{{x0,y0},{x0+1,y0},{x0,y0+1},{x0+1,y0+1}}};
+  std::array<float,4> d{};for(unsigned i=0;i<4;++i)d[i]=patterned_depth(at[i][0],at[i][1]);
+  const auto q=quad_oracle(w,d);const auto i0=(static_cast<std::size_t>(ty)*hw+tx)*4;
+  require(std::isfinite(o.coc[i0]),"finite CoC");worst=(std::max)(worst,std::abs(double(o.coc[i0])-std::abs(double(q.coc))));
+  std::array<double,3> expected{};unsigned used=0;
+  for(unsigned i=0;i<4;++i)if(q.used[i]){const auto a=area(g,at[i][0],at[i][1]);for(unsigned k=0;k<3;++k)expected[k]+=a[k];++used;}
+  for(unsigned k=0;k<3;++k){require(std::isfinite(o.color[i0+k]),"finite prepared colour");
+   worst=(std::max)(worst,std::abs(double(o.color[i0+k])-expected[k]/(std::max)(used,1U)));}
+  require(o.color[i0+3]==1.F,"native alpha");
  }
  return worst;
 }
@@ -161,9 +217,33 @@ int wmain(int argc,wchar_t **argv){try{
   report<<"{\"name\":\""<<g.name<<"\",\"output\":["<<g.W<<','<<g.H<<"],\"render\":["<<g.w<<','<<g.h<<"],\"oracle_error\":"<<error
    <<",\"proxy_oracle_error\":"<<proxy_error<<",\"adapted_proxy_delta\":"<<agreement<<",\"unadapted_delta\":"<<control<<",\"coc_equal\":true}";
  }
+ // Flag cases (game-110: the equipment box's depth of field has other
+ // far/near settings than gameplay): every far/near combination and other
+ // coefficients on patterned depth, against the CPU oracle and the native
+ // proxy. Each changes the result from gameplay's (the flags are exercised).
+ constexpr unsigned one=0x3f800000U,half=0x3f000000U,big=0x40200000U;
+ const std::array<unsigned,4> configs[]{{1,1,one,one},{1,0,one,one},{0,1,one,one},{0,0,one,one},{1,1,big,half},{0,1,one,big}};
+ report<<"],\"flag_cases\":[";first=true;
+ for(const auto &g:{cases[0],cases[1],cases[4]}){
+  const auto gameplay=f.run(g,0,{},&configs[0]);
+  for(const auto &c:configs){
+   const auto adapted=f.run(g,0,{},&c),proxy=f.run(g,1,{},&c);
+   const double error=flag_oracle_error(g,c,adapted),proxy_error=flag_oracle_error(g,c,proxy),agreement=difference(adapted.color,proxy.color);
+   require(difference(adapted.coc,proxy.coc)==0,"CoC writer unchanged (flags)");
+   const bool half_scale=g.W==2*g.w&&g.H==2*g.h;
+   require(error<2e-6&&proxy_error<2e-6&&(half_scale?agreement==0:agreement<2e-6),"flag oracle");
+   const double effect=(std::max)(difference(adapted.coc,gameplay.coc),difference(adapted.color,gameplay.color));
+   require(&c==&configs[0]?effect==0:effect>.01,"flags change the result");
+   std::cout<<g.name<<" flags "<<c[0]<<','<<c[1]<<','<<std::bit_cast<float>(c[2])<<','<<std::bit_cast<float>(c[3])<<": oracle "<<error
+            <<", proxy "<<proxy_error<<", adapted vs proxy "<<agreement<<", vs gameplay "<<effect<<std::endl;
+   if(!first)report<<',';first=false;
+   report<<"{\"name\":\""<<g.name<<"\",\"flags\":["<<c[0]<<','<<c[1]<<','<<std::bit_cast<float>(c[2])<<','<<std::bit_cast<float>(c[3])
+         <<"],\"oracle_error\":"<<error<<",\"proxy_oracle_error\":"<<proxy_error<<",\"adapted_proxy_delta\":"<<agreement<<",\"gameplay_delta\":"<<effect<<",\"coc_equal\":true}";
+  }
+ }
  // Hostile CBScreen (a 1x1 render view): the loops stay bounded (four texels
  // per axis) and the dispatch completes without a device removal.
  (void)f.run(cases[0],0,{1,1});
  report<<"],\"bounded_hostile_view\":true,\"accepted\":true}";require(bool(report),"report");
- std::cout<<"PASS adapted DOF preparation at 5 render scales against the CPU area oracle and the native proxy; bounded on hostile constants\n";return 0;
+ std::cout<<"PASS adapted DOF preparation at 5 render scales against the CPU area oracle and the native proxy, and 6 far/near configurations at 3; bounded on hostile constants\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

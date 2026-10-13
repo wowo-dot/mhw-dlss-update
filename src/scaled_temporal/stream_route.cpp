@@ -697,6 +697,9 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  std::array<ColorLink,16> middle_links{};std::array<unsigned,8> middle_path{};unsigned middle_size{},middle_count{};
  unsigned count{},taas{},motions{},grades{},ends{},hazes{};std::uintptr_t haze_unit{},haze_in{},haze_out{};
  unsigned pre_filters{},pre_order{};std::uintptr_t pre_unit{},pre_in{},pre_out{};
+ // v0.24.9: source-free effects between TAA and the motion filter (the
+ // cutscenes' uBlinkFilter, order 17): {descriptor, key, output}.
+ std::array<std::array<std::uintptr_t,3>,4> pre_overlays{};unsigned pre_overlay_count{};
  if(!same_stamp(s)||!field(cfg.image,0x51cc238,filters)||!field(filters,0x3c,count)||!count||count>16){plan_rejection=1;return /* rejected */ false;}
  for(unsigned i=0;i<count;++i){std::uintptr_t e{},u{},type{},input{},output{};unsigned stage{},order{};
   if(!field(filters,0x40+8*i,e)||!field(e,0,stage)||!field(e,4,order)||!field(e,8,u)||!field(e,0x10,input)||!field(e,0x18,output)||(u&&!field(u,0,type))){plan_rejection=2;return /* rejected */ false;}
@@ -707,10 +710,16 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
    if(e!=u+0x140||!input||!output||input==output){plan_rejection=6;plan_detail=7;return false;}
    ++hazes;haze_unit=u;haze_in=input;haze_out=output;}
   // A filter between TAA (order 2) and the motion unit (order 100); its draw
-  // must be an approved screen filter (discover_dependencies).
+  // must be an approved screen filter (discover_dependencies). A source-free
+  // one (no input) draws over the image the motion filter reads, as the
+  // overlays after it do (v0.24.9: the cutscenes' blink, order 17).
   if(stage==15&&order>2&&order<100&&e!=s.layer+0x140){
+   if(!input&&output&&e==u+0x140){
+    if(pre_overlay_count==pre_overlays.size()){plan_rejection=6;plan_detail=9;return false;}
+    pre_overlays[pre_overlay_count++]={e,(15U<<27)|order,output};
+   }else{
    if(e!=u+0x140||!input||!output||input==output){plan_rejection=6;plan_detail=9;return false;}
-   ++pre_filters;pre_unit=u;pre_in=input;pre_out=output;pre_order=order;}
+   ++pre_filters;pre_unit=u;pre_in=input;pre_out=output;pre_order=order;}}
   if(type==cfg.image+0x3538400&&stage==15&&order==0){grade=u;++grades;}
   if(stage==15&&order==0x7fffff1){std::array<unsigned char,3> flags{};
    if(u||!field(e,0x20,flags)||flags!=std::array<unsigned char,3>{1,0,0}){plan_rejection=5;return /* rejected */ false;}endpoint=e;++ends;}
@@ -730,6 +739,11 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
  else if(!field(s.view,0x460,attachment)||!field(attachment,0x58,final_dest)||final_dest!=final.destination.object)plan_detail=6;
  if(!plan_detail&&hazes&&(haze_in!=motion_out||!haze_unit))plan_detail=7;
  if(!plan_detail&&pre_filters&&(pre_in!=motion_in||!pre_unit))plan_detail=9;
+ // A pre-motion overlay draws on the image current at its key: the TAA output
+ // before the pre-motion filter, that filter's output after it.
+ for(unsigned i=0;!plan_detail&&i<pre_overlay_count;++i){const auto &o=pre_overlays[i];
+  const bool after=pre_filters&&o[1]>((15U<<27)|pre_order);
+  if(o[2]!=(after?pre_out:motion_in)||(pre_filters&&o[1]==((15U<<27)|pre_order)))plan_detail=9;}
  if(!plan_detail){
   for(unsigned i=0;i<observation.count;++i){const auto &v=observation.filters[i];
    if(v[1]==15&&v[2]>100&&v[2]<0x7fffff1&&v[5]&&v[6])middle_links[middle_size++]={static_cast<unsigned>((v[1]<<27)|v[2]),v[5],v[6]};}
@@ -763,6 +777,15 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
   tb::Owner target_owner;
   if(target<4)target_owner=p.draws[target].output;else if(!owner(f[6],target_owner)){plan_rejection=7;return false;}
   overlays[overlay_candidates++]={static_cast<unsigned>((f[1]<<27)|f[2]),0,target_owner,0};
+ }
+ // Pre-motion overlays (checked above): the same in-place flags as the
+ // overlays after the motion filter; any other flags refuse the frame.
+ for(unsigned i=0;i<pre_overlay_count;++i){const auto &o=pre_overlays[i];const auto key=static_cast<unsigned>(o[1]);
+  std::array<unsigned char,3> flags{};
+  if(!field(o[0],0x20,flags))return overlay_failure(OutputCommands::flags_read,key);
+  if(flags!=std::array<unsigned char,3>{0,1,0}){plan_rejection=6;plan_detail=9;return false;}
+  if(overlay_candidates==overlays.size())return overlay_failure(OutputCommands::candidate_capacity,key);
+  overlays[overlay_candidates++]={key,0,o[2]==motion_in?transfer:pre_output,0};
  }
  p.keys={0x78000064,0x7ffffff1,0x80000000,0x78004e20};
  std::uintptr_t array{};unsigned commands{};
@@ -875,7 +898,14 @@ bool build_plan_observed(Plan &p,std::uintptr_t unit,OutputDiagnostics::Graph &o
    if(!geometry(p.draws[stage],s.context,stage))return overlay_failure(OutputCommands::geometry,p.keys[stage],p.draws[stage].draw.packet);
    continue;
   }
-  if(preceding==UINT_MAX||preceding==2||(!p.draws[stage].dependency&&p.draws[stage].output!=p.draws[preceding].output)){plan_qualification=(stage<<16)|10U;return overlay_failure(OutputCommands::output_order,p.keys[stage],p.draws[stage].draw.packet);}
+  // v0.24.9: a pre-motion overlay (its key precedes the motion filter's)
+  // draws in place on the TAA output, which DLSS fills at full size, or after
+  // the pre-motion draw on that draw's output. A later one follows it on the
+  // same target (the check below).
+  const bool after_pre=i&&p.pre_stage!=UINT_MAX&&p.pre_stage==p.order[0];
+  const bool pre_overlay=preceding==UINT_MAX&&!p.draws[stage].dependency&&p.keys[stage]<0x78000064U&&(!i||after_pre)&&
+   p.draws[stage].output==(after_pre?p.draws[p.pre_stage].output:transfer);
+  if(!pre_overlay&&(preceding==UINT_MAX||preceding==2||(!p.draws[stage].dependency&&p.draws[stage].output!=p.draws[preceding].output))){plan_qualification=(stage<<16)|10U;return overlay_failure(OutputCommands::output_order,p.keys[stage],p.draws[stage].draw.packet);}
   if(!geometry(p.draws[stage],s.context,stage))return overlay_failure(OutputCommands::geometry,p.keys[stage],p.draws[stage].draw.packet);
   if(!p.draws[stage].dependency){
    if(!overlay_inputs(p,p.draws[stage])){plan_qualification=(stage<<16)|11U;return overlay_failure(OutputCommands::input_bindings,p.keys[stage],p.draws[stage].draw.packet);}
