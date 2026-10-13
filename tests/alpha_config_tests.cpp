@@ -45,7 +45,13 @@ int main() {
         check(mhw::alpha::parse_config("dlss_mode=dlaa", folder).dlss_mode == ReconstructionMode::dlaa, "dlss_mode dlaa");
         check(mhw::alpha::parse_config("dlss_mode = balanced", folder).dlss_mode == ReconstructionMode::balanced, "dlss_mode balanced");
         const auto bad = mhw::alpha::parse_config("dlss_mode = ultra_performance\n", folder);
-        check(bad.dlss_mode == ReconstructionMode::performance && bad.warnings.size() == 1, "unknown mode keeps Performance with a warning");
+        check(bad.dlss_mode == ReconstructionMode::performance && bad.dlss && bad.warnings.size() == 1, "unknown mode keeps Performance with a warning");
+        const auto off = mhw::alpha::parse_config("dlss_mode = Off\n", folder);
+        check(!off.dlss && off.dlss_mode == ReconstructionMode::performance && off.warnings.empty(), "dlss_mode off");
+        check(mhw::alpha::parse_config("dlss_mode = off\ndlss_mode = quality\n", folder).dlss, "a later mode turns DLSS on");
+        check(std::string(mhw::alpha::dlss_setting_value(false, ReconstructionMode::dlaa)) == "off" &&
+                  std::string(mhw::alpha::dlss_setting_value(true, ReconstructionMode::dlaa)) == "dlaa", "the setting's ini value");
+        check(mhw::alpha::parse_config("dlss_mode = performance\n", folder).dlss, "DLSS on by default");
         for (const auto m : {ReconstructionMode::dlaa, ReconstructionMode::quality, ReconstructionMode::balanced, ReconstructionMode::performance}) {
             ReconstructionMode back{};
             check(mhw::alpha::parse_dlss_mode(mhw::alpha::dlss_mode_value(m), back) && back == m, "mode values round-trip");
@@ -100,10 +106,14 @@ int main() {
         check(!a::parse_config("", folder).profile && a::parse_config("profile = on\n", folder).profile, "profile off by default; on");
         const auto bad_profile = a::parse_config("profile = sometimes\n", folder);
         check(!bad_profile.profile && bad_profile.warnings.size() == 1, "a bad profile value warns and stays off");
-        const auto ab = a::parse_config("frame_generation = off\nperf_ab = on\n", folder);
-        check(ab.perf_ab && ab.warnings.empty(), "perf_ab with frame generation off");
-        const auto ab_fg = a::parse_config("frame_generation = 2x\nperf_ab = on\n", folder);
-        check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1, "perf_ab refused with frame generation on");
+        const auto ab = a::parse_config("frame_generation_plugin = off\nperf_ab = on\n", folder);
+        check(ab.perf_ab && !ab.generation_plugin && ab.warnings.empty(), "perf_ab with DLSS-G not loaded");
+        const auto ab_fg = a::parse_config("frame_generation = off\nperf_ab = on\n", folder);
+        check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1, "perf_ab refused while DLSS-G loads (frame generation off or not)");
+        check(a::parse_config("", folder).generation_plugin && a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,
+              "DLSS-G loads by default");
+        const auto bad_plugin = a::parse_config("frame_generation_plugin = never\n", folder);
+        check(bad_plugin.generation_plugin && bad_plugin.warnings.size() == 1, "a bad plugin value warns and keeps auto");
         check(!a::parse_config("", folder).hook_timing && a::parse_config("hook_timing = on\n", folder).hook_timing,
               "hook_timing off by default; on");
 

@@ -26,9 +26,12 @@ constexpr unsigned slot_count = 3, none = InputRing<slot_count>::none;
 constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;  // DLSS converter output state
 const sl::ViewportHandle viewport{0};
 
-enum class Off : unsigned { not_armed, no_token, no_ready, camera, constants, tags, options, count };
+enum class Off : unsigned { not_armed, no_token, no_ready, camera, constants, tags, options, disabled, count };
 constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
-    "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options"};
+    "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options", "disabled"};
+// The player's Off frees DLSS-G's resources this many Presents after it, when
+// its last On frames are done on the GPU (the paced chain queues one frame).
+constexpr unsigned free_after_presents = 4;
 
 struct Images {
     ComPtr<ID3D12Resource> depth, motion, hudless;
@@ -75,6 +78,12 @@ struct Session {
     std::array<std::array<int, 8>, capture_limit> candidates{};
     unsigned candidate_count{};
     std::atomic<bool> armed{}, on{};
+    // The player's setting (enable()); Presents since it went Off, whether
+    // DLSS-G's resources were freed for it, and how often that was done.
+    std::atomic<bool> enabled{true};
+    unsigned disabled_presents{};
+    bool freed{};
+    std::uint64_t frees{}, free_failed{};
     InputRing<slot_count> ring;
     std::array<Images, slot_count> images;
     std::array<bool, slot_count> slot_hudless{};
@@ -156,6 +165,8 @@ struct Session {
     sl::Result last_sdk_error{sl::Result::eOk};
 };
 Session session;
+// Inputs are prepared only while armed by the worker and on by the player.
+bool active(const Session &s) noexcept { return s.armed.load() && s.enabled.load(); }
 
 sl::float4x4 matrix(const std::array<float, 16> &m) {
     sl::float4x4 r;
@@ -383,6 +394,7 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
 }
 
 void arm(bool armed) noexcept { session.armed.store(armed); }
+void enable(bool enabled) noexcept { session.enabled.store(enabled); }
 void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
 bool frame_generation_on() noexcept { return session.on.load(); }
 bool inputs_settled() noexcept {
@@ -445,7 +457,7 @@ Status status() noexcept {
     return {s.armed.load(), s.on.load(), s.requested_multiplier.load(), s.shown_generated.load(), s.shown_maximum.load(),
             s.presented_generated.load(), static_cast<Mode>(s.requested_mode.load()), s.requested_target.load(),
             s.shown_dynamic.load(), s.shown_dynamic_support.load(), s.dynamic_refused.load(), s.shown_presented.load(),
-            s.single_streak.load()};
+            s.single_streak.load(), s.enabled.load()};
 }
 
 void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
@@ -476,7 +488,7 @@ bool staging_ready(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
 void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
            ID3D12Resource *motion, const SlotCamera &camera) noexcept {
     auto &s = session;
-    if (!s.armed.load()) return;
+    if (!active(s)) return;
     try {
         std::lock_guard lock(s.mutex);
         if (!depth || !motion) {
@@ -523,7 +535,7 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
 void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots, ID3D12Resource *scene,
             std::uint64_t frame, std::uint64_t epoch, D3D12_RESOURCE_STATES scene_state) noexcept {
     auto &s = session;
-    if (!s.armed.load()) return;
+    if (!active(s)) return;
     try {
         std::lock_guard lock(s.mutex);
         if (!s.sdk || s.create_failed) return;
@@ -679,11 +691,11 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
     }
 }
 
-bool capture_wanted() noexcept { return session.armed.load() && session.capture_window.load(); }
+bool capture_wanted() noexcept { return active(session) && session.capture_window.load(); }
 
 void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots) noexcept {
     auto &s = session;
-    if (!s.armed.load() || !list) return;
+    if (!active(s) || !list) return;
     try {
         std::lock_guard lock(s.mutex);
         if (!s.hudless || !s.capture_window.load()) return;
@@ -791,6 +803,22 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         if (!s.sdk) return;
         // A missed present_end must not leak a tagged slot.
         if (s.pending != none) finish_pending(s, false);
+        if (!s.enabled.load()) {
+            turn_off(s, token, Off::disabled);
+            // A long-term Off (guide 6.4): eOff, then slFreeResources once its
+            // last On frames are surely done.
+            if (!s.freed && ++s.disabled_presents >= free_after_presents) {
+                s.freed = true;
+                if (const auto r = s.sdk->frame_generation_free(viewport); r == sl::Result::eOk) ++s.frees;
+                else {
+                    ++s.free_failed;
+                    s.last_sdk_error = r;
+                }
+            }
+            return;
+        }
+        s.disabled_presents = 0;
+        s.freed = false;
         if (!s.armed.load()) return turn_off(s, token, Off::not_armed);
         if (!token) return turn_off(s, token, Off::no_token);
         const auto slot = s.ring.take(present_frame, static_cast<std::uint32_t>(*token));
@@ -957,6 +985,7 @@ void write(std::ostream &o) {
     std::lock_guard lock(s.mutex);
     const auto &r = s.ring.counters();
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
+      << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees << ",\"free_failed\":" << s.free_failed
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
       << ",\"mode\":{\"requested\":" << s.requested_mode.load() << ",\"target\":" << s.requested_target.load()

@@ -100,6 +100,8 @@ void Streamline::initialize(const std::filesystem::path& runtime, const std::fil
     core(module_, "slInit", init_); core(module_, "slShutdown", shutdown_);
     core(module_, "slSetD3DDevice", attach_); core(module_, "slIsFeatureSupported", supported_);
     core(module_, "slGetFeatureRequirements", requirements_);
+    core(module_, "slIsFeatureLoaded", loaded_); core(module_, "slSetFeatureLoaded", set_loaded_);
+    core(module_, "slFreeResources", free_);
     core(module_, "slUpgradeInterface", upgrade_); core(module_, "slGetNewFrameToken", frame_);
     core(module_, "slGetNativeInterface", native_);
     core(module_, "slGetFeatureFunction", feature_);
@@ -136,12 +138,25 @@ sl::Result Streamline::attach(void* native_device) {
         feature(feature_, sl::kFeaturePCL, "slPCLSetMarker", marker_);
         feature(feature_, sl::kFeatureReflex, "slReflexSetOptions", options_);
         feature(feature_, sl::kFeatureReflex, "slReflexGetState", state_);
+        // A plugin unloaded before attach, or one that failed to start on
+        // this device (programming guide 2.2.1), is not used.
+        bool loaded{};
+        if (frame_generation_ && (loaded_(sl::kFeatureDLSS_G, loaded) != sl::Result::eOk || !loaded)) frame_generation_ = false;
         if (frame_generation_) {
             feature(feature_, sl::kFeatureDLSS_G, "slDLSSGSetOptions", frame_generation_options_);
             feature(feature_, sl::kFeatureDLSS_G, "slDLSSGGetState", frame_generation_state_);
         }
     }
     return result;
+}
+sl::Result Streamline::unload_frame_generation() {
+    if (!initialized_ || !set_loaded_ || !frame_generation_) return sl::Result::eErrorNotInitialized;
+    const auto result = set_loaded_(sl::kFeatureDLSS_G, false);
+    if (result == sl::Result::eOk) frame_generation_ = false;
+    return result;
+}
+sl::Result Streamline::frame_generation_free(const sl::ViewportHandle& viewport) const {
+    return frame_generation_ && free_ ? free_(sl::kFeatureDLSS_G, viewport) : sl::Result::eErrorNotInitialized;
 }
 sl::Result Streamline::supported(sl::Feature id, const sl::AdapterInfo& adapter) const {
     return initialized_ && supported_ ? supported_(id, adapter) : sl::Result::eErrorNotInitialized;
@@ -236,6 +251,7 @@ sl::Result Streamline::shutdown() noexcept {
         constants_ = nullptr; tags_ = nullptr;
         sleep_ = nullptr; marker_ = nullptr; options_ = nullptr; state_ = nullptr;
         requirements_ = nullptr; frame_generation_options_ = nullptr; frame_generation_state_ = nullptr;
+        loaded_ = nullptr; set_loaded_ = nullptr; free_ = nullptr;
         frame_generation_ = false;
     }
     return result;

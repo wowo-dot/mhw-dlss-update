@@ -74,6 +74,9 @@ dlss_sdk::Geometry scaled_geometry;
 dlss_sdk::Extent scaled_render{};
 unsigned render_width(){return scaled_render.width;}unsigned render_height(){return scaled_render.height;}
 dlss_sdk::ReconstructionMode configured_mode{dlss_sdk::ReconstructionMode::performance};
+// The player's DLSS Off (turn_off(), or start_off() before install): the game
+// renders as without the mod until change_mode() takes it over again.
+std::atomic<bool> off{};bool off_at_start{};
 #else
 constexpr unsigned hook_count=11;
 constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
@@ -1014,7 +1017,8 @@ void native_seh(unsigned kind,NativeFrame *f){
 }
 void native(unsigned kind,NativeFrame *f){pending.add();__try{native_seh(kind,f);}__finally{pending.sub();}}
 namespace {
-// A pending live preset request: the mode's value, or -1.
+// A pending live request: the mode's value, off_request, or -1.
+constexpr int off_request=0x100;
 std::atomic<int> mode_request{-1};
 // Set once install() completed (any thread reads it; the worker owns pass).
 std::atomic<bool> live_installed{};
@@ -1040,8 +1044,10 @@ bool memory_fits(std::uint64_t needed,gpu_memory::Check &c,std::string &why){
 }
 }
 void request_mode(dlss_sdk::ReconstructionMode m) noexcept{mode_request.store(static_cast<int>(m));}
-bool requested_mode(dlss_sdk::ReconstructionMode &m) noexcept{
-    const int v=mode_request.exchange(-1);if(v<0)return false;m=static_cast<dlss_sdk::ReconstructionMode>(v);return true;}
+void request_off() noexcept{mode_request.store(off_request);}
+bool requested_mode(ModeRequest &r) noexcept{
+    const int v=mode_request.exchange(-1);if(v<0)return false;
+    r.off=v==off_request;r.mode=r.off?configured_mode_value():static_cast<dlss_sdk::ReconstructionMode>(v);return true;}
 #ifdef MHW_CONTINUOUS_SCALED
 namespace {
 // Polls `done` until true or `ms` pass; Sleep(1) between polls.
@@ -1073,18 +1079,31 @@ template<class F> bool observed_true(F &&idle,std::uint64_t ms){
 }
 bool live_modes() noexcept{return live_installed.load()&&healthy();}
 namespace {
+// After a pause: nothing of ours in flight (the live rebuild's step 2).
+bool drained_now(){
+    Lock lock;
+    const auto completed=fence?fence->GetCompletedValue():0;
+    if(completed==UINT64_MAX)return false;
+    sr::collect(completed);
+    return !publishing.load()&&!projection_busy.test()&&!lease.list&&completed>=signal_value&&sr::idle();
+}
 // change_mode() and change_scene(): the same rebuild. A scene change also
 // rediscovers the scene, reallocates the scene-size copies and resumes the
 // render-scale override with rebase() instead of retarget().
 ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
     ModeChange r;r.scene=scene;r.mode=requested;
+    // From the player's Off: the game's own AA and scale are taken over again
+    // at step 4; before it, a failure leaves the game on its own.
+    const bool from_off=off.load();
     LARGE_INTEGER began{},frequency{};QueryPerformanceCounter(&began);QueryPerformanceFrequency(&frequency);
     const auto mark=[&](unsigned phase){LARGE_INTEGER now{};QueryPerformanceCounter(&now);r.phase=phase;
         r.us[phase]=frequency.QuadPart>0?static_cast<std::uint64_t>((now.QuadPart-began.QuadPart)*1000000/frequency.QuadPart):0;};
-    // Nothing changed: admit frames again, unless a fault arrived meanwhile.
+    // Nothing changed: admit frames again (or stay off), unless a fault
+    // arrived meanwhile.
     const auto resume=[&](const char *why){
         r.reason=why;
-        if(!healthy()){stop();return r;}
+        if(!healthy()){off.store(false);stop();return r;}
+        if(from_off){r.off=true;return r;}
         sr::begin();accepting.store(true);r.resumed=true;return r;
     };
     bool changed=false;
@@ -1111,7 +1130,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         if(mode==dlss_sdk::ReconstructionMode::dlaa&&(planned.render.width!=found.width||planned.render.height!=found.height))
             mode=dlss_sdk::ReconstructionMode::quality;
         r.mode=mode;r.render_width=planned.render.width;r.render_height=planned.render.height;
-        if(!scene&&mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
+        if(!scene&&!from_off&&mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
             configured_mode=requested;r.ok=r.unchanged=true;return r;}
         // The new images must fit the video memory budget while the old ones
         // still exist (they are released after the swap); nothing changed yet.
@@ -1125,16 +1144,9 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         // 1 pause.
         accepting.store(false);sr::stop();mark(1);
         // 2 drain.
-        const auto drained=[&]{
-            Lock lock;
-            const auto completed=fence?fence->GetCompletedValue():0;
-            if(completed==UINT64_MAX)return false;
-            sr::collect(completed);
-            return !publishing.load()&&!projection_busy.test()&&!lease.list&&completed>=signal_value&&sr::idle();
-        };
-        if(!wait_for(drained,3000)){r.retry=true;return resume("drain timeout (is the game rendering?)");}
+        if(!wait_for(drained_now,3000)){r.retry=true;return resume("drain timeout (is the game rendering?)");}
         if(!observed_zero(pending,2000)||!observed_true(sr::callbacks_idle,2000)){r.retry=true;return resume("callbacks still running");}
-        if(!drained()){r.retry=true;return resume("drain changed");}
+        if(!drained_now()){r.retry=true;return resume("drain changed");}
         mark(2);
         // 3 queue barrier.
         {
@@ -1150,9 +1162,12 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         if(scene){
             if(std::string why;!render_resolution::rebase({found.width,found.height},basis,dlss_sdk::requested_scale(requested),why))
                 throw std::runtime_error("render scale: "+why);
-        }else if(std::string why;!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))
+        }else if(std::string why;from_off?!render_resolution::resume(dlss_sdk::requested_scale(requested),why)
+                                           :!render_resolution::retarget(dlss_sdk::requested_scale(requested),why))
             return resume(("render scale: "+why).c_str());
         changed=true;
+        // The game's AA is taken over again from its next camera frame.
+        if(from_off)activation::yield(false);
         if(!wait_for([]{return render_resolution::applied_visits()>=4;},3000))throw std::runtime_error("the game did not apply the render scale");
         mark(4);
         // 5 rebuild. Nothing records with the old feature, output, copies or
@@ -1197,17 +1212,55 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         }
         mark(5);
         // 6 resume.
-        sr::begin();accepting.store(true);mark(6);r.ok=true;return r;
+        off.store(false);sr::begin();accepting.store(true);mark(6);r.ok=true;return r;
     }catch(const std::exception &e){r.reason=e.what();}
     catch(...){r.reason="rebuild";}
     if(!changed&&!scene&&!fault.load()){const std::string why=r.reason.empty()?"mode change":r.reason;return resume(why.c_str());}
-    r.retry=false;fail(scene?48:47);stop();return r;
+    // The runtime stops: a fault, not the player's Off.
+    r.retry=false;off.store(false);fail(scene?48:47);stop();return r;
 }
 }
-ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{return rebuild(requested,false);}
-ModeChange change_scene() noexcept{return rebuild(configured_mode,true);}
+// From Off after the game's aspect switch: the scene rebuild, at the new mode.
+ModeChange change_mode(dlss_sdk::ReconstructionMode requested) noexcept{
+    return rebuild(requested,off.load()&&render_resolution::scene_changed());}
+ModeChange change_scene() noexcept{
+    // While off the switch waits for change_mode() (the game renders on its own).
+    if(off.load()){ModeChange r;r.off=true;r.reason="DLSS is off";return r;}
+    return rebuild(configured_mode,true);}
+ModeChange turn_off() noexcept{
+    ModeChange r;r.off=true;r.mode=configured_mode;
+    LARGE_INTEGER began{},frequency{};QueryPerformanceCounter(&began);QueryPerformanceFrequency(&frequency);
+    const auto mark=[&](unsigned phase){LARGE_INTEGER now{};QueryPerformanceCounter(&now);r.phase=phase;
+        r.us[phase]=frequency.QuadPart>0?static_cast<std::uint64_t>((now.QuadPart-began.QuadPart)*1000000/frequency.QuadPart):0;};
+    try{
+        if(off.load()){r.ok=r.unchanged=true;return r;}
+        r.off=false;
+        if(!live_modes()||!pass||!spatial||reconstruction.failed()){r.reason="DLSS is not running";return r;}
+        if(render_resolution::scene_changed()){r.reason="the screen layout is changing";r.retry=true;return r;}
+        // 1 pause, 2 drain: as the live rebuild. Nothing is released: the
+        // feature and images stay for the way back (change_mode rebuilds them).
+        accepting.store(false);sr::stop();mark(1);
+        const auto again=[&](const char *why){
+            r.reason=why;r.retry=true;
+            if(!healthy()){stop();return r;}
+            sr::begin();accepting.store(true);r.resumed=true;return r;
+        };
+        if(!wait_for(drained_now,3000))return again("drain timeout (is the game rendering?)");
+        if(!observed_zero(pending,2000)||!observed_true(sr::callbacks_idle,2000))return again("callbacks still running");
+        if(!drained_now())return again("drain changed");
+        mark(2);
+        // 3 the game's own AA and scale from its next frame.
+        activation::yield(true);render_resolution::yield();
+        off.store(true);r.off=r.ok=true;mark(3);return r;
+    }catch(const std::exception &e){r.reason=e.what();}
+    catch(...){r.reason="turn off";}
+    r.off=false;fail(49);stop();return r;
+}
+bool dlss_off() noexcept{return off.load();}
+void start_off(bool o) noexcept{if(!pass)off_at_start=o;}
+dlss_sdk::ReconstructionMode configured_mode_value() noexcept{return configured_mode;}
 bool diagnostic_pause(bool pause) noexcept{
-    if(!live_modes())return false;
+    if(!live_modes()||off.load())return false;
     if(pause){accepting.store(false);sr::stop();return true;}
     if(!healthy())return false;
     sr::begin();accepting.store(true);return true;
@@ -1220,6 +1273,10 @@ dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_g
 bool live_modes() noexcept{return false;}
 ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept{ModeChange r;r.reason="unscaled build";return r;}
 ModeChange change_scene() noexcept{ModeChange r;r.reason="unscaled build";return r;}
+ModeChange turn_off() noexcept{ModeChange r;r.reason="unscaled build";return r;}
+bool dlss_off() noexcept{return false;}
+void start_off(bool) noexcept{}
+dlss_sdk::ReconstructionMode configured_mode_value() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
 bool diagnostic_pause(bool) noexcept{return false;}
 // The unscaled build always runs DLAA.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
@@ -1319,7 +1376,8 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         };
         #ifdef MHW_CONTINUOUS_SCALED
         // The sizing gates must be checked before activation modifies their callees.
-        if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true))throw std::runtime_error(reason);
+        // dlss_mode = off: everything is installed, nothing taken over.
+        if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true,off_at_start))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
 #ifdef MHW_FG_GAME
@@ -1336,9 +1394,13 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!activation::prepare(image,cfg.renderer,reason))throw std::runtime_error(reason);
         obs::begin();
 #ifdef MHW_CONTINUOUS_SCALED
-        sr::begin();
+        if(off_at_start){activation::yield(true);off.store(true);}
+        else sr::begin();
+        accepting.store(!off_at_start);
+#else
+        accepting.store(true);
 #endif
-        accepting.store(true);if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
+        if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
 #ifdef MHW_CONTINUOUS_SCALED
         live_installed.store(true);
 #endif

@@ -34,6 +34,13 @@ Plan target;
 unsigned basis_width{};  // the plan's basis: the scene width, or the window's (aspect option)
 Ownership ownership;
 std::atomic<bool> requested{},restored{},hooks_disabled{true};
+// The player's DLSS Off (yield()): the game's own scale, until resume() or a
+// rebase. Unqualified visits are the game's own business then, except the
+// aspect switch, which is noted for the rebase.
+std::atomic<bool> yielded{};
+// Set by resume(): the game's own scale was the player's while yielded, so it
+// is adopted as the native value instead of the start-up check (visits <= 32).
+bool adopted{};
 std::atomic<unsigned> pending{},fault{};
 unsigned render_thread{};
 bool shared_viewport{};
@@ -202,10 +209,10 @@ void update(pb::Frame *f) {
     Snapshot s{};
     if(!snapshot(s,t)){
         Lock lock;if(!unqualified++)first_unqualified=s;last_unqualified=s;note_visit(s);
-        if(s.check==15&&requested.load()&&!fault.load()&&aspect_fit(s)){
+        if(s.check==15&&(requested.load()||yielded.load())&&!fault.load()&&aspect_fit(s)){
             // This visit wrote nothing: the game's own scale stays from here.
             requested=false;scene_pending=true;scene_flag=true;++scene_changes;
-        }else if(overrides&&!scene_pending)fail(4);
+        }else if(overrides&&!scene_pending&&!yielded.load())fail(4);
         return;
     }
     {
@@ -222,7 +229,7 @@ void update(pb::Frame *f) {
         }
         return;
     }
-    if(visits<=32){
+    if(visits<=32&&!adopted){
         // Existing reduced rendering is not adopted as a new experiment.
         if(s.desired!=1.F||s.applied!=1.F||s.view_scale!=1.F||s.combined!=1.F||s.view_combined!=1.F){fail(5);return;}
         baseline=s;return;
@@ -302,7 +309,7 @@ bool ready(std::uintptr_t base,float scale,std::string &reason) {
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     return true;
 }
-bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
+bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,bool yielded_start) {
     if(image){reason="already prepared";return false;}
     shared_viewport=shared;
     if(!pb::discover(base,discovered,reason))return false;
@@ -319,11 +326,22 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared) {
     if(MH_CreateHook(reinterpret_cast<void *>(targets[0]),reinterpret_cast<void *>(mhw_resolution_entry),&original)!=MH_OK||
        (!shared_viewport&&MH_CreateHook(reinterpret_cast<void *>(targets[1]),reinterpret_cast<void *>(viewport_call),reinterpret_cast<void **>(&original_viewport))!=MH_OK)){reason="hook creation";return false;}
     if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[0]))!=MH_OK||(!shared_viewport&&MH_QueueEnableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)){reason="hook queue";return false;}
-    requested=true;hooks_disabled=false;
-    if(MH_ApplyQueued()!=MH_OK){requested=false;reason="hook activation";return false;}
+    // Yielded from the start (the player's DLSS Off): no visit checks or writes.
+    yielded=yielded_start;requested=!yielded_start;hooks_disabled=false;
+    if(MH_ApplyQueued()!=MH_OK){requested=false;yielded=false;reason="hook activation";return false;}
     return true;
 }
 void stop() noexcept {requested=false;}
+void yield() noexcept {Lock lock;if(!image||fault.load()||!requested.load())return;yielded=true;requested=false;}
+bool yielded_now() noexcept {return yielded.load();}
+bool resume(float scale,std::string &reason) {
+    Lock lock;
+    if(!image||!yielded.load()||fault.load()){reason="render scale not yielded";return false;}
+    if(scene_pending){reason="the screen layout changed";return false;}
+    const auto planned=plan(target.display,basis_width,scale);
+    if(!planned.valid){reason="extent plan";return false;}
+    target=planned;scaled_observed=0;yielded=false;adopted=true;requested=true;return true;
+}
 bool retarget(float scale,std::string &reason) {
     Lock lock;
     if(!image||!requested.load()||fault.load()){reason="render scale not active";return false;}
@@ -338,7 +356,8 @@ bool rebase(Extent display,unsigned basis,float scale,std::string &reason) {
     if(!image||!scene_pending||fault.load()){reason="no scene change pending";return false;}
     const auto planned=plan(display,basis,scale);
     if(!planned.valid){reason="extent plan";return false;}
-    target=planned;basis_width=basis;scaled_observed=0;scene_pending=false;scene_flag=false;requested=true;return true;
+    if(yielded.load())adopted=true;
+    target=planned;basis_width=basis;scaled_observed=0;scene_pending=false;scene_flag=false;yielded=false;requested=true;return true;
 }
 unsigned write_captures(std::ostream &out,bool partial) {
     Lock lock;unsigned written=0;
@@ -381,7 +400,7 @@ bool finish() {
 }
 void write(std::ostream &out) {
     Lock lock;out<<std::boolalpha<<std::setprecision(9)<<"{\"event\":\"resolution\",\"schema\":1,\"policy\":\"native-active-scale-v1\",\"requested\":"<<requested.load()
-       <<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<hooks_disabled.load()<<",\"restored\":"<<restored.load()
+       <<",\"yielded\":"<<yielded.load()<<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<hooks_disabled.load()<<",\"restored\":"<<restored.load()
        <<",\"owned_request\":"<<ownership.owned<<",\"visits\":"<<visits<<",\"unqualified\":"<<unqualified<<",\"overrides\":"<<overrides
        <<",\"pre_restores\":"<<pre_restores<<",\"foreign_requests\":"<<foreign_requests<<",\"scaled_observed\":"<<scaled_observed<<",\"restored_observed\":"<<restored_observed<<",\"truncated_views\":"<<truncated_views
        <<",\"display\":["<<target.display.width<<','<<target.display.height<<"],\"render\":["<<target.render.width<<','<<target.render.height<<"],\"requested_scale\":"<<target.requested<<",\"quantized_scale\":"<<target.quantized

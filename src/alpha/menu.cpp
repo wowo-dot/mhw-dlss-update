@@ -49,7 +49,7 @@ struct State {
     mm::Settings settings;  // what the ini holds, or will hold once saved
     bool dirty{};           // changed since the last save
     bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{};  // which keys
-    bool fg_loaded{};       // DLSS-G loaded at start: the multiplier applies live
+    bool fg_requested{};    // DLSS-G loads at start where supported: frame generation applies live
     // "Target frame rate" choices, fixed when the page is added (CMFM keeps the pointers).
     std::vector<unsigned> targets;
     std::vector<std::string> target_names;
@@ -130,7 +130,7 @@ void save() {
     read_file(state.ini, text);  // a missing file starts empty
     const auto &s = state.settings;
     const auto value = frame_generation_value(s.frame_generation, s.multiplier, s.dynamic);
-    const std::string mode = dlss_mode_value(s.dlss_mode);
+    const std::string mode = dlss_setting_value(s.dlss, s.dlss_mode);
     const std::string reflex = reflex_value(s.reflex);
     const auto target = dynamic_target_value(s.dynamic_target);
     const std::string automatic = s.generation_auto ? "on" : "off";
@@ -144,7 +144,8 @@ void save() {
     const bool generation_differs =
         check.frame_generation != s.frame_generation ||
         (check.frame_generation && (check.dynamic != s.dynamic || (!s.dynamic && check.multiplier != s.multiplier)));
-    if ((state.mode_dirty && check.dlss_mode != s.dlss_mode) || (state.generation_dirty && generation_differs) ||
+    if ((state.mode_dirty && (check.dlss != s.dlss || (s.dlss && check.dlss_mode != s.dlss_mode))) ||
+        (state.generation_dirty && generation_differs) ||
         (state.target_dirty && check.dynamic_target != s.dynamic_target) ||
         (state.auto_dirty && check.generation_auto != s.generation_auto) || (state.reflex_dirty && check.reflex != s.reflex)) {
         log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", frame_generation = " + value +
@@ -168,7 +169,9 @@ void reload() {
     std::string text;
     if (state.dirty || !read_file(state.ini, text)) return;
     const auto c = parse_config(text, state.folder);
-    state.settings.dlss_mode = c.dlss_mode;
+    // While off the ini holds "off": the mode to come back with stays.
+    state.settings.dlss = c.dlss;
+    if (c.dlss) state.settings.dlss_mode = c.dlss_mode;
     state.settings.frame_generation = c.frame_generation;
     if (c.frame_generation) {
         state.settings.dynamic = c.dynamic;
@@ -197,7 +200,7 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
         else if (id == multiplier_row) value->i = mm::generation_choice(state.settings);
         else if (id == target_row) value->i = std::max(0, mm::target_index(state.targets, state.settings.dynamic_target));
         else if (id == auto_row) value->i = state.settings.generation_auto ? 1 : 0;
-        else if (id == dlss_mode_row) value->i = mm::choice_of(state.settings.dlss_mode);
+        else if (id == dlss_mode_row) value->i = mm::dlss_choice(state.settings);
         else if (id == reflex_setting_row) value->i = mm::choice_of(state.settings.reflex);
         else return CMFM_ERROR;
         return CMFM_OK;
@@ -216,7 +219,8 @@ cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *v
                 std::lock_guard lock(state.mutex);
                 generation = state.settings.frame_generation;
             }
-            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, generation, reason)) return CMFM_OK;
+            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, generation, reflex::frame_generation_loaded(), reason))
+                return CMFM_OK;
             copy(why, why_size, reason);
             return CMFM_ERROR;
         }
@@ -250,23 +254,28 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
         auto &s = state.settings;
         bool live = false;
         if (id == dlss_mode_row) {
-            if (!mm::mode_at(value->i, s.dlss_mode)) return CMFM_ERROR;
+            bool dlss{};
+            if (!mm::mode_at(value->i, dlss, s.dlss_mode)) return CMFM_ERROR;
+            s.dlss = dlss;
             state.dirty = state.mode_dirty = true;
-            // Live while DLSS runs (the worker rebuilds it at the new scale).
+            // Live while DLSS is installed (the worker rebuilds it at the new
+            // scale, or hands the game back for Off).
             const bool now = continuous_dlaa::live_modes();
-            if (now) continuous_dlaa::request_mode(s.dlss_mode);
-            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_mode_value(s.dlss_mode) +
+            if (now && dlss) continuous_dlaa::request_mode(s.dlss_mode);
+            else if (now) continuous_dlaa::request_off();
+            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_setting_value(s.dlss, s.dlss_mode) +
                                  (now ? " (applied now)" : " (from the next start)"));
             return CMFM_OK;
         }
         if (id == reflex_setting_row) {
             ReflexMode mode{};
             std::string why;
-            if (!mm::reflex_at(value->i, mode) || !mm::reflex_allowed(mode, s.frame_generation, why)) return CMFM_ERROR;
+            const bool loaded = reflex::frame_generation_loaded();
+            if (!mm::reflex_at(value->i, mode) || !mm::reflex_allowed(mode, s.frame_generation, loaded, why)) return CMFM_ERROR;
             s.reflex = mode;
             state.dirty = state.reflex_dirty = true;
-            // DLSS-G loaded at start needs Reflex until the game closes.
-            const bool now = mode != ReflexMode::off || !state.fg_loaded;
+            // A loaded DLSS-G needs Reflex until the game closes.
+            const bool now = mode != ReflexMode::off || !loaded;
             if (now) reflex::request_mode(mm::reflex_sdk_value(mode));
             log(AL_LOG_INFO, std::string("menu: reflex = ") + reflex_value(mode) +
                                  (now ? " (applied now)" : " (from the next start; frame generation runs until then)"));
@@ -281,6 +290,13 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
                 reflex::request_mode(mm::reflex_sdk_value(s.reflex));
                 log(AL_LOG_INFO, "menu: reflex = on (frame generation needs it)");
             }
+            // Live where DLSS-G loads at start: its options first, so the
+            // first generated frames use them.
+            live = state.fg_requested;
+            if (live) {
+                if (s.frame_generation) apply_generation_live(s);
+                fg::enable(s.frame_generation);
+            }
         } else if (id == multiplier_row) {
             if (value->i == mm::dynamic_choice) {
                 s.dynamic = true;
@@ -290,7 +306,7 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
                 s.multiplier = m;
                 s.dynamic = false;
             }
-            live = state.fg_loaded;
+            live = state.fg_requested;
             if (live) apply_generation_live(s);
         } else if (id == target_row || id == auto_row) {
             if (id == target_row) {
@@ -302,7 +318,7 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
                 state.auto_dirty = true;
             }
             state.dirty = true;
-            live = state.fg_loaded;
+            live = state.fg_requested;
             if (live) apply_generation_live(s);
             log(AL_LOG_INFO, (id == target_row ? "menu: dynamic_target = " + dynamic_target_value(s.dynamic_target)
                                                : std::string("menu: frame_generation_auto = ") + (s.generation_auto ? "on" : "off")) +
@@ -324,8 +340,13 @@ std::uint32_t CMFM_CALL locked(void *, std::uint32_t id, char *why, std::uint32_
     try {
         std::lock_guard lock(state.mutex);
         const auto &s = state.settings;
-        if (id != multiplier_row && id != target_row && id != auto_row) return 0;
-        const char *reason = !s.frame_generation              ? "Turn frame generation on first."
+        if (id != frame_generation_row && id != multiplier_row && id != target_row && id != auto_row) return 0;
+        // Known once the game's device exists (before any Mods page opens).
+        const bool unsupported = reflex::frame_generation_support() == 1;
+        const char *reason = !state.fg_requested ? "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded."
+                             : unsupported       ? "This graphics card or driver has no DLSS Frame Generation."
+                             : id == frame_generation_row      ? nullptr
+                             : !s.frame_generation              ? "Turn frame generation on first."
                              : id == target_row && !s.dynamic ? "Used only by the Dynamic multiplier."
                              : id == auto_row && s.dynamic    ? "Dynamic adjusts itself; Auto pause is for the fixed multipliers."
                                                               : nullptr;
@@ -342,6 +363,7 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
         auto v = status::snapshot();
         v.dlss_healthy = continuous_dlaa::healthy();
         const auto session = fg::status();
+        v.generation_enabled = session.enabled;
         v.generating = session.on;
         v.requested = session.requested;
         v.generated = session.generated;
@@ -409,7 +431,7 @@ constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
         if (!names[i] || std::char_traits<char>::length(names[i]) > 32) return false;
     return true;
 }
-static_assert(choice_names_fit(mm::mode_names, mm::modes.size()) &&
+static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) &&
                   choice_names_fit(mm::multiplier_names, std::size(mm::multiplier_names)) &&
                   choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
               "CMFM: a choice name is at most 32 bytes");
@@ -431,7 +453,7 @@ cmfm_setting_t row(std::uint32_t id, cmfm_type_t type, const char *label, const 
 }  // namespace
 
 void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, const std::filesystem::path &folder,
-               bool fg_loaded) noexcept {
+               bool fg_requested) noexcept {
     try {
         const auto *menu = static_cast<const cmfm_menu_t *>(api->get_interface(self, CMFM_MENU_INTERFACE, CMFM_MENU_VERSION));
         if (!menu || menu->size < sizeof(cmfm_menu_t) || !menu->add_page) {
@@ -444,9 +466,9 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.self = self;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.dlss_mode, config.frame_generation, config.multiplier,     config.reflex,
-                              config.dynamic,   config.dynamic_target,   config.generation_auto};
-            state.fg_loaded = fg_loaded;
+            state.settings = {config.dlss_mode, config.dlss,           config.frame_generation, config.multiplier,
+                              config.reflex,    config.dynamic,        config.dynamic_target,   config.generation_auto};
+            state.fg_requested = fg_requested;
             state.targets = mm::target_choices(config.dynamic_target);
             state.target_names.clear();
             for (const auto target : state.targets) state.target_names.push_back(mm::target_name(target));
@@ -456,12 +478,13 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
         cmfm_setting_t settings[]{
             row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
             row(dlss_mode_row, CMFM_TYPE_CHOICE, label_text("DLSS mode"),
-                help_text("DLAA renders at full resolution; Quality, Balanced and Performance render at 67%, 58% and 50% and "
-                          "upscale. Lower is faster. Applies at once; the picture pauses for a moment.")),
+                help_text("Off: the game's own anti-aliasing and resolution. DLAA renders at full resolution; Quality, Balanced "
+                          "and Performance at 67%, 58% and 50%, upscaled. Applies at once.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
-                help_text("DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics card."),
-                CMFM_FLAG_RESTART),
+                help_text("DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics "
+                          "card. Applies at once."),
+                fg_requested ? 0U : CMFM_FLAG_RESTART),
             row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"),
                 help_text("Frames shown for each rendered frame; 3x and up need an RTX 50. Dynamic picks the count itself to reach "
                           "the target frame rate (RTX 50). Applies at once.")),

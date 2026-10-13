@@ -8,8 +8,12 @@
 
 // The settings CMFM's "Settings" page shows, as the ini holds them (alpha).
 // - "DLSS mode" changes at once while DLSS runs: the worker rebuilds the
-//   pipeline at the new render scale (continuous_dlaa::change_mode).
-// - "Frame generation" Off/On needs a restart: DLSS-G loads only at start.
+//   pipeline at the new render scale (continuous_dlaa::change_mode). Off
+//   hands the game back (continuous_dlaa::turn_off): its own anti-aliasing,
+//   resolution and aspect; the last mode is kept in memory for the way back.
+// - "Frame generation" Off/On changes at once: DLSS-G loads at every start
+//   where the card supports it (frame_generation_plugin = auto); with
+//   frame_generation_plugin = off it never loads and the row is locked.
 // - "Multiplier" changes at once while frame generation runs: 2x to 6x, or
 //   Dynamic (DLSS-G picks the count toward "Target frame rate").
 // - One ini key holds both: Off writes "off", On writes the multiplier or
@@ -18,13 +22,15 @@
 // - "Target frame rate" (dynamic_target) and "Auto pause"
 //   (frame_generation_auto) change at once; the first is used only by Dynamic,
 //   the second only by fixed multipliers.
-// - "Reflex" changes at once. Off only while frame generation is off (DLSS-G
-//   needs Reflex); turning frame generation on turns Reflex on again.
+// - "Reflex" changes at once. Off only while DLSS-G is not loaded (it paces
+//   the swap chain and needs Reflex); turning frame generation on turns
+//   Reflex on again.
 // Pure (tests/alpha_menu_tests.cpp).
 namespace mhw::alpha::menu_model {
 
 struct Settings {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
+    bool dlss = true;  // false: the player's Off (dlss_mode is the mode it comes back with)
     bool frame_generation = true;
     unsigned multiplier = 2;
     ReflexMode reflex = ReflexMode::on;
@@ -33,21 +39,27 @@ struct Settings {
     bool generation_auto{};
 };
 
-// "DLSS mode" choices, highest quality first.
+// "DLSS mode" choices: Off, then the modes, highest quality first.
 inline constexpr std::array<dlss_sdk::ReconstructionMode, 4> modes{
     dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality, dlss_sdk::ReconstructionMode::balanced,
     dlss_sdk::ReconstructionMode::performance};
-inline constexpr const char *mode_names[]{"DLAA", "Quality", "Balanced", "Performance"};
-static_assert(std::size(mode_names) == modes.size());
+inline constexpr const char *mode_names[]{"Off", "DLAA", "Quality", "Balanced", "Performance"};
+inline constexpr int off_choice = 0;
+static_assert(std::size(mode_names) == modes.size() + 1);
+// The CHOICE index of a mode (that of Performance for any other value).
 constexpr int choice_of(dlss_sdk::ReconstructionMode mode) {
     for (unsigned i = 0; i < modes.size(); ++i)
-        if (modes[i] == mode) return static_cast<int>(i);
-    return 3;
+        if (modes[i] == mode) return static_cast<int>(i) + 1;
+    return static_cast<int>(modes.size());
 }
-// The mode at a CHOICE index; false outside the list.
-constexpr bool mode_at(int index, dlss_sdk::ReconstructionMode &mode) {
-    if (index < 0 || index >= static_cast<int>(modes.size())) return false;
-    mode = modes[static_cast<unsigned>(index)];
+// The CHOICE index of the DLSS setting: Off or the mode.
+constexpr int dlss_choice(const Settings &s) { return s.dlss ? choice_of(s.dlss_mode) : off_choice; }
+// The setting at a CHOICE index: Off (`mode` unchanged) or a mode; false
+// outside the list.
+constexpr bool mode_at(int index, bool &dlss, dlss_sdk::ReconstructionMode &mode) {
+    if (index < 0 || index > static_cast<int>(modes.size())) return false;
+    dlss = index != off_choice;
+    if (dlss) mode = modes[static_cast<unsigned>(index - 1)];
     return true;
 }
 
@@ -67,10 +79,11 @@ constexpr bool reflex_at(int index, ReflexMode &mode) {
     return true;
 }
 // Whether `mode` can be chosen while the frame generation setting is
-// `generation`; if not, the reason for the help line.
-inline bool reflex_allowed(ReflexMode mode, bool generation, std::string &why) {
-    if (mode != ReflexMode::off || !generation) return true;
-    why = "Frame generation needs Reflex; turn frame generation off first.";
+// `generation` and DLSS-G is `loaded`; if not, the reason for the help line.
+inline bool reflex_allowed(ReflexMode mode, bool generation, bool loaded, std::string &why) {
+    if (mode != ReflexMode::off || (!generation && !loaded)) return true;
+    why = generation ? "Frame generation needs Reflex; turn frame generation off first."
+                     : "Reflex stays on while DLSS Frame Generation is loaded (frame_generation_plugin in mhw_dlss.ini).";
     return false;
 }
 // The sl::ReflexMode value (reflex_mode.hpp): 0 off, 1 low latency, 2 boost.

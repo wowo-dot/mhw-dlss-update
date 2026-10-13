@@ -24,7 +24,17 @@ public:
     void initialize(const std::filesystem::path& runtime,
                     const std::filesystem::path& logs,
                     StreamlineFeatures features = StreamlineFeatures::reflex_only);
+    // With frame generation requested: DLSS-G's functions are resolved only
+    // if its plugin is still loaded afterwards (frame_generation()).
     sl::Result attach(void* native_device);
+    // Before attach: unloads the requested DLSS-G plugin (a card or system
+    // without frame generation); Streamline then leaves the swap chain alone.
+    sl::Result unload_frame_generation();
+    // After attach: DLSS-G is loaded (Streamline owns the swap chain's pacing).
+    bool frame_generation() const noexcept { return frame_generation_; }
+    // Frees DLSS-G's resources after a long-term Off (the player turned frame
+    // generation off; DLSS-G guide 6.4). The present thread, with it Off.
+    sl::Result frame_generation_free(const sl::ViewportHandle& viewport) const;
     sl::Result supported(sl::Feature feature, const sl::AdapterInfo& adapter) const;
     sl::Result requirements(sl::Feature feature, sl::FeatureRequirements& value) const;
     // Off is also used to suspend interpolation while retaining SDK routing.
@@ -69,6 +79,9 @@ private:
     PFun_slSetD3DDevice* attach_{};
     PFun_slIsFeatureSupported* supported_{};
     PFun_slGetFeatureRequirements* requirements_{};
+    PFun_slIsFeatureLoaded* loaded_{};
+    PFun_slSetFeatureLoaded* set_loaded_{};
+    PFun_slFreeResources* free_{};
     PFun_slUpgradeInterface* upgrade_{};
     PFun_slGetNativeInterface* native_{};
     PFun_slGetFeatureFunction* feature_{};

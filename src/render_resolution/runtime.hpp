@@ -13,7 +13,8 @@ struct InputStamp {
 };
 // shared_viewport means another owner forwards successful RSSetViewports calls
 // to observe_viewports; this controller must not create or disable that hook.
-bool install(std::uintptr_t image,float scale,std::string &reason,bool shared_viewport=false);
+// yielded_start: installed yielded (the player's DLSS Off at start, yield()).
+bool install(std::uintptr_t image,float scale,std::string &reason,bool shared_viewport=false,bool yielded_start=false);
 // install()'s qualification without hooks or retained state: the renderer is
 // discovered, the plan is valid, the sizing code matches and the native sizing
 // snapshot is admitted. Early in startup this fails and can be retried.
@@ -41,6 +42,18 @@ bool scene_changed() noexcept;
 // pending, after a fault, or for an invalid plan.
 bool rebase(Extent display,unsigned basis,float scale,std::string &reason);
 bool input_stamp(std::uintptr_t view,InputStamp &) noexcept;
+// The player's DLSS Off: from the render thread's next visit the game's own
+// scale applies (the owned request is restored, nothing is written) and the
+// game may change its scale or aspect freely. An aspect switch meanwhile is
+// noted as for scene_changed(); rebase() then resumes on the new scene.
+// Unlike stop(), reversible. No effect before install, after a fault or stop.
+void yield() noexcept;
+bool yielded_now() noexcept;
+// Worker: the override again at `scale` (planned as retarget() does) from the
+// next visit. The game's own scale meanwhile is adopted as its native value
+// (restored at the next yield). False (still yielded) if not yielded, after a
+// fault, for an invalid plan, or with a scene change pending (use rebase()).
+bool resume(float scale,std::string &reason);
 void stop() noexcept;
 bool healthy() noexcept;
 bool finish();

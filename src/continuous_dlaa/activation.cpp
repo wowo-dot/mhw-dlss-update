@@ -31,6 +31,9 @@ std::array<void *,8> originals{};
 std::array<bool,8> enabled{};
 std::array<bool,8> disable_queued{};
 std::atomic<bool> requested{};
+// The player's DLSS Off (yield): the game's own AA runs as without the mod
+// until the mod takes it over again. Read with requested at each use.
+std::atomic<bool> yielded{};
 std::atomic<bool> failure_latched{};
 std::atomic<unsigned> pending{},fault{};
 std::atomic<std::uint64_t> owned_frames{},units{},admitted{},rejected{},competing{},jitter_suppressed{};
@@ -46,6 +49,8 @@ thread_local std::uintptr_t frame_view{};
 thread_local std::uintptr_t queued_taa{};
 LONG64 context() noexcept {return InterlockedCompareExchange64(&mhw_aa_context,0,0);}
 void fail(unsigned n) noexcept {unsigned zero{};fault.compare_exchange_strong(zero,n);requested=false;}
+// Whether new camera frames are taken over (requested and not yielded).
+bool owning() noexcept {return requested.load()&&!yielded.load();}
 bool primary(std::uintptr_t ctx,std::uintptr_t view) noexcept {
     std::uintptr_t r{},primary_view{},backend{},wrapper{};unsigned flags{},sizing{};unsigned char api{};
     return ctx==renderer+0x710&&pb::read(image+0x51cc080,api)&&api==1&&
@@ -58,7 +63,7 @@ bool primary(std::uintptr_t ctx,std::uintptr_t view) noexcept {
 bool begin_frame(const pb::Frame &f) noexcept {
     // R8 is the incoming view. The native body binds context+1d0 later;
     // that field may still be null or contain a previous view at entry.
-    if(!requested.load()||f.gpr[4]!=0||!primary(f.gpr[2],f.gpr[3]))return false;
+    if(!owning()||f.gpr[4]!=0||!primary(f.gpr[2],f.gpr[3]))return false;
     std::uintptr_t camera{},type{},table{};unsigned char taa{},fxaa{};
     if(!pb::read(image+0x51c4400,camera)||camera!=f.gpr[1]||!camera||!pb::read(camera,type)||
        (type!=image+0x350d188&&type!=image+0x33f82a8)||
@@ -157,7 +162,7 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
 bool suppress_jitter(unsigned kind,const pb::Frame &f) noexcept {
     // Update runs before camera rendering. These exact native callbacks only
     // assign AA jitter; their allocation/reset callbacks remain untouched.
-    if(!requested.load()&&!context())return false;
+    if(!owning()&&!context())return false;
     constexpr std::array<std::uintptr_t,3> types{0x351bda8,0x354dd78,0x354df48};
     std::uintptr_t type{},r{};
     if(kind<2||kind>4||!pb::read(f.gpr[1],type)||type!=image+types[kind-2]||
@@ -215,7 +220,7 @@ void dispatch_inner(unsigned kind,pb::Frame *f) {
             if(previous){++queue_visits;queued_taa=reject_queue(5);}else queued_taa=prepare_queue(*f);
 #ifdef MHW_CONTINUOUS_SCALED
             // Admitted as for post_queue_complete below: only such a queue is planned.
-            if(!previous){scaled_temporal::stream_route::full_post_enter(ctx,queued_taa&&requested.load()&&!fault.load()&&owned_context(ctx)&&view==frame_view);
+            if(!previous){scaled_temporal::stream_route::full_post_enter(ctx,queued_taa&&owning()&&!fault.load()&&owned_context(ctx)&&view==frame_view);
                 full_entered=true;}
 #endif
             mhw_binding_forward(originals[7],f);returned=true;
@@ -223,7 +228,7 @@ void dispatch_inner(unsigned kind,pb::Frame *f) {
             // Before the queue is planned: restore the render rectangle (also on
             // an exception, below).
             if(full_entered){full_entered=false;scaled_temporal::stream_route::full_post_exit(ctx);}
-            if(!previous&&queued_taa&&requested.load()&&!fault.load()&&owned_context(ctx)&&view==frame_view)
+            if(!previous&&queued_taa&&owning()&&!fault.load()&&owned_context(ctx)&&view==frame_view)
                 scaled_temporal::stream_route::post_queue_complete(manager,ctx,view,queued_taa);
 #endif
         }
@@ -265,8 +270,9 @@ bool prepare(std::uintptr_t host,std::uintptr_t r,std::string &reason){
     requested=true;return true;
 }
 void stop() noexcept {requested=false;}
+void yield(bool y) noexcept {yielded=y;}
 bool owns_projection(std::uintptr_t ctx,std::uintptr_t view) noexcept {
-    return requested.load()&&!fault.load()&&frame_owned&&frame_thread==GetCurrentThreadId()&&
+    return owning()&&!fault.load()&&frame_owned&&frame_thread==GetCurrentThreadId()&&
         ctx==static_cast<std::uintptr_t>(context())&&view==frame_view&&primary(ctx,view);
 }
 void latch_failure() noexcept {failure_latched=true;}
@@ -290,7 +296,7 @@ void write(std::ostream &out){
     TelemetryLock lock;
     bool hooks_off=true;for(bool on:enabled)hooks_off=hooks_off&&!on;
     out<<"{\"schema\":2,\"policy\":\"native-postqueue-preparation-v2\",\"settings_writes\":0,\"layer_flag_writes\":0,\"requested\":"<<requested.load()
-       <<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"active_context\":"<<context()<<",\"frames\":"<<owned_frames.load()
+       <<",\"yielded\":"<<yielded.load()<<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"active_context\":"<<context()<<",\"frames\":"<<owned_frames.load()
        <<",\"taa_visits\":"<<units.load()<<",\"taa_admitted\":"<<admitted.load()<<",\"taa_rejected\":"<<rejected.load()
        <<",\"competing_suppressed\":"<<competing.load()<<",\"jitter_suppressed\":"<<jitter_suppressed.load()
        <<",\"table_forced\":"<<InterlockedCompareExchange64(&mhw_aa_table_forced,0,0)

@@ -12,8 +12,10 @@ namespace mhw::alpha {
 // values are reported as warnings and keep the default. Relative folders are
 // relative to the DLL's folder.
 //
-//   dlss_mode = performance ; dlaa, quality, balanced, performance
-//   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x, dynamic (DLSS-G not loaded when off)
+//   dlss_mode = performance ; off, dlaa, quality, balanced, performance
+//   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x, dynamic (the menu turns it on and off live)
+//   frame_generation_plugin = auto ; auto: DLSS-G loads where the card supports
+//                           ; it; off: never (no frame generation, Reflex Off possible)
 //   dynamic_target = display ; display (its refresh rate) or 30 to 1000 (frames per second)
 //   frame_generation_auto = off ; on: DLSS-G pauses a fixed multiplier when it would slow the game
 //   reflex = on             ; on, boost, off (off only with frame_generation = off)
@@ -23,29 +25,39 @@ namespace mhw::alpha {
 //                           ; ("profile" events in the log; a little overhead)
 //   perf_ab = off           ; on: DLSS alternates every 30 s between running and
 //                           ; paused (hooks installed), for A/B timing in one
-//                           ; launch; needs frame_generation = off
+//                           ; launch; needs frame_generation_plugin = off
 //   hook_timing = off       ; on: every 64th hooked call is timed ("hook_timing"
 //                           ; events every 20 s; perf/hook_timing.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
-// Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
+// Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
+// game renders as without it (its own anti-aliasing option, resolution and
+// aspect); frame generation pauses (its inputs come from DLSS). The menu
+// changes it live.
 // Frame generation: a fixed multiplier, or dynamic (DLSS-G picks the count
 // toward dynamic_target; RTX 50 and driver 595.41 or newer, else the session
 // falls back to the fixed multiplier, 2x from the ini). Auto is NVIDIA's legacy
 // mode for fixed multipliers. Dynamic and Auto both turn the game's V-Sync off
 // (DLSS-G guide 22.5, 22.8).
+// Frame generation (v0.27.0): DLSS-G loads at every start on a card and
+// system that support it, so the setting turns it on and off live; a loaded
+// DLSS-G paces the swap chain and needs Reflex until the game closes.
+// frame_generation_plugin = off keeps it unloaded.
 // Reflex: NVIDIA Reflex Low Latency (on), the same with Boost (the GPU keeps
 // its clocks up when the CPU is the limit), or off. DLSS Frame Generation
-// needs Reflex, so off applies only while frame generation is off.
+// needs Reflex, so off applies only while frame generation is off, and only
+// takes effect without DLSS-G loaded (else Reflex stays on).
 enum class ReflexMode : unsigned { off, on, boost };
 inline constexpr unsigned min_dynamic_target = 30, max_dynamic_target = 1000;
 struct Config {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
+    bool dlss = true;            // dlss_mode = off: false (dlss_mode keeps its default)
     bool frame_generation = true;
     unsigned multiplier = 2;     // the fixed multiplier (kept while dynamic or off)
     bool dynamic{};              // frame_generation = dynamic
     unsigned dynamic_target{};   // frames per second; 0: the display's refresh rate
     bool generation_auto{};      // frame_generation_auto = on
+    bool generation_plugin = true;  // frame_generation_plugin = auto (off: DLSS-G never loads)
     ReflexMode reflex = ReflexMode::on;
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
@@ -118,6 +130,8 @@ inline bool parse_dynamic_target(std::string_view value, unsigned &target) {
     target = n;
     return true;
 }
+// The ini value of the DLSS setting: "off" or the mode's.
+inline const char *dlss_setting_value(bool dlss, dlss_sdk::ReconstructionMode m) { return dlss ? dlss_mode_value(m) : "off"; }
 inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode &m) {
     for (const auto candidate : {dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality,
                                  dlss_sdk::ReconstructionMode::balanced, dlss_sdk::ReconstructionMode::performance})
@@ -149,7 +163,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         const auto raw = line.substr(equals + 1);
         const auto value = trimmed_lower(raw);
         if (key == "dlss_mode") {
-            if (!parse_dlss_mode(value, c.dlss_mode)) c.warnings.push_back(where + "dlss_mode must be dlaa, quality, balanced or performance");
+            if (value == "off") c.dlss = false;
+            else if (parse_dlss_mode(value, c.dlss_mode)) c.dlss = true;
+            else c.warnings.push_back(where + "dlss_mode must be off, dlaa, quality, balanced or performance");
         } else if (key == "frame_generation") {
             if (value == "off") c.frame_generation = c.dynamic = false;
             else if (value == "dynamic") c.frame_generation = c.dynamic = true;
@@ -164,6 +180,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "frame_generation_auto") {
             if (value == "on" || value == "off") c.generation_auto = value == "on";
             else c.warnings.push_back(where + "frame_generation_auto must be on or off");
+        } else if (key == "frame_generation_plugin") {
+            if (value == "auto" || value == "off") c.generation_plugin = value == "auto";
+            else c.warnings.push_back(where + "frame_generation_plugin must be auto or off");
         } else if (key == "hook_timing") {
             if (value == "on" || value == "off") c.hook_timing = value == "on";
             else c.warnings.push_back(where + "hook_timing must be on or off");
@@ -193,9 +212,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         }
     }
     // The keys may come in any order, so this is decided once all are read.
-    if (c.perf_ab && c.frame_generation) {
+    if (c.perf_ab && c.generation_plugin) {
         c.perf_ab = false;
-        c.warnings.push_back("perf_ab needs frame_generation = off; off");
+        c.warnings.push_back("perf_ab needs frame_generation_plugin = off; off");
     }
     if (c.reflex == ReflexMode::off && c.frame_generation) {
         c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");

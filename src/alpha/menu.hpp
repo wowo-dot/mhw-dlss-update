@@ -12,9 +12,10 @@
 //   every comment and other key stays.
 namespace mhw::alpha::menu {
 
-// al_plugin_init, after the worker has read the ini. `fg_loaded`: DLSS-G was
-// loaded at start, so a new multiplier applies at once. No throw.
+// al_plugin_init, after the worker has read the ini. `fg_requested`: DLSS-G
+// loads at start where supported (frame_generation_plugin = auto), so frame
+// generation and its options apply at once. No throw.
 void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, const std::filesystem::path &folder,
-               bool fg_loaded) noexcept;
+               bool fg_requested) noexcept;
 
 }  // namespace mhw::alpha::menu

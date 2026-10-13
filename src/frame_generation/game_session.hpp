@@ -40,6 +40,12 @@ void back_buffer(unsigned format) noexcept;
 // Worker. Armed requests FG On while valid inputs arrive; disarmed turns it Off
 // at the next Present (Streamline itself stays alive until process exit).
 void arm(bool armed) noexcept;
+// Any thread: the player's frame generation setting (the ini at start, the
+// alpha menu live), independent of arm(). Off: DLSS-G Off from the next
+// Present, no inputs prepared, and its resources freed a few Presents later
+// (DLSS-G guide 6.4); On again: DLSS-G allocates them at its next On (one
+// short stutter).
+void enable(bool enabled) noexcept;
 bool frame_generation_on() noexcept;
 // Worker, live preset change: disarmed, Off at the last Present, and no
 // input slot holding a copy on a list not yet submitted or one the SDK may
@@ -78,6 +84,7 @@ struct Status {
     bool dynamic_refused{};               // DLSS-G refused eDynamic although supported
     unsigned presented_now{};             // frames presented for the last rendered frame
     unsigned single_streak{};             // Presents in a row, while On, that showed no generated frame
+    bool enabled{true};                   // the player's setting (enable())
 };
 Status status() noexcept;
 

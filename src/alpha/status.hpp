@@ -12,7 +12,8 @@
 namespace mhw::alpha::status {
 
 enum class Loader : unsigned { active, degraded, disabled };  // as reported to Astera Loader
-enum class Stage : unsigned { starting, running, off };       // DLSS, Reflex
+// player_off: DLSS only, the player's Off (the game renders as without the mod).
+enum class Stage : unsigned { starting, running, off, player_off };  // DLSS, Reflex
 // Frame generation in this session: off in the ini, waiting for the game, armed,
 // not possible here, or stopped after it ran.
 enum class Generation : unsigned { off, starting, armed, unavailable, stopped };
@@ -29,6 +30,7 @@ struct View {
     std::string generation_reason;
     // Live values, filled in by the menu.
     bool dlss_healthy = true;
+    bool generation_enabled = true;       // the player's frame generation setting
     bool generating{};                    // DLSS-G on at the last Present
     unsigned requested{}, generated{};    // total multiplier asked for; generated frames per rendered frame
     std::uint64_t presented_generated{};  // generated frames shown since the start
@@ -111,6 +113,7 @@ inline std::string dlss_line(const View &v) {
     if (v.dlss == Stage::starting) return "Starting";
     if (v.dlss == Stage::off) return with_reason("Off", reason_text(v.dlss_reason));
     if (!v.dlss_healthy) return "Stopped; the game renders without DLSS";
+    if (v.dlss == Stage::player_off) return "Off (the game's own anti-aliasing and resolution)";
     if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return v.dlss_mode;
     if (v.render_width == v.scene_width && v.render_height == v.scene_height)
         return v.dlss_mode + ", " + size_text(v.scene_width, v.scene_height);
@@ -134,6 +137,9 @@ inline std::string generation_line(const View &v) {
     case Generation::stopped: return with_reason("Off", reason_text(v.generation_reason));
     case Generation::armed: break;
     }
+    if (!v.generation_enabled) return "Off";
+    // Its inputs come from DLSS.
+    if (v.dlss == Stage::player_off) return "Paused while DLSS is off";
     const bool dynamic = v.generation_mode == 2, automatic = v.generation_mode == 1;
     if (!v.generating) return (dynamic ? std::string("Dynamic") : std::to_string(v.requested) + "x") + ", paused";
     if (dynamic && v.dynamic_applied) {

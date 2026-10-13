@@ -106,16 +106,32 @@ void settings_model() {
         check(m::target_name(0) == "Display refresh" && m::target_name(240) == "240 fps", "target names");
     }
     using mhw::dlss_sdk::ReconstructionMode;
-    check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3, "mode choices, best first");
+    check(m::choice_of(ReconstructionMode::dlaa) == 1 && m::choice_of(ReconstructionMode::performance) == 4, "mode choices after Off, best first");
     ReconstructionMode mode{};
-    check(m::mode_at(1, mode) && mode == ReconstructionMode::quality && !m::mode_at(4, mode) && !m::mode_at(-1, mode), "mode at index");
+    bool dlss{};
+    check(m::mode_at(2, dlss, mode) && dlss && mode == ReconstructionMode::quality && !m::mode_at(5, dlss, mode) &&
+              !m::mode_at(-1, dlss, mode), "mode at index");
+    check(m::mode_at(m::off_choice, dlss, mode) && !dlss && mode == ReconstructionMode::quality, "Off keeps the mode to come back with");
+    {
+        m::Settings off;
+        off.dlss = false;
+        off.dlss_mode = ReconstructionMode::dlaa;
+        check(m::dlss_choice(off) == m::off_choice && std::string(m::mode_names[m::off_choice]) == "Off", "Off shows Off");
+        off.dlss = true;
+        check(m::dlss_choice(off) == 1, "on again at the kept mode");
+    }
     using mhw::alpha::ReflexMode;
     check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 && m::choice_of(ReflexMode::off) == 2, "reflex choices, on first");
     ReflexMode reflex{};
     check(m::reflex_at(2, reflex) && reflex == ReflexMode::off && !m::reflex_at(3, reflex) && !m::reflex_at(-1, reflex), "reflex at index");
     why.clear();
-    check(m::reflex_allowed(ReflexMode::boost, true, why) && m::reflex_allowed(ReflexMode::off, false, why) && why.empty(), "off without frame generation");
-    check(!m::reflex_allowed(ReflexMode::off, true, why) && why == "Frame generation needs Reflex; turn frame generation off first.",
+    check(m::reflex_allowed(ReflexMode::boost, true, true, why) && m::reflex_allowed(ReflexMode::off, false, false, why) && why.empty(),
+          "off without frame generation and without DLSS-G");
+    check(!m::reflex_allowed(ReflexMode::off, false, true, why) &&
+              why == "Reflex stays on while DLSS Frame Generation is loaded (frame_generation_plugin in mhw_dlss.ini).",
+          "off refused while DLSS-G is loaded, frame generation off");
+    why.clear();
+    check(!m::reflex_allowed(ReflexMode::off, true, true, why) && why == "Frame generation needs Reflex; turn frame generation off first.",
           "off refused with frame generation");
     check(m::reflex_sdk_value(ReflexMode::off) == 0 && m::reflex_sdk_value(ReflexMode::on) == 1 && m::reflex_sdk_value(ReflexMode::boost) == 2,
           "sl::ReflexMode values");
@@ -239,6 +255,27 @@ void status_lines() {
     failed.generation_reason = "reflex_frames";
     check(s::generation_line(failed) == "Off: the frame hooks stopped", "stopped frame generation");
     check(s::generated_line(failed) == "0", "stopped still counts");
+
+    // The player's DLSS Off is not a fault; frame generation pauses with it.
+    s::View chosen;
+    chosen.dlss = s::Stage::player_off;
+    chosen.reflex = s::Stage::running;
+    chosen.generation = s::Generation::armed;
+    chosen.requested = 2;
+    check(s::dlss_line(chosen) == "Off (the game's own anti-aliasing and resolution)" && s::mod_line(chosen) == "Active",
+          "the player's Off");
+    check(s::generation_line(chosen) == "Paused while DLSS is off", "frame generation paused while DLSS is off");
+    // The player's frame generation Off while DLSS-G is loaded (v0.27.0).
+    s::View fg_off;
+    fg_off.dlss = s::Stage::running;
+    fg_off.reflex = s::Stage::running;
+    fg_off.generation = s::Generation::armed;
+    fg_off.generation_enabled = false;
+    fg_off.presented_generated = 42;
+    check(s::generation_line(fg_off) == "Off" && s::mod_line(fg_off) == "Active" && s::generated_line(fg_off) == "42",
+          "frame generation turned off in the menu");
+    chosen.generation_enabled = false;
+    check(s::generation_line(chosen) == "Off", "off wins over paused");
 }
 }  // namespace
 
