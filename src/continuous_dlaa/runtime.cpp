@@ -51,7 +51,8 @@ extern "C" void temporal_depth_producer_entry();
 extern "C" void temporal_depth_consumer_entry();
 extern "C" void temporal_jitter_entry();
 extern "C" void mhw_binding_forward(void *,mhw::projection_binding::Frame *);
-namespace mhw::projection_binding {bool discover(std::uintptr_t,Runtime &,std::string &);}
+namespace mhw::projection_binding {bool discover(std::uintptr_t,Runtime &,std::string &);
+bool refresh_scene(std::uintptr_t,const Runtime &,Runtime &,std::string &);}
 namespace mhw::continuous_dlaa {
 namespace {
 namespace pb=projection_binding;namespace tb=temporal_bindings;namespace dr=tb::depth_routes;namespace obs=temporal_present::observer;
@@ -961,7 +962,7 @@ namespace {
 // rediscovers the scene, reallocates the scene-size copies and resumes the
 // render-scale override with rebase() instead of retarget().
 ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
-    ModeChange r;r.scene=scene;
+    ModeChange r;r.scene=scene;r.mode=requested;
     LARGE_INTEGER began{},frequency{};QueryPerformanceCounter(&began);QueryPerformanceFrequency(&frequency);
     const auto mark=[&](unsigned phase){LARGE_INTEGER now{};QueryPerformanceCounter(&now);r.phase=phase;
         r.us[phase]=frequency.QuadPart>0?static_cast<std::uint64_t>((now.QuadPart-began.QuadPart)*1000000/frequency.QuadPart):0;};
@@ -974,15 +975,14 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
     bool changed=false;
     try{
         if(!live_modes()||!pass||!spatial||reconstruction.failed()){r.reason="DLSS is not running";return r;}
-        // The scene: the current one, or the game's new one (rediscovered;
-        // the device, swap chain and window must be the same).
+        // The scene: the current one, or the game's new one (read again; the
+        // device, swap chain, arena and window must be the installed ones).
         pb::Runtime found=runtime;
         if(scene){
             if(!render_resolution::scene_changed()){r.reason="no scene change pending";return r;}
             std::string why;
-            if(!pb::discover(cfg.image,found,why)){r.reason="discovery: "+why;r.retry=true;return r;}
-            if(found.device!=runtime.device||found.backend!=runtime.backend||found.swapchain!=runtime.swapchain||
-               found.window_width!=runtime.window_width||found.window_height!=runtime.window_height||found.format!=runtime.format)
+            if(!pb::refresh_scene(cfg.image,runtime,found,why)){r.reason="scene: "+why;r.retry=true;return r;}
+            if(found.window_width!=runtime.window_width||found.window_height!=runtime.window_height||found.format!=runtime.format)
                 throw std::runtime_error("the window or swap chain changed");
         }else if(render_resolution::scene_changed()){r.reason="the screen layout is changing";r.retry=true;return r;}
         r.scene_width=found.width;r.scene_height=found.height;
@@ -1208,7 +1208,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         return true;
     }catch(const std::exception &e){reason=e.what();stop();return false;}
 }
-void stop() noexcept {accepting.store(false);activation::stop();
+void stop() noexcept {accepting.store(false);live_installed.store(false);activation::stop();
 #ifdef MHW_CONTINUOUS_SCALED
     sr::stop();render_resolution::stop();
 #endif

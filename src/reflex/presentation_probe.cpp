@@ -244,14 +244,16 @@ void change_dlss_mode(mhw::dlss_sdk::ReconstructionMode wanted,DlssRetry &retry)
 // The live aspect change: tried every 500 ms while not ready (the game
 // mid-resize, a drain), up to 40 times; the game renders at its own scale
 // meanwhile. A failure after the rebuild began stops DLSS (fault 48).
-struct SceneRetry {std::uint64_t at{};unsigned count{};std::string reason;};
+// `generation`: frame generation was armed when the change began; it stays
+// paused across the tries (its scene rectangle is the old one).
+struct SceneRetry {std::uint64_t at{};unsigned count{};std::string reason;bool generation{};};
 // Worker: the game changed its scene size with its aspect option
 // (render_resolution yielded; continuous_dlaa::change_scene). Frame
 // generation pauses as for a preset change and takes the new scene rectangle.
 void change_dlss_scene(SceneRetry &retry){
     namespace fg=mhw::frame_generation::game;namespace cd=mhw::continuous_dlaa;
     const auto began=GetTickCount64();
-    const bool generation=fg::status().armed;
+    const bool generation=retry.generation||fg::status().armed;
     bool settled=true;
     if(generation){
         fg::arm(false);
@@ -270,7 +272,7 @@ void change_dlss_scene(SceneRetry &retry){
             fg::configure(sdk,chain.width,chain.height,{(chain.width-sw)/2,(chain.height-sh)/2,sw,sh});
             fg::arm(true);
         }else mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");
-    }else if(generation&&r.retry)fg::arm(true);
+    }
     const bool last=!r.ok&&r.retry&&retry.count+1>=40;
     if(r.ok||!r.retry||last||!retry.count||r.reason!=retry.reason){
         log<<"{\"event\":\"dlss_scene_change\",\"ok\":"<<r.ok<<",\"retry\":"<<r.retry<<",\"attempt\":"<<retry.count+1
@@ -287,13 +289,15 @@ void change_dlss_scene(SceneRetry &retry){
         mhw::alpha::status::dlss_sizes(rw,rh,sw,sh);
         mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
         retry={};
-    }else if(r.retry&&!last){retry.at=GetTickCount64()+500;++retry.count;retry.reason=r.reason;}
+    }else if(r.retry&&!last){retry.at=GetTickCount64()+500;++retry.count;retry.reason=r.reason;retry.generation=generation;}
     else{
         // Not ready after 40 tries, or failed: DLSS stays off; the game renders
-        // at its own scale (a failure also stopped the runtime).
-        retry.at=UINT64_MAX;
+        // at its own scale (a failure also stopped the runtime). Frame
+        // generation stays off with it.
+        retry.at=UINT64_MAX;retry.generation=false;
         if(r.retry)cd::stop();
         mhw::alpha::status::dlss(mhw::alpha::status::Stage::off,"scene-change");
+        if(generation)mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped,"scene-change");
     }
 }
 #endif

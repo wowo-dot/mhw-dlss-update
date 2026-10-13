@@ -147,3 +147,47 @@ last, and the final one. They give the scene, render size, phase times
 - the way back yields again;
 - rebase needs a pending change;
 - a refused scene that is not the game's fit still faults.
+
+## game-85 (v0.23.0, 2026-10-13)
+
+Four launches:
+- one ended during startup (no crash in the Windows log);
+- one started at 21:9 (the setting kept from game-84): DLAA at 2560x1080
+  ran for about 2 minutes with fault 0, and FG used the scene
+  `[0,180,2560,1080]`;
+- two switched live: 21:9 → 16:9 at DLAA (FG off), and 16:9 → 21:9 at
+  Quality.
+
+**What worked: the yield.** Both captures show the request visit, then about
+100 ms later the new scene with check 15. In both directions there was no
+fault. From the next visit the game ran at its own scale (Quality's 0.6625
+became 1).
+
+**What failed: the rebuild.** Every `change_scene()` attempt failed in
+`pb::discover` with `live-code-39442032`. That is the code gate on draw
+execution (`0x259d670`), which this mod's own stream route hooks at install,
+so a second full discovery can never pass. After 40 tries (20 s) DLSS
+stopped and the game kept its own rendering.
+
+**Side effects:**
+- The retry path armed FG again between tries, at the old scene rectangle.
+- `cd::stop()` left `live_modes()` true, so the later menu preset changes
+  were refused with "the screen layout is changing" and retried, instead of
+  being reported as "DLSS is not running".
+- Early failures logged the mode as `performance` (the enum's zero).
+
+## v0.23.1: the fixes
+
+- **`pb::refresh_scene()`** is the scene part of `discover()` for an
+  installed runtime. It reads the renderer again and requires the installed
+  backend, device, swap chain and constant arena. It also requires the
+  sizing bit clear and reads the swap-chain description. It does not check
+  the code gates again: they held at install, and the mod's own hooks now
+  patch some of those functions. `discover()` and `refresh_scene()` share
+  `scene_extent()`.
+- FG stays paused across the tries and is armed again only after a
+  successful rebuild at the new rectangle. If the change gives up, FG's
+  status becomes stopped ("scene-change").
+- `stop()` clears `live_installed`, so after a stop the menu changes the
+  preset "from the next start".
+- `ModeChange::mode` starts at the requested mode.
