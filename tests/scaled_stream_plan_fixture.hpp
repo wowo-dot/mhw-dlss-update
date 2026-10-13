@@ -129,11 +129,15 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    route::full_candidate(frame,quad);put(context+0x2b80,4U);route::final_after(quad,true);require(route::final_quads[quad].valid,"the final quad stays native");
    put(context+0x5c,render_rect);put(context+0x154,taa_key);put(context+0x15c,0U);return armed;};
   const auto armed_frame=candidate();require(copies.empty()&&route::full_frame.load()!=armed_frame,"nothing armed at the final quad");
+  // The final-quad helper also records other copies before the scheduler
+  // (refraction, other views): they leave the candidate.
+  route::full_candidate(frame,UINT_MAX);
   route::full_post_enter(context);
   unsigned key{};require(route::field(context,0x154,key)&&key==taa_key,"the scheduler's key restored");
   require(copies.size()==1&&copies[0].context==context&&copies[0].destination==owners[4]&&copies[0].source==source_object&&
           copies[0].rect==std::array<unsigned,4>{0,0,128,64}&&copies[0].key==16&&copies[0].order==0x12&&route::full_frame.load()==armed_frame,
           "the DLAA copy in the final quad's key at the scheduler's entry");
+  route::full_candidate(frame,UINT_MAX);  // a filter's own copy through the same helper, inside the chain
   route::full_post_taa(context);
   std::array<int,4> now{};require(route::field(context,0x5c,now)&&now==full_rect&&viewports.size()==1,"full rectangle after TAA");
   route::full_post_taa(context);require(viewports.size()==1,"one switch per frame");

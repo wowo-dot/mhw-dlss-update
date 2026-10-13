@@ -139,11 +139,14 @@ void full_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth
 //
 // So the final quad stays native and is only remembered here (the candidate:
 // its owners, tBaseMap's texture and the view's attachment, and its key).
-// slot: the final quad's capture (final_before), entered.
+// slot: the final quad's capture (final_before), entered. The same helper
+// (0x2297e20) records other copies too (refraction, other views): those leave
+// the candidate as it is (game-119, v0.25.5: they cleared it, and no frame
+// armed).
 void full_candidate(const pb::Frame &f,unsigned slot){
- auto &s=full_state;s=FullPostState{};
  if(!full_post_enabled.load()||!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return;
  FinalQuad q;{Lock lock;q=final_quads[slot];}
+ auto &s=full_state;s=FullPostState{};
  if(!q.entered||q.stamp.context!=f.gpr[2]||!field(f.gpr[2],0x154,s.key)||!field(f.gpr[2],0x15c,s.order)){++full_counts.declined;return;}
  s.frame=q.stamp.frame;s.context=f.gpr[2];s.source=q.source.object;s.destination=q.destination.object;s.pending=true;
  s.render_rect={0,0,static_cast<int>(render_w),static_cast<int>(render_h)};s.full_rect={0,0,static_cast<int>(width),static_cast<int>(height)};
