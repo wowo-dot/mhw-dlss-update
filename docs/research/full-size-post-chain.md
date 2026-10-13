@@ -233,10 +233,76 @@ behind an ini key (`full_post = on`), with the census as its check.
   root bound when the final copy opens a command list). This is the identity
   path's existing behaviour: game-98 at DLAA had 112.
 
+## The render-size inputs (v0.25.2, v0.25.3)
+
+The post chain reads three textures the scene writes at the render size,
+into the top-left render region of output-size allocations:
+
+| Input | Format | Lookup | Post readers |
+| --- | --- | --- | --- |
+| Scene depth | R32_FLOAT | view +0x628 -> +0xA0 (`sub_14255CE10`) | DoF, fog, depth colour, haze, god rays, motion blur, colour cubes; also `tPrimDepthMap` (radial occlusion) |
+| GBuffer4 | R32_UINT | view +0x620 -> +0x78 | motion blur (two f16 halves in screen units, low bit a flag) |
+| GBuffer5 | R8G8_SNORM (engine 40) | view +0x620 -> +0x80 | motion blur, where GBuffer4's flag is set (screen units) |
+
+`tOcclusionMap` is derived from the depth inside the chain (a 1x1
+`OcclusionFactor` pass) or is the depth itself. The tone map's grade reads no
+depth. The scene clears the GBuffer and rewrites the depth every frame, and the
+depth texture is not double-buffered, so overwriting all three after DLSS has
+no effect on the next frame.
+
+**The upscale** (`full_post_inputs.hpp`): each render region is copied into a
+buffer, expanded by a compute pass (nearest texel under each output texel's
+centre, bit-exact), and copied over the texture. None of the values is in
+pixel units, so none is rescaled. Only root constants and root buffer views
+are bound; the compute root signature, its arguments and the pipeline are
+restored.
+
+**Where, and in which states.** The game plans every barrier of a frame
+before executing it (`sub_14229CEE0`): each texture has spans of uses with a
+native state, converted to D3D12 by `0x259ba50` (bits: 4 NPSR, 8 PSR,
+0x20 COPY_SOURCE; 0x100 RT, 0x400 UAV, 2048 COPY_DEST). Read states are bit
+sets, and consecutive reads merge into one span. The copy executor
+(`0x259c650`) flushes the packet's barriers just before its
+`CopyTextureRegion`.
+
+- The slot: after TAA's callback, in TAA's key, the scheduler's context
+  records one engine copy at key (15, 3) (the order written as the scheduler
+  writes it, `cDraw +0x154`, then restored), 1x1, into GBuffer5. The planner
+  then has GBuffer5 in COPY_DEST at that packet. The copy hook replaces its
+  copy with the upscale, or with nothing; it never runs.
+- Its source is TAA's output, which the TAA copy already reads as COPY_SOURCE
+  at (15, 2): the slot's read joins that span.
+- **game-116 (v0.25.2):** with GBuffer4 as the source, its COPY_SOURCE read
+  merged into TAA's read span; TAA's barrier then made it
+  PSR|NPSR|COPY_SOURCE, and DLSS refused every armed frame (reason 6). The
+  slot recorded nothing.
+- The depth and GBuffer4 stay out of the packet. Their states are those TAA's
+  consumer proved (the depth admission; GBuffer4's transition in TAA's
+  barriers), published with the DLSS copies, provided no planner node of
+  theirs lies after TAA's dispatch up to the slot. A new span on the depth
+  after TAA could be hoisted before the consumer, whose admission accepts only
+  reads.
+
+**game-117 (v0.25.3), hub and field, depth of field and motion blur on.** The
+user: blur looked correct, no skips, "everything looks much clear".
+
+| Measure | Count |
+| --- | --- |
+| DLSS frames | 31,318 (skips 4, fault 0) |
+| Frames switched to the full chain | 31,318 |
+| Slots recorded and planned | 31,318 |
+| Upscales | 30,880 (98.6%) |
+| Without the upscale: states not yet published | 184 |
+| Without the upscale: interval not proven quiet | 253 |
+| Frame generation, HUD-less tagged | 31,080 (no_restore 235) |
+
+The 437 frames without the upscale (1.4%) run the full-size chain on
+render-size inputs for that frame. "Not yet published" is a worker reaching
+the slot before the TAA consumer's worker; "not quiet" needs finer reasons.
+
 **Still to do:**
 
-- upscale the render-size inputs (depth, GBuffer4/5, occlusion) for depth of
-  field, motion blur and the depth-based effects;
+- the 1.4% without the upscale (reasons for both skips);
 - plan the late silhouette draws in armed frames;
 - the 4 frames armed at a transition;
 - an effects hunt with `full_post = on`.
