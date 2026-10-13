@@ -95,10 +95,15 @@ v0.24.1 classifies it properly instead of as an unknown program.
   reported as an unknown program.
 - The eye draws (former rejection 2: write mask 0, depth and stencil off)
   fall in the same class.
-- **Expected in game:** `route.silhouette.rejections[11]` equals what
-  rejections 0 and 2 counted before. In game-60 that was 11,670 each over
-  11,733 frames, so about two a frame together. `unknown_programs` should be
-  0, and rejections 0 and 2 should be 0.
+- **Confirmed in game (game-99, v0.24.1, Quality, training grounds; the
+  user: "silhouette looked correct"):**
+  - 228,001 late draws: 190,737 corrected and 37,264 native, all rejection 11
+    (about four a frame there).
+  - Rejections 0 and 2 at 0, `unknown_programs` 0, `recipe_failed` 0, route
+    fault 0, DLSS fault 0.
+  - Late draws exist only outside the hubs. Every minute in the hub counts 0,
+    as in game-61/62, so hub-only runs since v0.18 (all 0) were expected. A
+    DLAA run skips the scan (identity plan), as game-98 did.
 - **If a program from this class ever writes:** the engine state check is
   false, so it reappears as an unknown program (rejection 0).
 
