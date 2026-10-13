@@ -1638,6 +1638,9 @@ void write_summary(std::ostream &o){
   <<",\"spatial_frames\":"<<spatial_frames<<",\"native_frames\":"<<native_frames<<",\"failure\":"<<std::quoted(failure)
   <<",\"dependency_draws\":";a(dependency_draws);o<<",\"plan_rejections\":";a(rejection_counts);
  o<<",\"readiness\":";a(readiness.reasons());
+ // v0.24.10: in the summary (the full report is quiet in the alpha); each
+ // census sample is written once.
+ o<<",\"post_census\":";census_write(o);
  o<<",\"unknown_shaders\":"<<unknown_count<<",\"unknown_shader\":";
  if(unknown_count)o<<"{\"key\":"<<unknown_key<<",\"ps_sha256\":\""<<unknown_shader<<"\"}";else o<<"null";
  o<<",\"inserted_capture\":{\"attempts\":"<<inserted_dependencies.attempts()<<",\"samples\":"<<inserted_dependencies.size()<<",\"saved\":"<<inserted_saved<<",\"errors\":";
@@ -1681,7 +1684,7 @@ void write(std::ostream &o){
  o<<",\"shared_key_prepared\":"<<overlay_shared_prepared<<",\"shared_key_completed\":"<<overlay_shared_completed;
  o<<",\"extended_draws\":"<<overlay_extended_draws<<",\"extended_layout\":";
  if(overlay_extended_draws){o<<'[';for(unsigned i=0;i<overlay_extended_layout.size();++i){if(i)o<<',';o<<overlay_extended_layout[i];}o<<']';}else o<<"null";o<<"}";
- o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"post_census\":";census_write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
+ o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
  o<<",\"dependency_route\":{\"schema\":2,\"copy_draws\":"<<dependency_draws[0]<<",\"radial_draws\":"<<dependency_draws[1]<<",\"dof_draws\":"<<dependency_draws[2]<<",\"screen_filter_draws\":"<<dependency_draws[3]<<",\"rejection\":"<<dependency_rejection<<",\"last_description\":[";
  for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}
  o<<"],\"texture_check\":"<<dependency_texture_check<<",\"failures\":"<<dependency_failures<<",\"first_failure\":[";

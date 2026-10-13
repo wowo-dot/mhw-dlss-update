@@ -101,8 +101,8 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   require(cs.inputs[4][4]<cs.resource_count&&cs.resources[cs.inputs[4][4]].pointer==reinterpret_cast<std::uintptr_t>(resources[0].Get()),"census TAA bindings");
   route::census_observe(s.frame,context,&s);require(route::census.captured==2,"census latest sample");
   route::census_observe(s.frame,context,&s);require(route::census.captured==2,"census bounded");
-  std::ostringstream first,second;route::census_write(first);route::census_write(second);
-  require(first.str().find("\"packets\":[[2013265922,13,0,0,64,32,")!=std::string::npos&&second.str()=="{\"captured\":2,\"samples\":[]}","census written once");
+  std::ostringstream first,second;route::write_summary(first);route::census_write(second);
+  require(first.str().find("\"post_census\":{\"captured\":2,\"samples\":[{")!=std::string::npos&&first.str().find("\"packets\":[[2013265922,13,0,0,64,32,")!=std::string::npos&&second.str()=="{\"captured\":2,\"samples\":[]}","census written once, in the route summary");
   std::cout<<"PASS post census: descriptors, copy, draws and targets of the native queue, written once\n";}
  check_queue_completion(s,filters,motion,4);
  if(!dependency_dir.empty()){
