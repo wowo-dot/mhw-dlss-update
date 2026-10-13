@@ -56,23 +56,11 @@ void reject_submission(std::span<const std::array<std::uint64_t,2>>) noexcept;
 bool submitted_batch(std::uint64_t queue,std::span<const std::array<std::uint64_t,2>>,std::uint64_t signal) noexcept;
 void observe_submission(std::uint64_t queue,std::uint64_t tick,std::span<const std::array<std::uint64_t,2>>) noexcept;
 void barriers(ID3D12GraphicsCommandList *,unsigned,const D3D12_RESOURCE_BARRIER *) noexcept;
-// Existing executor hook: bounded diagnostic windows plus qualified native DOF
-// sequence. True from compute_dispatch means both conditional alternatives were
-// recorded; the caller must suppress only that original API call. Other compute
-// passes preserve their native call. Token 12 is a rendering-only callback scope.
-unsigned compute_before(std::uintptr_t executor,std::uintptr_t backend,std::uintptr_t packet) noexcept;
-bool compute_dispatch(ID3D12GraphicsCommandList *,unsigned,unsigned,unsigned,std::uintptr_t caller) noexcept;
-void compute_after(unsigned token,bool returned) noexcept;
-bool draw(ID3D12GraphicsCommandList *,unsigned,unsigned,unsigned,unsigned,std::uintptr_t) noexcept;
 // True records both selector-controlled alternatives; suppress only that
 // original API call. Unqualified indexed draws retain the native path.
 bool indexed_draw(ID3D12GraphicsCommandList *,unsigned,unsigned,unsigned,int,unsigned,std::uintptr_t) noexcept;
 bool reset(ID3D12GraphicsCommandList *,std::uint64_t) noexcept;
 void collect(std::uint64_t) noexcept;
-void save_compute_depth(const std::filesystem::path &prefix) noexcept;
-// Writes <prefix>.inserted-effect.json once, after the first capture of a
-// filter inserted between TAA and the motion unit (shaders and bindings).
-void save_inserted_effect(const std::filesystem::path &prefix) noexcept;
 bool drained() noexcept;
 bool callbacks_idle() noexcept;
 // Opt-in metadata probe. No FG tags, resource ownership or GPU work.

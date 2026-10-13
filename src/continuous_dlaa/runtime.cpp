@@ -544,8 +544,7 @@ void WINAPI draw_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT
             if(at){++values[at];values[at+1]=b.Flags;values[at+2]=b.Transition.Subresource;values[at+3]=b.Transition.StateBefore;values[at+4]=b.Transition.StateAfter;}}
         note_depth(6,0,depth_consumer,values);}
  }
- if(!sr::draw(list,n,instances,first,instance,caller)){
-    perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);}
+ {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);}
 }
 #endif
 void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destination,ID3D12Resource *source){
@@ -800,9 +799,6 @@ ResolveResult replace_scoped(ID3D12GraphicsCommandList *list){
     ResolveResult result;injected=true;__try{result=dispatch_replace(list);}__finally{injected=false;}return result;
 }
 void dispatch_call(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::uintptr_t caller){
-#ifdef MHW_CONTINUOUS_SCALED
-    if(!injected){injected=true;const bool replaced=sr::compute_dispatch(list,x,y,z,caller);injected=false;if(replaced)return;}
-#endif
     const bool candidate=!injected&&current_kind==1&&list==current_list&&caller==cfg.image+0x259cfca;
     if(candidate){Lock lock;resolve_telemetry.begin();}
     const bool admitted=dispatch_before(list,x,y,z,caller);
@@ -996,7 +992,6 @@ void native_seh(unsigned kind,NativeFrame *f){
     // preserve the entry packet independently for after-call scope cleanup.
     const auto prepared_packet=f->call.gpr[3];
     const bool prepared=kind==1&&observe_prepared_resolve(*f);
-    const auto compute_token=kind==1?sr::compute_before(f->call.gpr[1],f->call.gpr[2],prepared_packet):UINT_MAX;
 #endif
     ForwardedRequest forwarded{};
     if(kind==0)admitted=taa_before(*f);
@@ -1008,7 +1003,6 @@ void native_seh(unsigned kind,NativeFrame *f){
     __finally{
 #ifdef MHW_CONTINUOUS_SCALED
         if(prepared)sr::finish_resolve(prepared_packet,returned);
-        if(compute_token!=UINT_MAX)sr::compute_after(compute_token,returned);
 #endif
         if(kind==0)taa_after(admitted,returned);
         else if(kind==1||kind==3){finish_forwarded(forwarded,returned);consumer_after(admitted,returned);}
@@ -1437,20 +1431,6 @@ bool quiescent() noexcept {
     if(!sr::callbacks_idle()||!sr::drained())return false;
 #endif
     return healthy();
-}
-void save_compute_depth(const std::filesystem::path &prefix) noexcept {
-#ifdef MHW_CONTINUOUS_SCALED
-    Lock lock;if(!fault.load()){if(fence)sr::collect(fence->GetCompletedValue());sr::save_compute_depth(prefix);}
-#else
-    (void)prefix;
-#endif
-}
-void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
-#ifdef MHW_CONTINUOUS_SCALED
-    Lock lock;if(!fault.load())sr::save_inserted_effect(prefix);
-#else
-    (void)prefix;
-#endif
 }
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;const auto reads=bridge_probe::read_cache_stats();
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()

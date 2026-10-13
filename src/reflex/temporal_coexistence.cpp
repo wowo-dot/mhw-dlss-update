@@ -95,14 +95,13 @@ void sample(){
     require(healthy(),"temporal-runtime-fault");++samples;
     // perf::quiet_status: the dumps hold the render locks while they format and write.
     if(mhw::perf::on(mhw::perf::quiet_status))return;
-    cd::save_compute_depth(directory/name);
     {std::ofstream status(directory/(name+".status.json"),std::ios::binary|std::ios::trunc);cd::write(status);require(bool(status),"temporal-status");}
     if(samples<=12||(samples&(samples-1))==0)cd::write(events);
     require(bool(events),"temporal-heartbeat-log");
 }
 void summary(std::ostream& out){
     if(!installed){out<<"null";return;}
-    cd::write_summary(out);cd::save_inserted_effect(directory/name);
+    cd::write_summary(out);
 }
 void fault_snapshot() noexcept {
     try{
@@ -122,7 +121,6 @@ bool finish() noexcept {
             // CPU hook removal or from a visually normal scene.
             const auto deadline=GetTickCount64()+5000;
             while(!cd::quiescent()&&cd::healthy()&&GetTickCount64()<deadline)Sleep(1);
-            cd::save_compute_depth(directory/name);
             cd::save_rejected_shader(directory/(name+"-rejected-taa.dxbc"));
             cd::write(events);clean=cd::quiescent();
         }

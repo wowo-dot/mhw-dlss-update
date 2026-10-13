@@ -12,17 +12,17 @@ void check_indexed_ownership(fx::Fixture &f){
  put(executor,8,reinterpret_cast<std::uintptr_t>(recording.data()));put(recording,0x20,reinterpret_cast<std::uintptr_t>(f.list.Get()));
  put(recording,0x108,reinterpret_cast<std::uintptr_t>(pipeline.Get()));put(recording,0x110,reinterpret_cast<std::uintptr_t>(f.root.Get()));
  auto &p=route::plans[1];p.stamp.frame=1;p.stamp.epoch=1;p.stamp.context=2;p.stamp.view=3;
- p.built=p.prepared=p.claimed=true;p.late_count=2;
+ p.built=p.prepared=p.claimed=p.identity=true;p.late_count=2;
  auto pin=buffer(f.device.Get(),256,D3D12_HEAP_TYPE_UPLOAD);for(auto &resource:p.resources)resource=pin;
  for(unsigned i=0;i<2;++i){p.late_packets[i]=reinterpret_cast<std::uintptr_t>(packets[i].data());p.late_keys[i]=0x7ffffff4+i;
   p.late[i].arguments={6,3,static_cast<unsigned>(-4)};put(packets[i],0x40,p.late[i].arguments);}
  route::watch(1,p);
- // Resolve, copy, motion, grade, two silhouettes, final screen.
- const std::array<std::uintptr_t,7> nodes{11,12,13,14,p.late_packets[0],p.late_packets[1],15};
- require(route::handoff_indexed(p,0)==4&&route::handoff_indexed(p,1)==5&&route::handoff_draw(p,2)==6,"late indexed order before final");
+ // Resolve, TAA copy, two silhouettes, final copy.
+ const std::array<std::uintptr_t,5> nodes{11,12,p.late_packets[0],p.late_packets[1],15};
+ require(route::handoff_indexed(p,0)==2&&route::handoff_indexed(p,1)==3&&route::final_node(p)==4&&route::handoff_count(p)==5,"late indexed order before the final copy");
  require(route::prepare_selector(p)&&p.handoff.prepare({1,1,2,3},nodes)==H::Result::ok&&route::choose(p,H::Choice::reconstructed),"indexed prepared selector");
  const H::Recording identity{reinterpret_cast<std::uintptr_t>(f.list.Get()),7};
- for(unsigned node=0;node<4;++node)require(p.handoff.record(node,nodes[node],identity)==H::Result::ok,"earlier native nodes");
+ for(unsigned node=0;node<2;++node)require(p.handoff.record(node,nodes[node],identity)==H::Result::ok,"earlier native nodes");
  route::silhouette_planned=2;
  for(unsigned i=0;i<2;++i){
   mhw::projection_binding::Frame frame{};frame.gpr[1]=reinterpret_cast<std::uintptr_t>(executor.data());frame.gpr[2]=4;frame.gpr[3]=p.late_packets[i];
@@ -32,7 +32,7 @@ void check_indexed_ownership(fx::Fixture &f){
   route::silhouette_after(true);route::indexed_scope={};
  }
  require(route::healthy()&&route::silhouette_recorded==2&&route::silhouette_native==2&&!route::silhouette_corrected,"native indexed receipts");
- require(p.handoff.record(6,15,identity)==H::Result::ok,"final follows indexed draws");
+ require(p.handoff.record(4,15,identity)==H::Result::ok,"the final copy follows the indexed draws");
  const std::array<std::array<std::uint64_t,2>,1> batch{{{identity.list,identity.generation}}};
  require(route::submission_needed(batch)&&route::validate_submission(reinterpret_cast<std::uintptr_t>(f.queue.Get()),batch,1),"indexed retained recording needs signal");
  hr(f.list->Close(),"indexed close");ID3D12CommandList *lists[]{f.list.Get()};f.queue->ExecuteCommandLists(1,lists);f.wait();
@@ -42,5 +42,5 @@ void check_indexed_ownership(fx::Fixture &f){
  require(route::reset(f.list.Get(),7),"indexed successful Reset receipt");route::collect(1);
  require(!route::lifetime.live()&&!p.prepared&&p.handoff.retired(1),"indexed resources and frame retire together");
  hr(f.list->Close(),"indexed retire close");f.messages();
- std::cout<<"PASS actual indexed route: native forwarding, seven-node order, GPU submission and Reset/completion retention\n";
+ std::cout<<"PASS actual indexed route: native forwarding, five-node identity order, GPU submission and Reset/completion retention\n";
 }

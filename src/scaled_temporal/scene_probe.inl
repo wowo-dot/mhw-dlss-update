@@ -13,25 +13,23 @@ SceneScope scene_enter(const pb::Frame &f) noexcept {return {f.gpr[1],f.gpr[2],f
 void scene_exit(bool returned) noexcept {
  Lock lock;scene_trace.returned(scene_scope.frame,scene_scope.epoch,scene_scope.event,returned,scene_scope.replaced);
 }
+// v0.26.0: a frame's scene ends with the identity plan's final copy (the grade
+// output into the view's attachment), recorded under the route lock.
 void scene_prepare(const Plan &p) noexcept {
  if(!scene_trace.wants_frame())return;
  const auto &q=final_quads[p.stamp.frame%final_quads.size()];
- if(!q.valid||q.packet!=p.draws[2].draw.packet||q.stamp.frame!=p.stamp.frame||q.stamp.epoch!=p.stamp.epoch||
-    q.stamp.context!=p.stamp.context||q.stamp.view!=p.stamp.view)return;
+ if(!q.valid||q.stamp.frame!=p.stamp.frame||q.stamp.epoch!=p.stamp.epoch||q.stamp.context!=p.stamp.context||q.stamp.view!=p.stamp.view||
+    q.destination.resource!=reinterpret_cast<std::uintptr_t>(p.resources[3].Get()))return;
  // The admitted plan owns these resources already; this diagnostic only
  // copies identities. It never assumes the target is a swap-chain buffer.
  if(scene_trace.begin({p.stamp.frame,p.stamp.epoch,p.stamp.context,p.stamp.view,
-  p.draws[2].draw.packet,q.source.resource,p.draws[2].output.resource,width,height,p.draws[2].output.gpu_format,p.stamp.bank}))
+  p.final_copy,q.source.resource,q.destination.resource,width,height,q.destination.gpu_format,p.stamp.bank}))
   scene_trace.choice(p.stamp.frame,p.stamp.epoch,static_cast<unsigned>(p.handoff.choice()));
 }
 void scene_api(ID3D12GraphicsCommandList *list,bool indexed,std::array<std::uint64_t,5> args,std::uintptr_t caller) noexcept {
  if(injecting)return;Lock lock;
  std::uint64_t frame{},epoch{};
  if(!accepting.load()||!field(cfg.renderer,0x1f210,frame)||!field(cfg.renderer,0x1f208,epoch))return;
- // The existing route already identifies the exact final packet and its
- // immutable plan. Start here, not at preparation of a later native frame.
- if(api_slot!=UINT_MAX&&api_stage==2&&plans[api_slot].prepared&&
-    scene_scope.packet==plans[api_slot].draws[2].draw.packet)scene_prepare(plans[api_slot]);
  auto *capture=scene_trace.recording();if(!capture)return;
  // Vendor/private draws are outside the two qualified game executor scopes.
  if(caller<cfg.image||caller>=cfg.image+0x55d3000)return;

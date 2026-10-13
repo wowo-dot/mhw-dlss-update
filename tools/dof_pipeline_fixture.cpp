@@ -7,9 +7,6 @@
 #include <bcrypt.h>
 #include <sstream>
 #include "../tests/perf_env.hpp"
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-#include "../tests/dof_native_route_fixture.hpp"
-#endif
 namespace {
 using namespace dof_fixture;
 constexpr unsigned side=320;
@@ -172,9 +169,6 @@ struct Pipeline : Gpu {
   const auto gpu=[&](unsigned n){return D3D12_GPU_DESCRIPTOR_HANDLE{heap->GetGPUDescriptorHandleForHeapStart().ptr+UINT64(n)*stride};};
   int reads[7][5]={{0,-1,-1,-1,-1},{2,-1,-1,-1,-1},{3,-1,-1,-1,-1},{0,1,4,-1,-1},{5,6,4,-1,-1},{7,-1,-1,-1,-1},{5,6,1,4,8}};
   if(capture)reads[6][2]=10;
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  if(mode==1)reads[6][2]=1;
-#endif
   constexpr int writes[6][2]={{2,-1},{3,-1},{4,-1},{5,6},{7,8},{6,-1}};
   for(unsigned pass=0;pass<7;++pass){for(unsigned reg=0;reg<5;++reg){const auto index=reads[pass][reg];
     D3D12_SHADER_RESOURCE_VIEW_DESC d{};d.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;d.Texture2D.MipLevels=1;d.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;d.Format=index<0?DXGI_FORMAT_R32_FLOAT:dof_formats::view(resources[index]->GetDesc().Format);
@@ -195,26 +189,14 @@ struct Pipeline : Gpu {
   if(reference){auto screen_ref=pixel_cb.data()+320;screen_ref[6]*=.5F;screen_ref[7]*=.5F;screen_ref[12]*=2;screen_ref[13]*=2;screen_ref[14]*=2;screen_ref[15]*=2;screen_ref[16]*=.5F;screen_ref[17]*=.5F;}
   auto pixel_constants=upload(std::as_bytes(std::span(pixel_cb)));
   const auto vertices=sf::dependency_vertices({w,h,w,h},false);auto vb=upload(std::as_bytes(std::span(vertices)));
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  std::unique_ptr<dof_route_fixture::Route> routed;
-  if(mode==1){require(capture&&depth&&native_formats&&sync_reduction,"native route fixture inputs");
-   routed=std::make_unique<dof_route_fixture::Route>(device.Get(),list.Get(),std::span(resources).first(9),shader_directory,cb);}
-#endif
   ID3D12DescriptorHeap *heaps[]{heap.Get()};list->SetDescriptorHeaps(1,heaps);list->SetComputeRootSignature(root.Get());
   for(unsigned i=0;i<3;++i)list->SetComputeRootConstantBufferView(i,constants->GetGPUVirtualAddress()+(i==0?0:i==1?1280:1536));
   const unsigned groups[6][3]={{(w+319)/320,h,1},{w/20,(h+319)/320,1},{(w/20+7)/8,(h/20+7)/8,1},{(w/2+15)/16,(h/2+15)/16,1},{(w/2+15)/16,(h/2+15)/16,1},{(w/2+15)/16,(h/2+15)/16,1}};
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  if(routed){for(unsigned p:{0U,3U}){list->SetPipelineState(p?compute[p].Get():original_horizontal.Get());list->SetComputeRootDescriptorTable(3,gpu(p*7));list->SetComputeRootDescriptorTable(4,gpu(p*7+5));routed->warm(p);}routed->prepare();}
-#endif
   std::vector<Pixels> snapshots; snapshots.reserve(8);
   for(unsigned pass=0;pass<6;++pass){
    for(auto index:reads[pass])if(index>=0)state(index,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
    for(auto index:writes[pass])if(index>=0)state(index,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
    list->SetPipelineState(reconstructed&&mode!=2&&pass==3?adapted_compute.Get():compute[pass].Get());list->SetComputeRootDescriptorTable(3,gpu(pass*7));list->SetComputeRootDescriptorTable(4,gpu(pass*7+5));
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-   if(routed){list->SetPipelineState(pass?compute[pass].Get():original_horizontal.Get());routed->dispatch(pass);}
-   else
-#endif
    if(!(fault==2&&pass==5))list->Dispatch(groups[pass][0],groups[pass][1],groups[pass][2]);
    // Keep each logical writer's image, including Image BEFORE its reuse.
    const unsigned index=pass==3?5:pass==4?8:static_cast<unsigned>(writes[pass][0]);
@@ -230,17 +212,8 @@ struct Pipeline : Gpu {
   state(9,D3D12_RESOURCE_STATE_COPY_SOURCE);Pixels final(device.Get(),resources[9]->GetDesc(),D3D12_HEAP_TYPE_READBACK);final.copy(list.Get(),resources[9].Get(),false);
   std::vector<Pixels> depth_readback;
   if(depth){state(0,D3D12_RESOURCE_STATE_COPY_SOURCE);depth_readback.emplace_back(device.Get(),resources[0]->GetDesc(),D3D12_HEAP_TYPE_READBACK);depth_readback.back().copy(list.Get(),resources[0].Get(),false);}
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  if(routed)routed->choose();
-#endif
   hr(list->Close(),"close");ID3D12CommandList *lists[]{list.Get()};queue->ExecuteCommandLists(1,lists);
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  if(routed)routed->submitted(queue.Get(),sequence+1);
-#endif
   wait();messages();
-#ifdef MHW_DOF_NATIVE_ROUTE_FIXTURE
-  if(routed){routed->retire(allocator.Get(),fence.Get(),sequence);messages();std::cout<<"PASS production six-dispatch route, 7 recipe negatives, exact binding restoration and fence/Reset retirement\n";}
-#endif
   Result r;require(snapshots.size()==7,"writer snapshots");for(unsigned i=0;i<7;++i){const auto raw=snapshots[i].read();r.stages[i]=native_formats?dof_formats::decode(raw,snapshots[i].footprint.Footprint.Format):raw;}r.output=final.read();
   if(depth){r.depth=depth_readback.back().read();require(r.depth.size()==depth->pixels.size(),"depth readback extent");
    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)require(std::bit_cast<unsigned>(r.depth[static_cast<std::size_t>(y)*w+x])==std::bit_cast<unsigned>(depth->at(x,y,*capture,mode==4)),"depth input preserved bit-exactly");

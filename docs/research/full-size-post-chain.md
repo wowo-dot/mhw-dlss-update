@@ -448,3 +448,44 @@ frame owns). Projections are counted per viewport.
 **game-124 (v0.25.10):** the user: "tent looks corrected". 3,882 projections
 from viewport 1 (the tent), 0 producer refusals, 0 unpublished frames, 12,400
 armed and planned frames for 12,398 DLSS frames, 1 skip, fault 0.
+
+## The only route (v0.26.0)
+
+After the long session of game-124 (Fatalis, Safi'jiiva, Alatreon, Kulve
+Taroth, the Guiding Lands, the Rotten Vale, menus and 3D previews, photo mode,
+maps, the tent, alt-tab, depth-of-field toggles, preset changes; over 400,000
+frames, fault 0) and the live-aspect fix (v0.25.12), full_post became the only
+route at a reduced render scale. The per-effect route is gone.
+
+- **full_post is always on.** Its gates and hooks are installed
+  unconditionally. The `full_post` ini key is retired: accepted and ignored.
+- **Every plan is an identity plan.** At render scale 1.0 every frame is
+  planned. At a reduced scale only frames full_post armed are planned; any other
+  frame keeps the game's own upscale (`unarmed` in the summary). The hand-off
+  is TAA, the TAA copy, full_post's slot, the late draws (the silhouettes), and
+  the final copy.
+- **The post queue completes on the publishing thread.** Plans used to be built
+  only after the motion filter's callback hook (`0x24ca1f0`, caller
+  `0x24f228b`) had run once on that thread. They are now built on the thread
+  that published the frame (TAA's producer, inside TAA's callback). The motion
+  hook is gone, so a frame without that filter is still planned.
+- **Removed:**
+  - the per-effect plan builder and its helpers;
+  - effect replay: the draw-execution hook `0x259d670` and the effect pipelines;
+  - haze capture (`0x24c7760`), the dependency, overlay and depth-of-field
+    compute routes, and their diagnostics;
+  - the prepared-queue recorder;
+  - three gates, now 185.
+- **The plan:** 4 resource slots instead of 32, and about 12 MB less static
+  memory.
+- **Tests:**
+  - a new end-to-end identity stream: 96 frames each on one list, on two lists
+    in both CPU orders, and with the game's own resolve;
+  - the identity plan's discovery, with 11 malformed graphs;
+  - the publishing-thread queue completion;
+  - the per-effect route's fixtures and unit tests were removed with it;
+  - 668 tests in all.
+
+The effects library and the shaders stay for the older research probes and
+tools (`mhw_scaled_temporal_probe`, the output probe, the filter and DoF
+fixtures), which the alpha does not link.

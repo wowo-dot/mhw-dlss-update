@@ -1,5 +1,3 @@
-EXTERN mhw_scaled_postfilter:PROC
-EXTERN mhw_scaled_draw_execution:PROC
 EXTERN mhw_scaled_stream_final:PROC
 EXTERN mhw_scaled_copy_execution:PROC
 EXTERN mhw_scaled_indexed_execution:PROC
@@ -81,8 +79,6 @@ ENDIF
 name ENDP
 ENDM
 .code
-ENTRY scaled_postfilter_entry, mhw_scaled_postfilter, 0
-ENTRY scaled_draw_execution_entry, mhw_scaled_draw_execution, 0
 ENTRY scaled_stream_final_entry, mhw_scaled_stream_final, 2
 ENTRY scaled_copy_execution_entry, mhw_scaled_copy_execution, 0
 ENTRY scaled_indexed_execution_entry, mhw_scaled_indexed_execution, 0

@@ -69,13 +69,12 @@ DWORD WINAPI worker(void *) noexcept {
     if(installed)while(cd::healthy()){
         if(WaitForSingleObject(stop.value,5000)!=WAIT_TIMEOUT)break;
         ++samples;
-        cd::save_compute_depth(output/name);
         // Constant-size latest status plus logarithmically sampled durable log.
         {std::ofstream status(output/(name+".status.json"),std::ios::binary|std::ios::trunc);cd::write(status);if(!status)break;}
         if(samples<=12||(samples&(samples-1))==0)cd::write(log);
         if(!log)break;
     }
-    cd::finish();cd::save_compute_depth(output/name);cd::save_rejected_shader(output/(name+"-rejected-taa.dxbc"));cd::write(log);
+    cd::finish();cd::save_rejected_shader(output/(name+"-rejected-taa.dxbc"));cd::write(log);
     log<<"{\"event\":\"stopped\",\"armed\":"<<installed<<",\"healthy\":"<<cd::healthy()<<",\"dll_pinned\":true}\n"<<std::flush;
     return cd::healthy()?0:11;
   }catch(...){mhw::continuous_dlaa::finish();return 12;}

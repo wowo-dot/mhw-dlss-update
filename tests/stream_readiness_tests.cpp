@@ -1,5 +1,4 @@
 #include "../src/scaled_temporal/readiness_trace.hpp"
-#include "../src/scaled_temporal/effect_order.hpp"
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -24,13 +23,6 @@ Trace::Snapshot sample(unsigned reason=0){
 }
 void emit(const std::string &name,const Trace &t){std::cout<<std::boolalpha<<"{\"case\":\""<<name<<"\",\"trace\":";t.write(std::cout);std::cout<<"}\n";}
 int main(){
-    // game-38: a build that failed after it counted haze and 8 overlays read
-    // stages past the 4-entry haze table (a garbage draw index).
-    for(const bool haze:{false,true})for(unsigned overlays=0;overlays<=8;++overlays){
-        std::array<bool,12> seen{};const unsigned count=(haze?4U:3U)+overlays;
-        for(unsigned ordinal=0;ordinal<count;++ordinal){const auto stage=mhw::scaled_temporal::unordered_effect_stage(haze,ordinal);
-            check(stage<seen.size()&&!seen[stage]&&(haze||stage!=3),"unordered stages are distinct plan stages");seen[stage]=true;}
-    }
     {Trace t;emit("empty",t);}
     for(unsigned reason=0;reason<Trace::reason_count;++reason){Trace t;unsigned captures{};
         t.note(static_cast<Trace::Reason>(reason),[&]{++captures;return sample(reason);});

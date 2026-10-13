@@ -24,6 +24,22 @@ struct PostCensus {
  std::uint64_t captured{},next_latest{};
 };
 PostCensus census;
+// A pointer that is one of this device's D3D12 resources: its description and
+// plane count, with a reference the caller adopts. The SEH boundary holds no
+// destructible C++ locals; a failure releases what it acquired.
+bool compute_describe(std::uintptr_t candidate,ID3D12Resource **out,D3D12_RESOURCE_DESC *desc,unsigned *planes) noexcept {
+ ID3D12Resource *held{};ID3D12Device *device{};bool ok=false;
+ __try {
+  auto *r=reinterpret_cast<ID3D12Resource *>(candidate);
+  if(SUCCEEDED(r->QueryInterface(IID_PPV_ARGS(&held)))&&held==r&&
+     SUCCEEDED(held->GetDevice(IID_PPV_ARGS(&device)))&&reinterpret_cast<std::uintptr_t>(device)==cfg.device){
+   *desc=held->GetDesc();D3D12_FEATURE_DATA_FORMAT_INFO info{desc->Format,0};
+   ok=SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_INFO,&info,sizeof(info)));
+   if(ok)*planes=info.PlaneCount;
+  }
+ }__except(EXCEPTION_EXECUTE_HANDLER){ok=false;}
+ if(device)device->Release();if(!ok&&held){held->Release();held=nullptr;}*out=held;return ok;
+}
 unsigned census_resource(PostCensus::Sample &s,std::uintptr_t pointer){
  if(!pointer)return UINT_MAX;
  for(unsigned i=0;i<s.resource_count;++i)if(s.resources[i].pointer==pointer)return i;
