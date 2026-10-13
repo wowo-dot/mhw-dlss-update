@@ -24,6 +24,12 @@ int main() {
         require(parse_multiplier("2x") == 2 && parse_multiplier("6X") == 6 && parse_multiplier("8x") == 8, "multiplier text");
         require(!parse_multiplier("off") && !parse_multiplier("1x") && !parse_multiplier("9x") && !parse_multiplier("") &&
             !parse_multiplier("4") && !parse_multiplier("10x"), "non-multiplier text rejected");
+        // game-124: a fault under SDK pacing keeps the game on the SDK's chain.
+        require(fault_keeps_routing(PresentationContract::sdk_paced) && !fault_keeps_routing(PresentationContract::synchronous_native),
+            "paced faults keep routing; synchronous faults fall back to the physical chain");
+        require(presentation_result(PresentationContract::sdk_paced, 0, DXGI_ERROR_INVALID_CALL, S_OK).fault &&
+            !presentation_result(PresentationContract::sdk_paced, 0, DXGI_ERROR_INVALID_CALL, S_OK).forward_native,
+            "a failed paced Present is a fault, never a second native present");
         require(paced_host_call(0x1234, 0x1234, 7, 7), "owned logical chain routes on host thread");
         require(!paced_host_call(0x1234, 0x1234, 8, 7), "SDK worker on same physical chain stays native");
         require(!paced_host_call(0x5678, 0x1234, 7, 7), "another physical chain stays native");

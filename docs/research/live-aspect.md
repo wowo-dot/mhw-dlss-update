@@ -269,3 +269,40 @@ The user tried to break it and could not.
 - **Health:** DLSS fault 0 for the whole session (20,104 frames); clean exit.
 
 Live 16:9 / 21:9 recovery (roadmap step 2, part B) is done; v0.23.2 is tagged.
+
+## game-124 (v0.25.10): a crash after repeated switches at 6x frame generation
+
+Two runs crashed the same way. In the second, eight switches at Performance
+with 6x MFG passed, about one every 1.3 s. Then:
+
+1. The Reflex frame tracker faulted at an engine frame's end: stage 5, the
+   policy disabled (0x100), `eErrorInvalidIntegration` (19). Frame generation
+   stopped (`fg_stopped`, reason `reflex_frames`).
+2. `presentation_state` showed `faults: 1, routing: false`.
+3. A render worker crashed in `D3D12Core.dll`: access violation reading
+   0x40000001b0.
+
+**The full dump** (WER LocalDumps, DumpType 2; stays in `local/dumps`):
+
+- The faulting thread is in the game's barrier executor for packet opcode 22
+  (`sMhRender::execute2` case 22, state vtable slot 24, `sub_14259C100`). It
+  transitions a target COMMON→RENDER_TARGET (packet +0x18 = 0): the back
+  buffer. The call went through our `barrier_hook`, which forwards the game's
+  array unchanged.
+- The barrier's resource was 0x4000000000. It is read from the owner's backend:
+  `[backend + 0x48 + 8·index]`, index at backend +0x2c. The index was **4**:
+  past the game's back-buffer table, so it read garbage.
+
+**Cause.** Under SDK pacing (frame generation) the game renders into
+Streamline's buffers. Our `index_hook` returns Streamline's
+`GetCurrentBackBufferIndex` (0..2) only while routing is on. A presentation
+fault (`fault()`: a failed paced Present, or a resize that cannot be
+described) turned routing off. The game then got the physical chain's index:
+0..5, with six buffers for 6x.
+
+**v0.25.11:** under SDK pacing, a routed fault keeps routing
+(`fault_keeps_routing`). The worker turns frame generation off, as the stop
+path already intended ("routing stays live until exit"). The synchronous
+Reflex-only contract still falls back. The fault's site and HRESULT are logged
+in `presentation_state` (`fault_site`, `fault_hr`), to find out why the paced
+Present failed during the switch.

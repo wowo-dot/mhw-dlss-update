@@ -12,4 +12,17 @@ constexpr PresentDecision presentation_result(PresentationContract contract, uns
     if (contract == PresentationContract::sdk_paced) return {sdk_result, FAILED(sdk_result), false};
     return {native_result, observed_native_calls != 1 || FAILED(sdk_result), observed_native_calls == 0};
 }
+// A fault on a routed chain (a failed Present, a resize that cannot be
+// described). Under SDK pacing the game renders into the SDK's back buffers
+// and indexes them by the SDK's GetCurrentBackBufferIndex, so routing stays:
+// forwarding to the physical chain would give it that chain's indices (0..5
+// with six buffers for six-times frame generation), past the game's own
+// back-buffer table (game-124: a garbage resource in its next back-buffer
+// barrier, and D3D12 crashed). Frame generation is turned off instead. The
+// synchronous contract renders into the physical buffers, so it falls back.
+constexpr bool fault_keeps_routing(PresentationContract contract) noexcept {
+    return contract == PresentationContract::sdk_paced;
+}
+// Where a routed fault happened (PresentationStats::fault_site).
+enum class FaultSite : unsigned { none, present, present1, resize, resize1 };
 }

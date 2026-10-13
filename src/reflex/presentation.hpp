@@ -15,6 +15,8 @@
 namespace mhw::reflex {
 struct PresentationStats {
     std::uint64_t queues{}, swapchains{}, presents{}, native_presents{}, test_presents{}, resizes{}, faults{}, sdk_paced_presents{};
+    // The last routed fault: FaultSite and its HRESULT (0 for a describe failure).
+    std::uint32_t fault_site{}, fault_hr{};
     std::uint32_t width{}, height{}, format{}, buffers{};
     std::uintptr_t native_device{}, native_swapchain{}, proxy_swapchain{};
     unsigned installed_hooks{}, pending_calls{};

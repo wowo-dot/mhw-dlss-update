@@ -153,6 +153,12 @@ struct Presentation::State {
     }
 
     void fault() noexcept { ++stats.faults; accepting.store(false); }
+    // A fault on the routed chain: counted, and routing ends only where the
+    // game can render into the physical buffers (fault_keeps_routing).
+    void runtime_fault(FaultSite site, HRESULT hr) noexcept {
+        ++stats.faults; stats.fault_site = static_cast<std::uint32_t>(site); stats.fault_hr = static_cast<std::uint32_t>(hr);
+        if (!fault_keeps_routing(contract)) accepting.store(false);
+    }
     void add(unsigned index, IUnknown* object, unsigned slot, void* detour) {
         auto** table = *reinterpret_cast<void***>(object);
         auto* target = table[slot]; require(image_function(target), "presentation-native-code");
@@ -429,7 +435,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
         const auto hr = s.proxy_swap->Present(interval, flags);
         if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
         const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
-        if (decision.fault) s.fault();
+        if (decision.fault) s.runtime_fault(FaultSite::present, hr);
         if (decision.forward_native) record_present(self, original<PresentFn>(s, 4)(self, interval, flags));
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
@@ -475,7 +481,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
     return lifecycle_call(8, self, Args{count, w, h, static_cast<unsigned>(format), flags}, [&] {
     return route(self,{8,0,0,0,0,0,caller,0,0,{count,w,h,static_cast<unsigned>(format),flags}}, [&](auto& s,auto&) {
         const auto hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
-        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.runtime_fault(FaultSite::resize, S_OK); } }
 #ifdef MHW_FG_SCENE_PROBE
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
 #endif
@@ -496,7 +502,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
         const auto hr = s.proxy_swap->Present1(interval, flags, params);
         if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
         const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
-        if (decision.fault) s.fault();
+        if (decision.fault) s.runtime_fault(FaultSite::present1, hr);
         if (decision.forward_native) record_present(self, original<Present1Fn>(s, 9)(self, interval, flags, params));
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
@@ -541,7 +547,7 @@ HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w
             // Accepted Reflex-only path preserves the native queue arguments.
             hr = s.proxy_swap->ResizeBuffers1(count, w, h, format, flags, masks, queues);
         }
-        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(); } }
+        if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.runtime_fault(FaultSite::resize1, S_OK); } }
 #ifdef MHW_FG_SCENE_PROBE
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
 #endif

@@ -1020,7 +1020,8 @@ DWORD WINAPI worker(void*) noexcept {
                 }
                 log << "{\"event\":\"alpha_arm\",\"ready\":" << arm_now << ",\"attempts\":" << attempts << ",\"waited_ms\":"
                     << GetTickCount64()-wait_start << ",\"first_reason\":" << quoted(first_reason) << ",\"last_reason\":" << quoted(not_ready)
-                    << ",\"routing\":" << stats.routing << ",\"faults\":" << stats.faults << "}\n" << std::flush;
+                    << ",\"routing\":" << stats.routing << ",\"faults\":" << stats.faults << ",\"fault_site\":" << stats.fault_site
+                    << ",\"fault_hr\":" << stats.fault_hr << "}\n" << std::flush;
                 if(!arm_now)mhw::alpha::status::worker_failed(not_ready.empty()?std::string_view("presentation"):std::string_view(not_ready));
             }
             if(arm_now) {
@@ -1349,7 +1350,7 @@ DWORD WINAPI worker(void*) noexcept {
                 if(stats.resizes!=last_resizes||stats.swapchains!=last_swapchains){
                     log<<"{\"event\":\"presentation_state\",\"swapchains\":"<<stats.swapchains<<",\"resizes\":"<<stats.resizes
                        <<",\"width\":"<<stats.width<<",\"height\":"<<stats.height<<",\"buffers\":"<<stats.buffers<<",\"faults\":"<<stats.faults
-                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<"}\n"<<std::flush;
+                       <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr<<"}\n"<<std::flush;
                     last_resizes=stats.resizes;last_swapchains=stats.swapchains;
                 }
                 Sleep(100);
