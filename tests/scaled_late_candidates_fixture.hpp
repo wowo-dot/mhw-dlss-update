@@ -77,6 +77,11 @@ void check_late_candidates(fx::Fixture &f){
   for(unsigned i=0;i<5;++i){const auto backing=a.take(0x48);owners[i]=a.take(0x68);put(owners[i]+0x60,backing);
    put(backing+0x20,reinterpret_cast<std::uintptr_t>(resources[i].Get()));put(backing+0x40,resources[i]->GetGPUVirtualAddress()+4096);put(backing+0x10,32768U);}
   route::LatePacket packet;packet.bindings[1]=ia;packet.arguments={600,0,0};
+  // The recipe's input layout: one element per stream the mesh reads.
+  packet.recipe=std::make_shared<route::SilhouetteCpu>();
+  const auto reads=[&](unsigned slots){packet.recipe->native.input_count=slots;
+   for(unsigned i=0;i<slots;++i){packet.recipe->layout.elements[i]={};packet.recipe->layout.elements[i].InputSlot=i;}};
+  reads(1);
   mhw::temporal_present::observer::RasterBindings raster;
   raster.generation=1;raster.vertex_known=raster.viewport_known=raster.scissor_known=raster.topology_known=raster.index_known=true;
   raster.topology=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -88,13 +93,17 @@ void check_late_candidates(fx::Fixture &f){
   const auto admit=[&](std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,5> &pinned){std::array<std::uint64_t,5> seen{};return route::silhouette_buffers(packet,raster,pinned,seen);};
   std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,5> pinned;
   bind(1,9);require(admit(pinned)==0&&pinned[0]&&!pinned[1]&&pinned[4],"one vertex stream (as before v0.24.3)");
-  pinned={};bind(4,9);require(admit(pinned)==0&&pinned[0]&&pinned[1]&&pinned[2]&&pinned[3]&&pinned[4],"four vertex streams, all pinned");
+  reads(4);pinned={};bind(4,9);require(admit(pinned)==0&&pinned[0]&&pinned[1]&&pinned[2]&&pinned[3]&&pinned[4],"four vertex streams, all pinned");
   bind(4,9);raster.vertex_mask=7;require(admit(pinned)==2,"a bound mask that is not the engine's streams");
   bind(4,9);raster.vertex_buffers[2].StrideInBytes=20;require(admit(pinned)==36,"stream 2's stride mismatch");
   bind(4,9);put(ia+0x2c,1024U+16);require(admit(pinned)==34,"stream 2's location mismatch");
   pinned={};bind(4,1);require(admit(pinned)==0&&!pinned[1]&&pinned[2],"a null stream between bound ones has a zero view");
   bind(4,1);raster.vertex_buffers[1]={resources[1]->GetGPUVirtualAddress(),16,8};require(admit(pinned)==27,"a null stream with a non-zero view");
-  bind(4,9);put(ia+0x21,static_cast<unsigned char>(6));raster.vertex_buffers[1].StrideInBytes=6;require(admit(pinned)==23,"stream 1's stride is not a multiple of 4");}
+  bind(4,9);put(ia+0x21,static_cast<unsigned char>(6));raster.vertex_buffers[1].StrideInBytes=6;require(admit(pinned)==23,"stream 1's stride is not a multiple of 4");
+  // v0.24.4: three streams after a four-stream draw left slot 3 bound.
+  reads(3);pinned={};bind(3,9);raster.vertex_mask=15;require(admit(pinned)==0&&pinned[2]&&!pinned[3],"a stale slot above the engine's streams");
+  reads(4);bind(3,9);raster.vertex_mask=15;require(admit(pinned)==2,"an input layout reading the stale slot");
+  reads(3);bind(3,9);raster.vertex_mask=11;require(admit(pinned)==2,"an engine stream not bound");}
  std::ostringstream summary;route::write_summary(summary);
  require(summary.str().find("\"late_draws\":{\"planned\":")!=std::string::npos&&summary.str().find("\"max\":65,\"capacity\":64}")!=std::string::npos,"summary reports late draws");
  route::cfg=saved;

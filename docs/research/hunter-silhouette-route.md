@@ -148,6 +148,18 @@ draws native with rejection 8 (buffers, failed check 2: `vertex_mask` 15, not
     stride and location mismatches, and a null stream with a zero or non-zero
     view, on real WARP buffers.
 
+**game-101 (v0.24.3, perf12):**
+- 1,038,628 silhouette draws corrected, against 664,140 in game-100.
+- 14,027 still stayed native, with the same check failing (bound mask 15).
+  The engine sets only the slots it uses (`IASetVertexBuffers(0, last + 1)`),
+  so a three-stream draw after a four-stream one leaves slot 3 bound with the
+  earlier view.
+- **v0.24.4:** the engine's streams must all be bound, and slots above them
+  may hold anything. The recipe's input layout must read only the engine's
+  streams (every element's InputSlot below their count).
+- Fixture: three streams with a stale slot 3 is accepted; an input layout
+  reading slot 3 is refused; an engine stream left unbound is refused.
+
 The list of rejections and fixes continues:
    - `Simple_Mt_AlphaTest` stays native: it writes nothing (above, v0.24.1).
 

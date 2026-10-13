@@ -571,3 +571,30 @@ a call) and `route_draw` (~165 µs, 0.5 µs a call).
   - Barriers' resource lookups use the same filter.
   - perf_tests: about 2% of unrelated addresses pass the union at 1,300
     entries, and under 1% pass a plan filter at 40.
+
+## perf12 (v0.24.3, game-101)
+
+Same setup as perf11: the training grounds with the cart layouts, depth of
+field on.
+
+| Steady 25 s windows | fps | 1% low | p99 | CPU busy | GPU busy |
+|---|---|---|---|---|---|
+| DLSS running (6) | 295.4-299.2 | 212-221 | 4.53-4.71 ms | 3.20-3.24 ms | 2.47-2.80 ms |
+| DLSS paused (6) | 297.0-299.8 | 221-225 | 4.44-4.52 ms | 3.20-3.23 ms | 2.00-2.12 ms |
+
+- **Own time:**
+  - `route_draw` fell from about 165 to about 35 µs a frame (-80%).
+  - `route_indexed` fell from about 260 to about 170 µs a frame. The rest is
+    mostly waiting for the route lock, which the per-frame plan build
+    (`route_queue`, 0.15-0.2 ms) holds.
+- **Frame time:** unchanged at about -0.7% fps against paused. On a
+  16-core CPU that work overlaps, so fewer cores remain untested.
+- **The plan build's lock time** is the next candidate if a CPU with fewer
+  cores shows it.
+- **Open, separate:** in the first ~35 s after arming (title screen and menus,
+  with the game's depth of field on from launch), 1,482 frames had plan
+  rejection 17: the overlay command gate, with middle-chain filters at orders
+  16 and 1024 (vtable RVA 0x3536c98). Those frames fell back cleanly, and two
+  single frames later had a radial blur (order 4100) and a 26005 filter.
+  Perf11 enabled depth of field only after the title screen and had none.
+  Check in the long session.

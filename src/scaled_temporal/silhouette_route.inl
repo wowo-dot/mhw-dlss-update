@@ -146,6 +146,9 @@ bool silhouette_bindings(const LatePacket &r,std::array<unsigned,28> &screen,std
 // and its offset at +0x40. It binds streams 0..last, a zero view for a null
 // owner in between. The hunter's AlphaDither silhouette meshes bind four
 // (game-100: 75,740 draws stayed native before v0.24.3); the others one.
+// Slots above the engine's streams keep what an earlier draw bound (game-101:
+// 14,027 draws with three streams after a four-stream one, v0.24.4): they
+// are allowed when the input layout reads only the engine's streams.
 //
 // The engine's buffer may be a range inside a larger D3D12 buffer: the
 // resource must contain [address, address + bytes), and the bound views are
@@ -165,7 +168,9 @@ unsigned silhouette_buffers(const LatePacket &r,const obs::RasterBindings &b,std
  if(b.topology!=D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST)return 4;if(b.index_buffer.Format!=DXGI_FORMAT_R16_UINT)return 5;
  const auto ia=r.bindings[1];std::array<std::uintptr_t,4> owners{};unsigned streams{};
  for(unsigned k=0;k<4;++k){if(!field(ia,8*k,owners[k]))return 6;if(owners[k])streams=k+1;}
- if(!owners[0]||b.vertex_mask!=(1U<<streams)-1)return 2;
+ const auto needed=(1U<<streams)-1;
+ if(!owners[0]||(b.vertex_mask&needed)!=needed||!r.recipe||r.recipe->native.input_count>r.recipe->layout.elements.size())return 2;
+ for(unsigned i=0;i<r.recipe->native.input_count;++i)if(r.recipe->layout.elements[i].InputSlot>=streams)return 2;
  const auto code=[](unsigned k,unsigned c){return k?10+10*k+c:6+c;};
  for(unsigned k=0;k<streams;++k){const auto &view=b.vertex_buffers[k];
   if(!owners[k]){if(view.BufferLocation||view.SizeInBytes)return code(k,7);continue;}
