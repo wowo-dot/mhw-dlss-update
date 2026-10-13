@@ -21,6 +21,7 @@
 #include "silhouette_draw.hpp"
 #include "watch_filter.hpp"
 #include "full_post.hpp"
+#include "full_post_inputs.hpp"
 #ifdef MHW_FG_SCENE_PROBE
 #include "../frame_generation/scene_trace.hpp"
 #endif
@@ -137,6 +138,10 @@ struct Plan {
  // copy and that final copy (handoff use 2; resources 2 and 3 its source and
  // destination).
  bool identity{},final_copied{};std::uintptr_t final_copy{};std::array<std::byte,64> final_copy_fields{};
+ // full_post: the inputs' upscale slot (full_post.inl), in the hand-off
+ // between the TAA copy and the final copy (node 2; the final copy is then
+ // node 3), and the depth's state at the TAA consumer (its admission's).
+ std::uintptr_t full_slot{},full_depth_resource{};bool full_slot_done{},full_depth_known{};unsigned full_depth_state{};
  // Late indexed packets are frozen before recording workers start, sorted
  // in native key/insertion order and included in GPU ownership. About 17 per
  // frame in combat; Alatreon's arrival exceeded the former 32 (game-45).
@@ -158,7 +163,8 @@ unsigned handoff_draw(const Plan &p,unsigned stage){
 }
 unsigned handoff_indexed(const Plan &p,unsigned position){return 1+effect_count(p)+(p.dof?6:0)+position;}
 unsigned handoff_compute(const Plan &p,unsigned pass){return 2+effect_ordinal(p,p.dof->stage)+pass;}
-unsigned handoff_count(const Plan &p){return 2+effect_count(p)+(p.dof?6:0)+p.late_count+(p.identity?1U:0U);}
+unsigned handoff_count(const Plan &p){return 2+effect_count(p)+(p.dof?6:0)+p.late_count+(p.identity?1U:0U)+(p.full_slot?1U:0U);}
+unsigned final_node(const Plan &p){return p.full_slot?3U:2U;}
 unsigned output_index(const Plan &p,unsigned stage){return stage<4?2+stage:p.targets[stage];}
 unsigned resource_count(const Plan &p){return p.identity?4U:(p.has_haze?9U:5U)+p.extra_resources;}
 struct Pipeline {std::unique_ptr<Effect> effect;std::string signature;ComPtr<ID3D12RootSignature> root;};
@@ -560,7 +566,7 @@ Plan::Recording *track_recording(Plan &p,ID3D12GraphicsCommandList *list,std::ui
  return empty;
 }
 void completed(Plan &p){
- if(!p.completed&&p.resolved&&p.copied&&(!p.identity||p.final_copied)&&p.recorded_draws==effect_count(p)&&(!p.dof||p.dof->dispatched==63)&&
+ if(!p.completed&&p.resolved&&p.copied&&(!p.identity||p.final_copied)&&(!p.full_slot||p.full_slot_done)&&p.recorded_draws==effect_count(p)&&(!p.dof||p.dof->dispatched==63)&&
     p.handoff.recorded()==p.handoff.count()){
   p.completed=true;++complete;overlay_completed+=p.overlay_count;if(shared_overlay_key(p))++overlay_shared_completed;if(p.has_haze)++haze_complete;
   unsigned count{};for(const auto &r:p.recordings)if(r.list)++count;if(count>1)++multilist_frames;
@@ -615,7 +621,7 @@ bool prepare_frame(Plan &p){
  for(unsigned ordinal=0;ordinal<effect_count(p);++ordinal){const auto stage=effect_stage(p,ordinal);packets[handoff_draw(p,stage)]=p.draws[stage].draw.packet;}
  if(p.dof)for(unsigned pass=0;pass<6;++pass)packets[handoff_compute(p,pass)]=p.dof->passes[pass].packet;
  for(unsigned i=0;i<p.late_count;++i)packets[handoff_indexed(p,i)]=p.late_packets[i];
- if(p.identity)packets[2]=p.final_copy;
+ if(p.identity){if(p.full_slot)packets[2]=p.full_slot;packets[final_node(p)]=p.final_copy;}
  if(!prepare_selector(p)||p.handoff.prepare({p.stamp.frame,p.stamp.epoch,p.stamp.context,p.stamp.view},
      std::span(packets).first(handoff_count(p)))!=FrameHandoff::Result::ok)return false;
  p.prepared=true;p.claimed=true;overlay_planned+=p.overlay_count;if(shared_overlay_key(p))++overlay_shared_prepared;
@@ -662,10 +668,17 @@ bool build_identity_plan(Plan &p,OutputDiagnostics::Graph &observation){
   unsigned mode{},ds{},ss{};std::array<unsigned,2> xy{};std::array<unsigned,4> rect{};std::uintptr_t optional{};
   return field(packet,0x20,mode)&&field(packet,0x24,ds)&&field(packet,0x28,ss)&&field(packet,0x30,xy)&&field(packet,0x38,rect)&&
    field(packet,0x48,optional)&&!mode&&!ds&&!ss&&!xy[0]&&!xy[1]&&!optional&&rect==expected;};
+ // full_post: the inputs' upscale slot this thread recorded after TAA's
+ // callback (full_post.inl), when verified, joins the plan if it is in this
+ // queue exactly once.
+ std::uintptr_t slot{};unsigned slots{};
+ if(full_frame.load()==s.frame&&!(render_w==width&&render_h==height)){const auto &q=full_slots[s.frame%full_slots.size()];
+  if(q.frame==s.frame&&q.context==s.context&&q.valid&&!q.executed)slot=q.packet;}
  std::array<Command,256> block;unsigned handoffs{},finals{};
  for(unsigned base=0;base<commands;base+=256){const auto n=(std::min)(256U,commands-base);
   if(!pb::copy_memory(array+16ULL*base,block.data(),n*sizeof(Command))){plan_rejection=9;return false;}
   for(unsigned j=0;j<n;++j){const auto &c=block[j];unsigned raw{};
+   if(slot&&c.packet==slot)slots+=c.key==full_slot_key?1U:2U;
    if(c.key!=0x78000002&&(c.key>>27)!=16)continue;
    if(!field(c.packet,0,raw)){plan_rejection=10;return false;}
    if((raw&31)!=13)continue;
@@ -681,6 +694,7 @@ bool build_identity_plan(Plan &p,OutputDiagnostics::Graph &observation){
   }
  }
  if(handoffs!=1||finals!=1){plan_rejection=15;return false;}
+ p.full_slot=slots==1?slot:0;if(p.full_slot)++full_counts.slots_planned;
  unsigned again{};std::uintptr_t again_array{};
  if(!field(s.context,0x2b80,again)||again!=commands||!field(s.context,0x2b78,again_array)||again_array!=array||!same_stamp(s)){plan_rejection=16;return false;}
  tb::Owner transfer,source,destination;
@@ -1076,6 +1090,7 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
 
 #include "dof_native_record.inl"
 #include "silhouette_route.inl"
+#include "full_post_slot.inl"
 
 bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *destination,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *source,const D3D12_BOX *box,std::uintptr_t caller){
  if(injecting||(filtering()&&copy_slot==UINT_MAX))return false;
@@ -1101,7 +1116,7 @@ bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCA
      d.Type!=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX||s.Type!=d.Type||d.SubresourceIndex||s.SubresourceIndex||
      (box&&(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||b.left||b.top||b.front||b.back!=1||b.right!=width||b.bottom!=height))){
    fail(5);return false;}
-  if(!retain_recording(p,list,bindings.generation)||p.handoff.record(2,p.final_copy,{reinterpret_cast<std::uintptr_t>(list),bindings.generation})!=FrameHandoff::Result::ok){fail(5);return false;}
+  if(!retain_recording(p,list,bindings.generation)||p.handoff.record(final_node(p),p.final_copy,{reinterpret_cast<std::uintptr_t>(list),bindings.generation})!=FrameHandoff::Result::ok){fail(5);return false;}
   reinterpret_cast<CopyFn>(originals[2])(list,destination,0,0,0,source,box);
   ++identity_final_copies;
   if(const auto observer=final_scene_observer.load()){
@@ -1130,6 +1145,8 @@ bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCA
 }
 void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *d,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *s,const D3D12_BOX *box){
  Guard guard;bool replaced=false;
+ // full_post's slot copy never runs (full_post_slot.inl).
+ if(full_slot_scope!=UINT_MAX&&!injecting){full_slot_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));return;}
 #ifdef MHW_FG_SCENE_PROBE
  const auto scene_receipt=scene_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
 #endif
@@ -1145,6 +1162,7 @@ namespace ht=perf::hook_timing;
 void full_post_enter(std::uintptr_t context) noexcept {full_enter(context);}
 void full_post_taa(std::uintptr_t context) noexcept {full_taa(context);}
 void full_post_exit(std::uintptr_t context) noexcept {full_exit(context);}
+void full_post_depth(const tb::Snapshot &s,unsigned state,std::uintptr_t resource) noexcept {full_depth(s,state,resource);}
 void post_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_post);++pending;const auto receipt=post_before(*f);bool returned=false;
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[0],f);ht::forward_end(timing);returned=true;}
  __finally{post_after(receipt,returned);--pending;ht::end(timing);}}
@@ -1226,11 +1244,15 @@ void copy_after(bool returned){if(copy_slot!=UINT_MAX){Lock lock;
  if(!returned||copy_calls!=1||!(copy_final?plans[copy_slot].final_copied:plans[copy_slot].copied))fail(5);}}
 void copy_dispatch(pb::Frame *f){
  auto timing=ht::begin(ht::route_copy);++pending;const auto old_slot=copy_slot;const auto old_recording=copy_recording;const auto old_calls=copy_calls;const auto old_final=copy_final;
- copy_final=false;copy_slot=filtering()&&!watched_packet(f->gpr[3])?UINT_MAX:copy_before(*f);bool returned=false;
+ const auto old_full=full_slot_scope;const auto old_full_state=full_slot_state;const auto old_full_calls=full_slot_calls;
+ // full_post's slot packet first: its copy is never the native one.
+ full_slot_scope=full_slot_before(*f);
+ copy_final=false;copy_slot=full_slot_scope!=UINT_MAX||(filtering()&&!watched_packet(f->gpr[3]))?UINT_MAX:copy_before(*f);bool returned=false;
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[4],f);ht::forward_end(timing);returned=true;}
  __finally{
-  copy_after(returned);
-  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;--pending;ht::end(timing);
+  copy_after(returned);if(full_slot_scope!=UINT_MAX)full_slot_after();
+  copy_slot=old_slot;copy_recording=old_recording;copy_calls=old_calls;copy_final=old_final;
+  full_slot_scope=old_full;full_slot_state=old_full_state;full_slot_calls=old_full_calls;--pending;ht::end(timing);
  }
 }
 void observe_final_scene(FinalSceneObserver observer) noexcept {final_scene_observer.store(observer);}
@@ -1295,6 +1317,8 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
   for(const auto &g:full_gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="full_post code gate";return false;}
   targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
   full_viewport=reinterpret_cast<FullViewportFn>(c.image+0x23d0330);full_copy=reinterpret_cast<FullCopyFn>(c.image+0x23c9250);
+  // The inputs' upscale (full_post_inputs.hpp); without it no frame arms.
+  if(std::string why;!full_inputs.prepare(reinterpret_cast<ID3D12Device *>(c.device),w,h,why))full_inputs_failure=why;
  }
  auto *device=reinterpret_cast<ID3D12Device *>(c.device);ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
 #ifndef MHW_ALPHA
@@ -1624,6 +1648,9 @@ bool resize(unsigned rw,unsigned rh,unsigned w,unsigned h,std::string &reason) n
   if(!valid_filter_geometry({rw,rh,w,h})){reason="stream extent";return false;}
   // The diagnostic depth readbacks are sized for the output at prepare.
   if(w!=width||h!=height)for(auto &capture:compute_depth_pixels)capture.disable();
+  // full_post's buffers follow the output (their old uses are complete: idle).
+  if(full_inputs.ready()&&(w!=full_inputs.width()||h!=full_inputs.height())){
+   if(std::string why;!full_inputs.prepare(reinterpret_cast<ID3D12Device *>(cfg.device),w,h,why))full_inputs_failure=why;}
   render_w=rw;render_h=rh;width=w;height=h;
   for(auto &p:pipelines)p={};
   for(auto &p:dependency_pipelines)p={};

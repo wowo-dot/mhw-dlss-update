@@ -645,6 +645,7 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
             static_cast<D3D12_RESOURCE_STATES>(depth_state),reinterpret_cast<DepthBarrierFn>(originals[8]),reinterpret_cast<DepthCopyFn>(originals[10]))){
             fail(44);return locked_skip(11);}
         ++depth_count;depth_consumer_admission.copied();
+        sr::full_post_depth(s,depth_state,reinterpret_cast<std::uintptr_t>(depth_resource));
     }
     #endif
     const bool qualified_depth=lease.depth

@@ -114,6 +114,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    require(!xy[0]&&!xy[1]&&!o,"DLAA copy origin");copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]}});};
   route::full_viewport=[](std::uintptr_t c,const int *r){viewports.push_back({r[0],r[1],r[2],r[3]});std::memcpy(reinterpret_cast<void *>(c+0x5c),r,16);};
   mhw::scaled_temporal::full_post_enabled.store(true);
+  {std::string why;require(route::full_inputs.prepare(f.device.Get(),128,64,why),"full_post inputs prepared");}
   const auto armed_frame=s.frame+1;
   // A frame arms only after one that ran TAA's callback.
   const auto no_taa=route::full_counts.no_taa.load();put(renderer+0x1f210,armed_frame);
@@ -141,6 +142,77 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
   route::full_post_enter(context);route::full_post_taa(context);
   require(viewports.size()==2&&route::full_counts.rect_mismatch.load()==mismatches+1,"rectangle mismatch refused");
   route::full_post_exit(context);
+  // v0.25.2: the inputs' upscale slot. After TAA's callback, in its key, the
+  // scheduler's context records an engine copy GBuffer4 -> GBuffer5 at
+  // (15, 3); the armed frame's identity plan takes it between the TAA copy and
+  // the final copy. The helper stand-in appends packets as the game's does
+  // (key (stage << 27) | ((+0x154 >> 5) + (+0x15c >> 5))).
+  {static Arena *helper_arena{};helper_arena=&a;
+   route::full_copy=[](std::uintptr_t c,std::uintptr_t d,int ds,const unsigned *xy,std::uintptr_t s_,int ss,const unsigned *r,const unsigned *o){
+    require(!o,"no optional copy argument");copies.push_back({c,d,s_,{r[0],r[1],r[2],r[3]}});
+    unsigned key{},sub{},count{};std::uintptr_t array{};
+    require(route::field(c,0x154,key)&&route::field(c,0x15c,sub)&&route::field(c,0x2b80,count)&&route::field(c,0x2b78,array)&&count<32,"helper context");
+    const auto packet=helper_arena->take(0x50);put(packet,13U);put(packet+0x10,d);put(packet+0x18,s_);put(packet+0x24,ds);put(packet+0x28,ss);
+    put(packet+0x30,std::array<unsigned,2>{xy[0],xy[1]});put(packet+0x38,std::array<unsigned,4>{r[0],r[1],r[2],r[3]});
+    put(array+16ULL*count,((key&31U)<<27)|(((key>>5)+(sub>>5))&0x7ffffffU));put(array+16ULL*count+8,packet);put(c+0x2b80,count+1);};
+   // The scene depth (view +0x628 -> +0xA0) and GBuffer4/5 (view +0x620 -> +0x78/+0x80).
+   const auto container=a.take(0x100),gbuffer=a.take(0x100);std::array<std::uintptr_t,3> input_owners{},input_backings{},input_resources{};
+   for(unsigned i=0;i<3;++i){input_owners[i]=a.take(0x100);input_backings[i]=a.take(0x40);input_resources[i]=a.take(0x10);
+    put(input_owners[i],image.base+0x3537870);put(input_owners[i]+0x58,2U);put(input_owners[i]+0x60,input_backings[i]);put(input_owners[i]+0x88,128U+(64U<<16));
+    put(input_owners[i]+0x90,i==0?16U:i==1?38U:40U);put(input_backings[i]+0x20,input_resources[i]);}
+   put(view+0x628,container);put(container+0xa0,input_owners[0]);put(view+0x620,gbuffer);put(gbuffer+0x78,input_owners[1]);put(gbuffer+0x80,input_owners[2]);
+   const unsigned taa_key=15U|(2U<<5);
+   // The final quad's tBaseMap is the grade's output here, as in the game.
+   const auto arm=[&](std::uint64_t armed,unsigned sub){
+    put(context+0x2b80,4U);put(renderer+0x1f210,armed-1);route::full_post_taa(context);put(renderer+0x1f210,armed);
+    put(context+0x154,16U);put(context+0x15c,sub);put(context+0x5c,full_rect);put(context+0x718,owners[3]);
+    const auto quad=route::final_before(frame);require(route::full_final(frame,quad),"armed for the slot");route::final_after(quad,true);
+    put(context+0x718,owners[1]);put(context+0x5c,render_rect);put(context+0x154,taa_key);
+    route::full_post_enter(context);route::full_post_taa(context);route::full_post_exit(context);};
+   const auto plan_for=[&](std::uint64_t armed){auto plan=std::make_unique<route::Plan>();plan->stamp=s;plan->stamp.frame=armed;
+    require(route::build_plan(*plan,motion)&&plan->identity,"armed frame planned as at DLAA");return plan;};
+   const auto armed_slot=armed_frame+1;const auto slots=route::full_counts.slots.load();arm(armed_slot,0x12U);
+   const auto &q=route::full_slots[armed_slot%route::full_slots.size()];
+   unsigned key{},count{};std::uintptr_t array{},entry_packet{};std::uint32_t entry_key{};
+   require(route::field(context,0x154,key)&&key==taa_key,"TAA's key restored");
+   require(route::full_counts.slots.load()==slots+1&&q.valid&&q.frame==armed_slot&&q.context==context&&!q.executed&&
+           q.depth.resource==input_resources[0]&&q.gbuffer4.resource==input_resources[1]&&q.gbuffer5.resource==input_resources[2],"slot recorded and verified");
+   require(copies.back().destination==input_owners[2]&&copies.back().source==input_owners[1]&&copies.back().rect==std::array<unsigned,4>{0,0,1,1},"GBuffer4 into GBuffer5, 1x1");
+   require(route::field(context,0x2b80,count)&&count==6&&route::field(context,0x2b78,array)&&route::field(array+16ULL*5,0,entry_key)&&entry_key==0x78000003U&&
+           route::field(array+16ULL*5,8,entry_packet)&&entry_packet==q.packet,"slot packet at key (15, 3)");
+   {const auto plan=plan_for(armed_slot);
+    require(plan->full_slot==q.packet&&route::handoff_count(*plan)==4&&route::final_node(*plan)==3,"the plan takes the slot before the final copy");
+    // The depth stays in its consumer state only if no planner node of its
+    // backing lies after TAA's dispatch, up to the slot.
+    Arena planner(0x80000);const auto saved_renderer=route::cfg.renderer;route::cfg.renderer=planner.base;
+    const auto planned=a.take(16*5),taa=a.take(0x40),after_slot=a.take(0x40),other=a.take(0x40),depth_node=a.take(0x20),other_node=a.take(0x20),other_backing=a.take(0x40);
+    put(taa,6U);put(other,6U);put(after_slot,6U);put(other_backing+0x20,a.take(0x10));
+    const std::array<std::uintptr_t,5> order{other,taa,copy,q.packet,after_slot};
+    for(unsigned i=0;i<5;++i)put(planned+16*i+8,order[i]);
+    put(planner.base+0x7af18,planned);put(planner.base+0x7af28,5U);put(planner.base+0x1f208,s.epoch+1);
+    plan->temporal.object=taa;
+    put(depth_node+8,input_backings[0]);put(other_node+8,other_backing);
+    require(route::full_depth_quiet(*plan,q),"no node: quiet");
+    put(taa+8,depth_node);put(after_slot+8,depth_node);put(copy+8,other_node);
+    require(route::full_depth_quiet(*plan,q),"nodes at TAA, after the slot or of other resources: quiet");
+    put(copy+8,depth_node);require(!route::full_depth_quiet(*plan,q),"a depth node between: not quiet");put(copy+8,std::uintptr_t{});
+    put(q.packet+8,depth_node);require(!route::full_depth_quiet(*plan,q),"a depth node at the slot: not quiet");put(q.packet+8,std::uintptr_t{});
+    put(copy,10U);require(!route::full_depth_quiet(*plan,q),"an unqualified nested copy between: not quiet");put(copy,13U);
+    put(planner.base+0x1f208,s.epoch);require(!route::full_depth_quiet(*plan,q),"another planner epoch: not quiet");
+    put(taa+8,std::uintptr_t{});put(after_slot+8,std::uintptr_t{});route::cfg.renderer=saved_renderer;}
+   // Refusals record no packet; the chain still switches.
+   const auto refused=[&](std::uint64_t armed,unsigned reason,unsigned sub,unsigned grade_order,const char *why){
+    const auto before=route::full_counts.slot_refusals[reason].load(),switches=route::full_counts.switches.load();
+    put(grade+0x144,grade_order);arm(armed,sub);put(grade+0x144,0U);
+    require(route::full_counts.slot_refusals[reason].load()==before+1&&route::full_counts.switches.load()==switches+1&&
+            route::field(context,0x2b80,count)&&count==5,why);
+    const auto plan=plan_for(armed);require(!plan->full_slot&&route::handoff_count(*plan)==3&&route::final_node(*plan)==2,"no slot in the plan");};
+   refused(armed_slot+1,5,0x12U,3U,"a filter at order 3 refuses the slot");
+   refused(armed_slot+2,4,0x32U,0U,"an added order refuses the slot");
+   put(context+0x2b80,4U);put(context+0x154,0U);put(context+0x15c,0U);put(view+0x620,std::uintptr_t{});put(view+0x628,std::uintptr_t{});route::full_slots={};
+   std::ostringstream summary;route::full_post_write(summary);
+   require(summary.str().find("\"inputs\":{\"ready\":1,\"failure\":\"\",\"bytes\":")!=std::string::npos,"inputs in the summary");
+   std::cout<<"PASS full_post inputs: slot at (15, 3) in TAA's key, planned before the final copy, depth quiet proof, refusals\n";}
   put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});
   mhw::scaled_temporal::full_post_enabled.store(false);route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;
   std::cout<<"PASS full_post: final quad to the DLAA copy, full rectangle after TAA, restored at the exit, refusals\n";}

@@ -22,6 +22,9 @@
 // - The projection helper (0x23cb520) divides by the view scale; while
 //   switched, that division is undone (radial blur, god rays).
 // - At the scheduler's exit, the render rectangle is restored.
+// - The post chain's render-size inputs (scene depth, GBuffer4/5 motion) are
+//   upscaled over their output-size textures, at a copy slot the scheduler
+//   records right after TAA (full_post.inl, full_post_inputs.hpp).
 namespace mhw::scaled_temporal {
 inline std::atomic<bool> full_post_enabled{};
 }
