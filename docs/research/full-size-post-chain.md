@@ -425,3 +425,26 @@ The tent is native because the runtime refuses its frames at TAA's producer,
 which full_post does not change (game-121 shows the same refusals). v0.25.9
 counts those refusals by check (`producer_refusals`, `producer_last`) to find
 out why.
+
+## The tent's projection (v0.25.9, v0.25.10)
+
+**game-123 (v0.25.9):** every tent frame was refused at TAA's producer with
+reason 7: the projection in the ring was from frame 14,083, while the tent
+frames reached 16,931. No projection had been captured since the tent opened.
+
+**Cause.** `sCamera::draw` (0x228e770) loops over eight `sCamera::Viewport`
+slots (0x1a0 bytes each, from camera +0x50: +0x8 `mpCamera`, +0x18
+`mpSceneTexture`, +0x20 `mVisible`, +0x23 `mPriority`, +0x25 `mDisplay`). For
+each visible slot of the display being drawn, it computes the projection
+(`sub_14228F3B0`) and draws the scene and post chain. sMhCamera's camera
+switch (`sub_141AC3840`) hides viewports 0, 1 and 2 and shows the one the new
+camera names. `uTentCamera` (and the map camera) switch to viewport 1. The
+runtime's projection anchor accepted only viewport 0.
+
+**v0.25.10:** the anchor accepts the viewport being computed when it is
+visible, of display 0 and without a scene texture (drawn into the view the
+frame owns). Projections are counted per viewport.
+
+**game-124 (v0.25.10):** the user: "tent looks corrected". 3,882 projections
+from viewport 1 (the tent), 0 producer refusals, 0 unpublished frames, 12,400
+armed and planned frames for 12,398 DLSS frames, 1 skip, fault 0.
