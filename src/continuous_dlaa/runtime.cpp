@@ -28,6 +28,7 @@
 #include "../temporal_bindings/depth_routes.hpp"
 #include "../temporal_bindings/shader.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../bridge_probe/readable_region.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -1349,9 +1350,10 @@ void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
     (void)prefix;
 #endif
 }
-void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
+void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;const auto reads=bridge_probe::read_cache_stats();
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
        <<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<'}'
+       <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"queries\":"<<reads.queries<<'}'
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";

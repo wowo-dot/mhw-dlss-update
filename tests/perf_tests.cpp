@@ -123,12 +123,53 @@ void shared_cache_tests() {
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);
 }
+// v0.23.4: the second level answers every 64 KB block of one region with one
+// region query, also when the first level has expired.
+void region_level_tests() {
+    namespace bp = mhw::bridge_probe;
+    mhw::perf::toggles.store(mhw::perf::cached_reads);
+    Sleep(150);  // earlier answers (possibly for this address range) expire
+    constexpr std::size_t size = std::size_t{4} << 20;  // 64 blocks
+    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(block != nullptr, "4 MB region");
+    if (!block) return;
+    const auto base = reinterpret_cast<std::uintptr_t>(block);
+    // From the top down, so the first query starts in the region's last block.
+    const auto touch = [&] {
+        bool ok = true;
+        for (std::size_t b = size / 65536; b-- > 0;) ok = ok && bp::readable_end(base + b * 65536 + 100) == base + size;
+        return ok;
+    };
+    auto before = bp::read_cache_stats();
+    check(touch(), "every block reports the region end");
+    auto after = bp::read_cache_stats();
+    check(after.queries - before.queries == 2, "one region: its run and its allocation base");
+    check(after.level1_misses - before.level1_misses == 64 && after.region_hits - before.region_hits == 63,
+          "each block missed the first level once; the region answered all but the first");
+    before = after;
+    check(touch(), "first level hits");
+    after = bp::read_cache_stats();
+    check(after.level1_misses == before.level1_misses && after.queries == before.queries, "no misses within the window");
+    Sleep(150);
+    before = bp::read_cache_stats();
+    check(touch(), "after the window");
+    after = bp::read_cache_stats();
+    check(after.queries - before.queries == 2, "expired blocks refresh through one region query");
+    // A region made inaccessible is seen once the window has passed.
+    DWORD old{};
+    check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");
+    Sleep(150);
+    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + size - 100) == 0, "expired region is queried again");
+    VirtualFree(block, 0, MEM_RELEASE);
+    mhw::perf::toggles.store(0);
+}
 }  // namespace
 
 int main() {
     frame_stats_tests();
     region_tests();
     shared_cache_tests();
+    region_level_tests();
     if (failures) return 1;
     std::printf("perf tests passed\n");
     return 0;

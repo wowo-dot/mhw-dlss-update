@@ -118,3 +118,55 @@ rendered; the rendered rate comes from `frame_stats`.
   waits, to find the extra 0.4 ms and the wider p99.
 - GPU timestamps for the passes the mod adds.
 - An A/B with Reflex off, to separate Reflex's share.
+
+## Session 20261013-perf2: CPU profile (v0.23.3, game-88)
+
+**Setup:**
+- one launch: FG off, Quality;
+- `profile = on`: the v0.12 stack sampler, at about 625 samples a second on
+  the game's Present thread;
+- Reflex Boost for about 2 minutes, then Reflex off for 1.5 minutes.
+
+**Reflex:** Boost and off ran at the same rate (201-203 fps; display latency
+7.45 and 7.50 ms). Reflex is not the cost.
+
+**The sampler costs about 10%:** 201 fps here against 225 at Quality in
+perf1. Its shares, not its absolute times, are what count.
+
+**Profile** (10 windows, 125k Present-thread samples, `tools/profile_report.py`):
+- `ntdll!NtQueryVirtualMemory` is 10.1% of the Present thread. All of it
+  comes from `bridge_probe::readable_end`, the region check before each
+  bounded game-memory read:
+  - 78% under the native queue hook (`mhw_aa_queue_entry`). The hook spends
+    88% of its time there: each frame it walks the game's render-unit list
+    (`registry+0x15d0`, up to 1,024 nodes, two reads each) to find the TAA
+    unit;
+  - 20% under the jitter hook (`temporal_jitter_entry`).
+- At about 5 ms a frame that is about 0.5 ms, the gap to the unmodded game.
+- **Why:** the region cache had one entry per 64 KB block (direct-mapped over
+  1 GB, so blocks 1 GB apart collide), each kept for 100 ms. The walk's
+  thousand-odd blocks were each queried again every 100 ms, in waves, which
+  also fits the wider p99.
+- The hooks around game functions (`reflex_boundary_update`,
+  `mhw_aa_frame_entry`) carry the game's own work, mostly
+  `MonsterHunterWorld.exe+0x225e9f0`, not overhead.
+
+## v0.23.4: a region-level read cache
+
+`readable_end` has a second level: 64 whole regions, each with the time of
+its own query.
+- A block that misses the first level (expired, never seen, or colliding) is
+  answered from its region when that region was queried within the window.
+- A miss there queries once; when the page run reaches back to the
+  allocation base (a second query from there ends at the same place with the
+  same state and protection), the region starts at the allocation base.
+- A region therefore costs one or two VirtualQuery calls per 100 ms, not one
+  per block.
+- The safety contract is unchanged:
+  - no answer is used past 100 ms (the first level copies the region's query
+    time);
+  - every read stays SEH-guarded.
+- `dlss_summary` logs `reads {level1_misses, region_hits, queries}`.
+- Tests (`perf_tests`): a 4 MB region's 64 blocks cost two queries, also
+  after the window, and a region made inaccessible is seen once the window
+  has passed.

@@ -62,28 +62,111 @@ void remember(SharedRegion &slot, std::uintptr_t base, std::uintptr_t end,
   slot.tick.store(now, std::memory_order_relaxed);
   slot.version.store(version + 2U, std::memory_order_release);
 }
-} // namespace
+// Second level (v0.23.4): whole regions. A block that misses the first level
+// (expired, never seen, or another block in its slot) looks here first, so
+// Windows is asked once per region per cache window instead of once per 64 KB
+// block per window. game-88's profile: the render-unit walk (about a thousand
+// nodes a frame) refreshed each of its blocks every 100 ms, and
+// NtQueryVirtualMemory took 10% of the Present thread. An entry keeps the time
+// of its own query and the first level copies it, so no answer outlives the
+// window.
+struct Region {
+  std::uintptr_t base{}, end{};
+  std::uint32_t tick{};
+};
+constexpr unsigned region_count = 64U;
+std::array<Region, region_count> region_list{};
+unsigned region_next{};
+SRWLOCK region_lock = SRWLOCK_INIT;
+std::atomic<std::uint64_t> level1_misses{}, region_hits{}, queries{};
 
-std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
-  const bool cached = perf::on(perf::cached_reads);
-  const auto now = cached ? static_cast<std::uint32_t>(GetTickCount64()) : 0U;
-  auto &slot = regions[(address >> 16) & (cache_slots - 1U)];
-  if (cached)
-    if (const auto end = cached_end(slot, address, now))
-      return end;
+bool known_region(std::uintptr_t address, std::uint32_t now,
+                  Region &out) noexcept {
+  bool found = false;
+  AcquireSRWLockShared(&region_lock);
+  for (const auto &r : region_list)
+    if (address >= r.base && address < r.end && now - r.tick < cache_ms) {
+      out = r;
+      found = true;
+      break;
+    }
+  ReleaseSRWLockShared(&region_lock);
+  return found;
+}
+void add_region(const Region &r) noexcept {
+  AcquireSRWLockExclusive(&region_lock);
+  // An entry overlapping the new region is replaced, else the next in turn.
+  unsigned at = region_count;
+  for (unsigned i = 0; i < region_count && at == region_count; ++i)
+    if (region_list[i].base < r.end && r.base < region_list[i].end)
+      at = i;
+  if (at == region_count) {
+    at = region_next;
+    region_next = (region_next + 1U) % region_count;
+  }
+  region_list[at] = r;
+  ReleaseSRWLockExclusive(&region_lock);
+}
+// The run of pages with one state and protection from the page holding
+// address. With `whole`, when the run reaches back to the allocation base (a
+// query from there ends at the same place with the same state and
+// protection), the region starts at the allocation base.
+bool query(std::uintptr_t address, bool whole, Region &out) noexcept {
   MEMORY_BASIC_INFORMATION memory{};
+  queries.fetch_add(1, std::memory_order_relaxed);
   if (VirtualQuery(reinterpret_cast<const void *>(address), &memory,
                    sizeof(memory)) != sizeof(memory) ||
       !readable(memory))
-    return 0U;
+    return false;
   const auto base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
   if (address < base || memory.RegionSize > UINTPTR_MAX - base ||
       address - base >= memory.RegionSize)
-    return 0U;
-  const auto end = base + memory.RegionSize;
-  if (cached)
-    remember(slot, base, end, now);
-  return end;
+    return false;
+  out.base = base;
+  out.end = base + memory.RegionSize;
+  const auto allocation =
+      reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
+  if (whole && allocation != 0U && allocation < base) {
+    MEMORY_BASIC_INFORMATION first{};
+    queries.fetch_add(1, std::memory_order_relaxed);
+    if (VirtualQuery(memory.AllocationBase, &first, sizeof(first)) ==
+            sizeof(first) &&
+        readable(first) &&
+        reinterpret_cast<std::uintptr_t>(first.BaseAddress) == allocation &&
+        first.RegionSize <= UINTPTR_MAX - allocation &&
+        allocation + first.RegionSize == out.end &&
+        first.State == memory.State && first.Protect == memory.Protect)
+      out.base = allocation;
+  }
+  return true;
+}
+} // namespace
+
+std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
+  Region r;
+  if (!perf::on(perf::cached_reads))
+    return query(address, false, r) ? r.end : 0U;
+  const auto now = static_cast<std::uint32_t>(GetTickCount64());
+  auto &slot = regions[(address >> 16) & (cache_slots - 1U)];
+  if (const auto end = cached_end(slot, address, now))
+    return end;
+  level1_misses.fetch_add(1, std::memory_order_relaxed);
+  if (known_region(address, now, r)) {
+    region_hits.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    if (!query(address, true, r))
+      return 0U;
+    r.tick = now;
+    add_region(r);
+  }
+  remember(slot, r.base, r.end, r.tick);
+  return r.end;
+}
+
+ReadCacheStats read_cache_stats() noexcept {
+  return {level1_misses.load(std::memory_order_relaxed),
+          region_hits.load(std::memory_order_relaxed),
+          queries.load(std::memory_order_relaxed)};
 }
 
 ScalarReadResult
