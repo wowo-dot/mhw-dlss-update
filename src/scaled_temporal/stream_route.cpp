@@ -27,6 +27,7 @@
 #endif
 #include "../projection_binding/memory.hpp"
 #include "../temporal_present/observer.hpp"
+#include "../temporal_bindings/copy_execution.hpp"
 #include "../perf/toggles.hpp"
 #include "../perf/hook_timing.hpp"
 #include <MinHook.h>
@@ -143,6 +144,8 @@ struct Plan {
  // node 3), and the depth's and GBuffer4's states at the TAA consumer.
  std::uintptr_t full_slot{},full_depth_resource{},full_gbuffer4_resource{};bool full_slot_done{},full_states_known{};
  unsigned full_depth_state{},full_gbuffer4_state{};
+ // The depth's render region kept at the slot, and the late draws' restore.
+ bool full_kept{},full_restore_tried{},full_restore_recorded{};
  // Late indexed packets are frozen before recording workers start, sorted
  // in native key/insertion order and included in GPU ownership. About 17 per
  // frame in combat; Alatreon's arrival exceeded the former 32 (game-45).
@@ -162,10 +165,11 @@ unsigned handoff_draw(const Plan &p,unsigned stage){
  const auto ordinal=effect_ordinal(p,stage);
  return 2+ordinal+(p.dof&&ordinal>=effect_ordinal(p,p.dof->stage)?6:0)+(stage==2?p.late_count:0);
 }
-unsigned handoff_indexed(const Plan &p,unsigned position){return 1+effect_count(p)+(p.dof?6:0)+position;}
+// Identity plans: TAA, its copy, full_post's slot, the late draws, the final copy.
+unsigned handoff_indexed(const Plan &p,unsigned position){return p.identity?2+(p.full_slot?1U:0U)+position:1+effect_count(p)+(p.dof?6:0)+position;}
 unsigned handoff_compute(const Plan &p,unsigned pass){return 2+effect_ordinal(p,p.dof->stage)+pass;}
 unsigned handoff_count(const Plan &p){return 2+effect_count(p)+(p.dof?6:0)+p.late_count+(p.identity?1U:0U)+(p.full_slot?1U:0U);}
-unsigned final_node(const Plan &p){return p.full_slot?3U:2U;}
+unsigned final_node(const Plan &p){return 2+(p.full_slot?1U:0U)+p.late_count;}
 unsigned output_index(const Plan &p,unsigned stage){return stage<4?2+stage:p.targets[stage];}
 unsigned resource_count(const Plan &p){return p.identity?4U:(p.has_haze?9U:5U)+p.extra_resources;}
 struct Pipeline {std::unique_ptr<Effect> effect;std::string signature;ComPtr<ID3D12RootSignature> root;};
@@ -1091,8 +1095,8 @@ bool record_effect(unsigned slot,unsigned stage,const EffectRecipe &prepared,con
 }
 
 #include "dof_native_record.inl"
-#include "silhouette_route.inl"
 #include "full_post_slot.inl"
+#include "silhouette_route.inl"
 
 bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCATION *destination,UINT x,UINT y,UINT z,const D3D12_TEXTURE_COPY_LOCATION *source,const D3D12_BOX *box,std::uintptr_t caller){
  if(injecting||(filtering()&&copy_slot==UINT_MAX))return false;
@@ -1182,7 +1186,12 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
     p.stamp.layer!=taa||!same_stamp(p.stamp)||p.motion_thread!=GetCurrentThreadId())return;
  p.queue_finished=true;
  try{
-  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;if(p.identity||silhouette_candidates(p))(void)prepare_frame(p);
+  // full_post's identity plans also take the late draws (the silhouettes are
+  // drawn at the render size into the full-size chain); at DLAA they are
+  // native at the full size. A refused late scan leaves them native.
+  if(p.motion_returned&&p.motion_visits==1&&build_plan(p,p.motion_unit)){p.built=true;++built;
+   if(p.identity&&!(render_w==width&&render_h==height))(void)silhouette_candidates(p);
+   if(p.identity||silhouette_candidates(p))(void)prepare_frame(p);
    watch(static_cast<unsigned>(frame%plans.size()),p);}
   else{++unqualified;p.resources={};}
  }catch(const std::exception &e){failure=e.what();fail(1);}

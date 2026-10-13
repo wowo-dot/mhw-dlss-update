@@ -62,7 +62,7 @@ void restore(ID3D12GraphicsCommandList *list,const temporal_present::Bindings &b
 }
 }
 bool FullPostInputs::prepare(ID3D12Device *device,unsigned width,unsigned height,std::string &reason) noexcept {
-    root_.Reset();pipeline_.Reset();region_.Reset();expanded_.Reset();width_=height_=0;bytes_=0;
+    root_.Reset();pipeline_.Reset();region_.Reset();expanded_.Reset();kept_.Reset();width_=height_=0;bytes_=0;
     try{
         if(!device||!width||!height||width>16384||height>16384){reason="full_post inputs extent";return false;}
         std::array<D3D12_ROOT_PARAMETER,3> params{};
@@ -82,14 +82,43 @@ bool FullPostInputs::prepare(ID3D12Device *device,unsigned width,unsigned height
         const std::uint64_t size=std::uint64_t(pitch(width,4))*height;
         D3D12_RESOURCE_DESC d{};d.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;d.Width=size;d.Height=d.DepthOrArraySize=d.MipLevels=1;
         d.SampleDesc.Count=1;d.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
-        if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&region_)))){reason="full_post inputs region buffer";return false;}
+        if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&region_)))||
+           FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&kept_)))){
+            region_.Reset();reason="full_post inputs region buffer";return false;}
         d.Flags=D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&d,D3D12_RESOURCE_STATE_COMMON,nullptr,IID_PPV_ARGS(&expanded_)))){
-            region_.Reset();reason="full_post inputs output buffer";return false;}
-        region_->SetName(L"mhw-full-post-region");expanded_->SetName(L"mhw-full-post-expanded");
-        width_=width;height_=height;bytes_=2*size;pipeline_=std::move(pipeline);return true;
+            region_.Reset();kept_.Reset();reason="full_post inputs output buffer";return false;}
+        region_->SetName(L"mhw-full-post-region");expanded_->SetName(L"mhw-full-post-expanded");kept_->SetName(L"mhw-full-post-depth");
+        width_=width;height_=height;bytes_=3*size;pipeline_=std::move(pipeline);return true;
     }catch(...){reason="full_post inputs preparation";}
-    root_.Reset();pipeline_.Reset();region_.Reset();expanded_.Reset();return false;
+    root_.Reset();pipeline_.Reset();region_.Reset();expanded_.Reset();kept_.Reset();return false;
+}
+bool FullPostInputs::depth_input(ID3D12GraphicsCommandList *list,const FullPostInput &depth,unsigned rw,unsigned rh) const noexcept {
+    if(!pipeline_||!list||list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT||!depth.texture||!rw||!rh||rw>width_||rh>height_)return false;
+    ComPtr<ID3D12Device> device;if(FAILED(list->GetDevice(IID_PPV_ARGS(&device)))||!same_device(kept_.Get(),device.Get())||!same_device(depth.texture,device.Get()))return false;
+    const auto d=depth.texture->GetDesc();
+    return d.Dimension==D3D12_RESOURCE_DIMENSION_TEXTURE2D&&d.Width==width_&&d.Height==height_&&d.DepthOrArraySize==1&&d.MipLevels==1&&
+        d.SampleDesc.Count==1&&!d.SampleDesc.Quality&&d.Format==full_post_input_format(FullPostInputRole::depth);
+}
+bool FullPostInputs::keep_depth(ID3D12GraphicsCommandList *list,const FullPostInput &depth,unsigned rw,unsigned rh) noexcept {
+    if(!depth_input(list,depth,rw,rh))return false;
+    auto *t=depth.texture,*kept=kept_.Get();Batch batch;
+    D3D12_TEXTURE_COPY_LOCATION texture{},in{};texture.pResource=t;texture.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    in.pResource=kept;in.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;in.PlacedFootprint.Footprint={DXGI_FORMAT_R32_FLOAT,rw,rh,1,pitch(rw,4)};
+    batch.add(t,depth.state,D3D12_RESOURCE_STATE_COPY_SOURCE);batch.add(kept,D3D12_RESOURCE_STATE_COMMON,D3D12_RESOURCE_STATE_COPY_DEST);batch.issue(list);
+    const D3D12_BOX box{0,0,0,rw,rh,1};list->CopyTextureRegion(&in,0,0,0,&texture,&box);
+    batch.add(t,D3D12_RESOURCE_STATE_COPY_SOURCE,depth.state);batch.add(kept,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_COMMON);batch.issue(list);
+    return true;
+}
+bool FullPostInputs::restore_depth(ID3D12GraphicsCommandList *list,const FullPostInput &depth,unsigned rw,unsigned rh) noexcept {
+    if(!depth_input(list,depth,rw,rh))return false;
+    auto *t=depth.texture,*kept=kept_.Get();Batch batch;
+    D3D12_TEXTURE_COPY_LOCATION texture{},out{};texture.pResource=t;texture.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    out.pResource=kept;out.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;out.PlacedFootprint.Footprint={DXGI_FORMAT_R32_FLOAT,rw,rh,1,pitch(rw,4)};
+    batch.add(t,depth.state,D3D12_RESOURCE_STATE_COPY_DEST);batch.add(kept,D3D12_RESOURCE_STATE_COMMON,D3D12_RESOURCE_STATE_COPY_SOURCE);batch.issue(list);
+    list->CopyTextureRegion(&texture,0,0,0,&out,nullptr);
+    batch.add(t,D3D12_RESOURCE_STATE_COPY_DEST,depth.state);batch.add(kept,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COMMON);batch.issue(list);
+    return true;
 }
 bool FullPostInputs::record(ID3D12GraphicsCommandList *list,const std::array<FullPostInput,3> &inputs,unsigned rw,unsigned rh,
                             const temporal_present::Bindings &roots) noexcept {
@@ -101,8 +130,10 @@ bool FullPostInputs::record(ID3D12GraphicsCommandList *list,const std::array<Ful
         if(d.Dimension!=D3D12_RESOURCE_DIMENSION_TEXTURE2D||d.Width!=width_||d.Height!=height_||d.DepthOrArraySize!=1||d.MipLevels!=1||
            d.SampleDesc.Count!=1||d.SampleDesc.Quality||d.Format!=full_post_input_format(static_cast<FullPostInputRole>(i)))return false;
         for(unsigned j=0;j<i;++j)if(inputs[j].texture==t)return false;}
-    auto *region=region_.Get(),*expanded=expanded_.Get();Batch batch;
+    auto *expanded=expanded_.Get();Batch batch;
     for(unsigned i=0;i<3;++i){
+        // The depth's region goes to the kept buffer (restore_depth()).
+        auto *region=i?region_.Get():kept_.Get();
         auto *t=inputs[i].texture;const auto s=inputs[i].state;const auto role=static_cast<FullPostInputRole>(i);
         const auto format=full_post_input_format(role);const auto bpp=bytes_per_texel(role);
         D3D12_TEXTURE_COPY_LOCATION texture{},in{},out{};texture.pResource=t;texture.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;

@@ -27,7 +27,28 @@ struct FullPostCounters {
  // planned, executed with the upscale, executed without it (by reason).
  std::atomic<std::uint64_t> slots{},slots_planned{},upscales{},slot_unverified{},slot_stale{};
  std::array<std::atomic<std::uint64_t>,8> slot_refusals{},slot_skips{};
+ // v0.25.4: the inputs' states at the slot come from the game's barrier plan.
+ // Checked against TAA's consumer when it had already run, or not (its
+ // worker later); the last disagreement: depth proved/planned, GBuffer4
+ // proved/planned (under the route lock).
+ std::atomic<std::uint64_t> states_checked{},states_planned{};std::array<unsigned,4> state_mismatch{};
+ // The late draws' depth restore (full_restore): recorded, skipped (by
+ // reason), and restores whose slot then kept nothing (stale).
+ std::atomic<std::uint64_t> depth_restores{},restore_unsafe{};std::array<std::atomic<std::uint64_t>,5> restore_skips{};
 } full_counts;
+// The planner's native state as D3D12 states (the converter 0x259ba50): read
+// states are bit sets (1 vertex/constant, 2 index, 4 NPSR, 8 PSR, 0x10
+// indirect, 0x20 COPY_SOURCE, 0x40 depth read); 0xff generic read, 0x100
+// render target, 0x200 depth write, 0x400 UAV, any other COPY_DEST.
+constexpr unsigned planner_d3d12_state(unsigned n) noexcept {
+ if(n>=0xff)return n==0xff?2755U:n==0x100?4U:n==0x200?16U:n==0x400?8U:1024U;
+ return (n&3)|((n>>1)&0x20)|(16*((n&0xc)|(2*((n&0x10)|(2*(n&0x20))))));
+}
+constexpr bool planner_state_is(unsigned native,unsigned d3d12) noexcept {return planner_d3d12_state(native)==d3d12;}
+static_assert(planner_state_is(4,0x40)&&planner_state_is(8,0x80)&&planner_state_is(12,0xc0)&&planner_state_is(0x20,0x800)&&
+ planner_state_is(0x2c,0x8c0)&&planner_state_is(0x40,0x20)&&planner_state_is(0x10,0x200)&&planner_state_is(0x100,4)&&
+ planner_state_is(0x200,0x10)&&planner_state_is(0x400,8)&&planner_state_is(2048,0x400)&&planner_state_is(0xff,0xac3),
+ "converter 0x259ba50: NPSR, PSR, both, COPY_SOURCE, merged, DEPTH_READ, INDIRECT, RT, DEPTH_WRITE, UAV, COPY_DEST, GENERIC_READ");
 // The render-size inputs of the post chain, upscaled at the slot
 // (full_post_inputs.hpp). Prepared with the route at the output size.
 FullPostInputs full_inputs;std::string full_inputs_failure;
@@ -181,7 +202,11 @@ void full_post_write(std::ostream &o){
   <<",\"restores\":"<<full_counts.restores<<",\"not_switched\":"<<full_counts.not_switched<<",\"rect_mismatch\":"<<full_counts.rect_mismatch
   <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"identity_plans\":"<<full_counts.identity_plans
   <<",\"inputs\":{\"ready\":"<<full_inputs.ready()<<",\"failure\":\""<<full_inputs_failure<<"\",\"bytes\":"<<full_inputs.bytes()<<",\"slots\":"<<full_counts.slots<<",\"planned\":"<<full_counts.slots_planned
-  <<",\"upscales\":"<<full_counts.upscales<<",\"unverified\":"<<full_counts.slot_unverified<<",\"stale\":"<<full_counts.slot_stale<<",\"refusals\":[";
+  <<",\"upscales\":"<<full_counts.upscales<<",\"states_checked\":"<<full_counts.states_checked<<",\"states_planned\":"<<full_counts.states_planned
+  <<",\"state_mismatch\":["<<full_counts.state_mismatch[0]<<','<<full_counts.state_mismatch[1]<<','<<full_counts.state_mismatch[2]<<','<<full_counts.state_mismatch[3]
+  <<"],\"depth_restores\":"<<full_counts.depth_restores<<",\"restore_unsafe\":"<<full_counts.restore_unsafe<<",\"restore_skips\":["
+  <<full_counts.restore_skips[0]<<','<<full_counts.restore_skips[1]<<','<<full_counts.restore_skips[2]<<','<<full_counts.restore_skips[3]<<','<<full_counts.restore_skips[4]
+  <<"],\"unverified\":"<<full_counts.slot_unverified<<",\"stale\":"<<full_counts.slot_stale<<",\"refusals\":[";
  for(unsigned i=0;i<8;++i)o<<(i?",":"")<<full_counts.slot_refusals[i];
  o<<"],\"skips\":[";for(unsigned i=0;i<8;++i)o<<(i?",":"")<<full_counts.slot_skips[i];o<<"]}}";
 }

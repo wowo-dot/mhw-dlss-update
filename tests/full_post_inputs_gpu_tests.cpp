@@ -5,7 +5,9 @@
 // entry state, and the game's compute recording continues with its own root
 // signature, arguments and pipeline (its next dispatch stores its root
 // constant). A recording that never set a compute signature or pipeline gets
-// the signature unbound, and the game's own then validate.
+// the signature unbound, and the game's own then validate. restore_depth()
+// puts the depth's render region back (the rest stays upscaled); after
+// keep_depth() alone, it leaves the depth unchanged.
 #include "../src/scaled_temporal/full_post_inputs.hpp"
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -88,10 +90,10 @@ std::uint32_t texel(unsigned role,unsigned x,unsigned y){
 }
 unsigned bpp(unsigned role){return role==2?2U:4U;}
 unsigned pitch(unsigned w,unsigned b){return (w*b+255)&~255U;}
-struct Case {unsigned w,h,rw,rh;bool compute_bound;};
+struct Case {unsigned w,h,rw,rh;bool compute_bound;bool keep_only{};};
 void run_case(Gpu &g,st::FullPostInputs &inputs,const Case &c){
     auto *device=g.device.Get();
-    std::string reason;check(inputs.prepare(device,c.w,c.h,reason),"prepare");check(inputs.bytes()==2ULL*pitch(c.w,4)*c.h,"buffer size");
+    std::string reason;check(inputs.prepare(device,c.w,c.h,reason),"prepare");check(inputs.bytes()==3ULL*pitch(c.w,4)*c.h,"buffer size");
     const std::array<D3D12_RESOURCE_STATES,3> states{D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST};
     std::array<ComPtr<ID3D12Resource>,3> textures;std::array<ComPtr<ID3D12Resource>,3> uploads,readbacks;
@@ -125,7 +127,11 @@ void run_case(Gpu &g,st::FullPostInputs &inputs,const Case &c){
     check(!inputs.record(list.Get(),{in[1],in[0],in[2]},c.rw,c.rh,roots),"role formats");
     check(!inputs.record(list.Get(),in,c.w+1,c.rh,roots),"region bounds");
     tp::Bindings unknown;check(!inputs.record(list.Get(),in,c.rw,c.rh,unknown),"unknown recording");
-    check(inputs.record(list.Get(),in,c.rw,c.rh,roots),"record");
+    check(!inputs.restore_depth(list.Get(),in[1],c.rw,c.rh)&&!inputs.keep_depth(list.Get(),in[0],c.w+1,c.rh),"depth helpers refuse");
+    if(c.keep_only)check(inputs.keep_depth(list.Get(),in[0],c.rw,c.rh),"keep the depth");
+    else check(inputs.record(list.Get(),in,c.rw,c.rh,roots),"record");
+    // The late draws' restore of the depth's render region.
+    check(inputs.restore_depth(list.Get(),in[0],c.rw,c.rh),"restore the depth");
     // The game continues: its own dispatch with its restored arguments, or,
     // on a recording that had none, after setting its own.
     if(!c.compute_bound){list->SetComputeRootSignature(game.root.Get());list->SetComputeRoot32BitConstant(0,0x5eed,0);
@@ -148,15 +154,17 @@ void run_case(Gpu &g,st::FullPostInputs &inputs,const Case &c){
         const std::byte *m{};check(SUCCEEDED(readbacks[r]->Map(0,nullptr,reinterpret_cast<void **>(const_cast<std::byte **>(&m)))),"map readback");
         const auto p=pitch(c.w,bpp(r));unsigned wrong=0;
         for(unsigned y=0;y<c.h;++y)for(unsigned x=0;x<c.w;++x){std::uint32_t v=0;std::memcpy(&v,m+std::uint64_t(y)*p+x*bpp(r),bpp(r));
-            const auto want=texel(r,st::full_post_source_texel(x,c.rw,c.w),st::full_post_source_texel(y,c.rh,c.h));
+            const bool original=c.keep_only||(r==0&&x<c.rw&&y<c.rh);
+            const auto want=original?texel(r,x,y):texel(r,st::full_post_source_texel(x,c.rw,c.w),st::full_post_source_texel(y,c.rh,c.h));
             if(v!=want&&wrong++<4)std::cerr<<"role "<<r<<" ("<<x<<','<<y<<") "<<std::hex<<v<<" want "<<want<<std::dec<<'\n';}
         readbacks[r]->Unmap(0,nullptr);check(!wrong,"nearest upscale, bit-exact");
     }
     std::cout<<"PASS "<<c.rw<<'x'<<c.rh<<" -> "<<c.w<<'x'<<c.h<<(c.compute_bound?"":" (no compute state)")<<
-        ": depth, GBuffer4 and GBuffer5 upscaled, states and the game's compute state kept\n";
+        (c.keep_only?": depth kept and restored unchanged, the game's compute state kept\n":
+                     ": depth, GBuffer4 and GBuffer5 upscaled, the depth's region restored, states and the game's compute state kept\n");
 }
 int main(){
     Gpu g;st::FullPostInputs inputs;
     std::string reason;check(!inputs.prepare(g.device.Get(),0,8,reason)&&!inputs.ready(),"empty extent refused");
-    for(const auto &c:{Case{96,54,64,36,true},Case{37,23,25,15,true},Case{130,70,65,35,true},Case{64,32,64,32,true},Case{97,61,43,27,false}})run_case(g,inputs,c);
+    for(const auto &c:{Case{96,54,64,36,true},Case{37,23,25,15,true},Case{130,70,65,35,true},Case{64,32,64,32,true},Case{97,61,43,27,false},Case{96,54,64,36,true,true}})run_case(g,inputs,c);
 }

@@ -227,18 +227,20 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(!track_recording(p,list,roots.generation,true)||!retain_recording(p,list,roots.generation)||p.handoff.record(handoff_indexed(p,scope.position),scope.draw.packet,
     {reinterpret_cast<std::uintptr_t>(list),roots.generation})!=FrameHandoff::Result::ok)throw std::runtime_error("silhouette recording ownership");
  ++silhouette_recorded;++p.late_recorded;
+ // full_post: the depth's render region back before the first late draw.
+ if(p.identity&&!scope.position)full_restore(p,list,scope.draw.packet);
  const auto native=[&](unsigned reason,std::initializer_list<unsigned> detail={}){
   ++silhouette_native;++silhouette_rejections[reason];silhouette_sample(reason,r.recipe.get(),detail);completed(p);return false;};
  const auto u=[](auto v){return static_cast<unsigned>(v);};
  if(!r.recipe||!n)return native(r.silent&&n?11:0);
  pb::AttachmentSnapshot now;obs::RasterBindings raster;
  if(!pb::snapshot_attachments(cfg.image,scope.draw,now)||!pb::attachment_cache_matches(now)||now.pipeline!=r.native||
-    now.color_count!=1||now.views[8].owner||now.views[0].resource!=reinterpret_cast<std::uintptr_t>(p.resources[3].Get())||
+    now.color_count!=1||now.views[8].owner||now.views[0].resource!=reinterpret_cast<std::uintptr_t>(p.resources[p.identity?2:3].Get())||
     now.views[0].format!=DXGI_FORMAT_R11G11B10_FLOAT||!obs::raster_current(list,raster)||!raster.output_known||
     raster.render_target!=now.views[0].handle||raster.generation!=roots.generation){
   const bool snapped=pb::snapshot_attachments(cfg.image,scope.draw,now),rastered=obs::raster_current(list,raster);
   return native(1,{u(snapped),u(snapped&&pb::attachment_cache_matches(now)),u(now.pipeline==r.native),now.color_count,u(now.views[8].owner!=0),
-   u(now.views[0].resource==reinterpret_cast<std::uintptr_t>(p.resources[3].Get())),u(now.views[0].format),u(rastered),u(raster.output_known),
+   u(now.views[0].resource==reinterpret_cast<std::uintptr_t>(p.resources[p.identity?2:3].Get())),u(now.views[0].format),u(rastered),u(raster.output_known),
    u(raster.render_target==now.views[0].handle),u(raster.generation==roots.generation)});}
  D3D12_BLEND_DESC blend{};D3D12_DEPTH_STENCIL_DESC depth{};D3D12_RASTERIZER_DESC rs{};
  std::memcpy(&blend,now.pipeline.blend.data(),sizeof(blend));std::memcpy(&depth,now.pipeline.depth.data(),sizeof(depth));std::memcpy(&rs,now.pipeline.raster.data(),sizeof(rs));

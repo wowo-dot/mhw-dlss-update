@@ -23,7 +23,10 @@ namespace mhw::scaled_temporal {
 //
 // Per input: copy the render region into a buffer, expand it into a second
 // buffer at the output size (compute, raw buffers), copy that over the
-// texture. Only root constants and root buffer views are bound: descriptor
+// texture. The depth's render region stays in its own buffer until the next
+// upscale, so that restore_depth() can put it back for the late draws (the
+// hunter silhouettes) that read the depth at the render size after the post
+// chain. Only root constants and root buffer views are bound: descriptor
 // heaps, graphics bindings, render targets and the raster state are never
 // touched. The compute root signature, its arguments and the pipeline are
 // restored from the caller's snapshot of the list (the observer's mirror).
@@ -56,10 +59,19 @@ public:
     // first command if anything does not hold.
     bool record(ID3D12GraphicsCommandList *,const std::array<FullPostInput,3> &,unsigned render_width,unsigned render_height,
                 const temporal_present::Bindings &) noexcept;
+    // The depth's render region alone, into the kept buffer: when the
+    // upscale cannot be recorded, a later restore() then writes back the same
+    // texels. Copies and barriers only, no binding changes.
+    bool keep_depth(ID3D12GraphicsCommandList *,const FullPostInput &depth,unsigned render_width,unsigned render_height) noexcept;
+    // The kept render region back over the depth's top-left region (copies and
+    // barriers only). The caller proves that record() or keep_depth() of the
+    // same frame precedes it on the GPU, and the depth's current state.
+    bool restore_depth(ID3D12GraphicsCommandList *,const FullPostInput &depth,unsigned render_width,unsigned render_height) noexcept;
 private:
+    bool depth_input(ID3D12GraphicsCommandList *,const FullPostInput &,unsigned,unsigned) const noexcept;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;
-    Microsoft::WRL::ComPtr<ID3D12Resource> region_,expanded_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> region_,expanded_,kept_;
     unsigned width_{},height_{};std::uint64_t bytes_{};
 };
 }

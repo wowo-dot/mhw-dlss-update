@@ -157,7 +157,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
     put(array+16ULL*count,((key&31U)<<27)|(((key>>5)+(sub>>5))&0x7ffffffU));put(array+16ULL*count+8,packet);put(c+0x2b80,count+1);};
    // The scene depth (view +0x628 -> +0xA0) and GBuffer4/5 (view +0x620 -> +0x78/+0x80).
    const auto container=a.take(0x100),gbuffer=a.take(0x100);std::array<std::uintptr_t,3> input_owners{},input_backings{},input_resources{};
-   for(unsigned i=0;i<3;++i){input_owners[i]=a.take(0x100);input_backings[i]=a.take(0x40);input_resources[i]=a.take(0x10);
+   for(unsigned i=0;i<3;++i){input_owners[i]=a.take(0x100);input_backings[i]=a.take(0x80);input_resources[i]=a.take(0x10);
     put(input_owners[i],image.base+0x3537870);put(input_owners[i]+0x58,2U);put(input_owners[i]+0x60,input_backings[i]);put(input_owners[i]+0x88,128U+(64U<<16));
     put(input_owners[i]+0x90,i==0?16U:i==1?38U:40U);put(input_backings[i]+0x20,input_resources[i]);}
    put(view+0x628,container);put(container+0xa0,input_owners[0]);put(view+0x620,gbuffer);put(gbuffer+0x78,input_owners[1]);put(gbuffer+0x80,input_owners[2]);
@@ -183,26 +183,48 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
            route::field(array+16ULL*5,8,entry_packet)&&entry_packet==q.packet,"slot packet at key (15, 3)");
    {const auto plan=plan_for(armed_slot);
     require(plan->full_slot==q.packet&&route::handoff_count(*plan)==4&&route::final_node(*plan)==3,"the plan takes the slot before the final copy");
-    // The depth and GBuffer4 stay in their consumer states only if no planner
-    // node of their backings lies after TAA's dispatch, up to the slot.
+    // With late draws (the silhouettes): TAA, its copy, the slot, the late
+    // draws, the final copy.
+    plan->late_count=2;require(route::handoff_indexed(*plan,0)==3&&route::handoff_indexed(*plan,1)==4&&route::final_node(*plan)==5&&
+     route::handoff_count(*plan)==6,"late draws between the slot and the final copy");
+    plan->full_slot=0;require(route::handoff_indexed(*plan,0)==2&&route::final_node(*plan)==4&&route::handoff_count(*plan)==5,"late draws without a slot");
+    plan->full_slot=q.packet;plan->late_count=0;
+    // v0.25.4: the inputs' states at the slot are the barrier plan's: the
+    // after-state of each one's last node up to the slot (the slot's own
+    // included), or its tracker's initial state.
     Arena planner(0x80000);const auto saved_renderer=route::cfg.renderer;route::cfg.renderer=planner.base;
-    const auto planned=a.take(16*5),taa=a.take(0x40),after_slot=a.take(0x40),other=a.take(0x40),depth_node=a.take(0x20),other_node=a.take(0x20),other_backing=a.take(0x40);
+    const auto planned=a.take(16*5),taa=a.take(0x40),after_slot=a.take(0x40),other=a.take(0x40),other_backing=a.take(0x80);
     put(taa,6U);put(other,6U);put(after_slot,6U);put(other_backing+0x20,a.take(0x10));
     const std::array<std::uintptr_t,5> order{other,taa,copy,q.packet,after_slot};
     for(unsigned i=0;i<5;++i)put(planned+16*i+8,order[i]);
-    put(planner.base+0x7af18,planned);put(planner.base+0x7af28,5U);put(planner.base+0x1f208,s.epoch+1);
+    const std::uint64_t epoch=s.epoch+1;put(planner.base+0x7af18,planned);put(planner.base+0x7af28,5U);put(planner.base+0x1f208,epoch);
     plan->temporal.object=taa;
-    put(depth_node+8,input_backings[0]);put(other_node+8,other_backing);
-    require(route::full_inputs_quiet(*plan,q),"no node: quiet");
-    put(taa+8,depth_node);put(after_slot+8,depth_node);put(copy+8,other_node);
-    require(route::full_inputs_quiet(*plan,q),"nodes at TAA, after the slot or of other resources: quiet");
-    put(copy+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a depth node between: not quiet");put(copy+8,std::uintptr_t{});
-    put(depth_node+8,input_backings[1]);put(copy+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a GBuffer4 node between: not quiet");
-    put(copy+8,std::uintptr_t{});put(depth_node+8,input_backings[0]);
-    put(q.packet+8,depth_node);require(!route::full_inputs_quiet(*plan,q),"a depth node at the slot: not quiet");put(q.packet+8,std::uintptr_t{});
-    put(copy,10U);require(!route::full_inputs_quiet(*plan,q),"an unqualified nested copy between: not quiet");put(copy,13U);
-    put(planner.base+0x1f208,s.epoch);require(!route::full_inputs_quiet(*plan,q),"another planner epoch: not quiet");
-    put(taa+8,std::uintptr_t{});put(after_slot+8,std::uintptr_t{});route::cfg.renderer=saved_renderer;}
+    // Trackers (backing +0x70): epoch, initial state, used epoch, initialized, immediate epoch.
+    std::array<std::uintptr_t,3> trackers{};const std::array<std::uint16_t,3> initial{8,0x100,0x100};
+    for(unsigned i=0;i<3;++i){trackers[i]=a.take(0x40);put(trackers[i]+0x10,epoch);put(trackers[i]+0x18,initial[i]);put(trackers[i]+0x20,epoch);
+     put(trackers[i]+0x28,static_cast<unsigned char>(1));put(trackers[i]+0x30,std::uint64_t{});put(input_backings[i]+0x70,trackers[i]);}
+    const auto node=[&](std::uintptr_t next,std::uintptr_t backing,std::uint16_t after){const auto n=a.take(0x20);put(n,next);put(n+8,backing);put(n+0x1a,after);return n;};
+    route::PlannerView v;std::array<unsigned,2> at{};
+    require(route::planner_view(*plan,v)&&route::planner_find(v,std::array<std::uintptr_t,2>{taa,q.packet},at)&&at==std::array<unsigned,2>{1,3},"plan positions of TAA and the slot");
+    const auto state_at=[&](unsigned index,unsigned role){const route::FullSlot &r=q;const tb::Owner &o=role==0?r.depth:role==1?r.gbuffer4:r.gbuffer5;
+     unsigned value{};return route::planner_state(v,index,o,value)?value:UINT_MAX;};
+    require(state_at(3,0)==0x80&&state_at(3,1)==4&&state_at(3,2)==4,"no node: the trackers' initial states");
+    // GBuffer4 read from TAA (its own transition), the depth's next read state
+    // hoisted between TAA and the slot, GBuffer5 into COPY_DEST at the slot, and
+    // a later node that the slot must not see.
+    put(taa+8,node(node(0,other_backing,0x400),input_backings[1],12));put(copy+8,node(0,input_backings[0],12));
+    put(q.packet+8,node(node(0,input_backings[2],2048),other_backing,0x20));put(after_slot+8,node(0,input_backings[0],0x400));
+    require(state_at(1,0)==0x80&&state_at(1,1)==0xc0&&state_at(0,1)==4,"TAA: GBuffer4 read, depth still initial");
+    require(state_at(3,0)==0xc0&&state_at(3,1)==0xc0&&state_at(3,2)==0x400&&state_at(4,0)==8,"slot: hoisted depth read, GBuffer4 read, GBuffer5 COPY_DEST; later node unseen");
+    // Refusals: a node naming the backing with another resource, an
+    // immediate state change, another epoch, an unreadable nested copy.
+    {const auto mixed=a.take(0x80);put(mixed+0x20,a.take(0x10));put(copy+8,node(0,mixed,12));put(mixed+0x20,input_resources[0]);
+     require(state_at(3,0)==UINT_MAX,"backing and resource must agree");put(copy+8,node(0,input_backings[0],12));}
+    put(trackers[0]+0x30,epoch);require(state_at(3,0)==UINT_MAX,"immediate state change refused");put(trackers[0]+0x30,std::uint64_t{});
+    put(trackers[0]+0x10,s.epoch);require(state_at(3,0)==UINT_MAX,"tracker of another epoch refused");put(trackers[0]+0x10,epoch);
+    put(copy,10U);require(state_at(3,0)==UINT_MAX,"unreadable nested copy refused");put(copy,13U);
+    put(planner.base+0x1f208,s.epoch);require(!route::planner_view(*plan,v),"another planner epoch refused");
+    for(const auto packet:{taa,copy,q.packet,after_slot})put(packet+8,std::uintptr_t{});route::cfg.renderer=saved_renderer;}
    // Refusals record no packet; the chain still switches.
    const auto refused=[&](std::uint64_t armed,unsigned reason,unsigned sub,unsigned grade_order,const char *why){
     const auto before=route::full_counts.slot_refusals[reason].load(),switches=route::full_counts.switches.load();
@@ -222,7 +244,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    put(context+0x2b80,4U);put(context+0x154,0U);put(context+0x15c,0U);put(view+0x620,std::uintptr_t{});put(view+0x628,std::uintptr_t{});route::full_slots={};
    std::ostringstream summary;route::full_post_write(summary);
    require(summary.str().find("\"inputs\":{\"ready\":1,\"failure\":\"\",\"bytes\":")!=std::string::npos,"inputs in the summary");
-   std::cout<<"PASS full_post inputs: slot at (15, 3) in TAA's key, planned before the final copy, depth quiet proof, refusals\n";}
+   std::cout<<"PASS full_post inputs: slot at (15, 3) in TAA's key, planned before the final copy, plan states, refusals\n";}
   put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});
   mhw::scaled_temporal::full_post_enabled.store(false);route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;
   std::cout<<"PASS full_post: final quad to the DLAA copy, full rectangle after TAA, restored at the exit, refusals\n";}
