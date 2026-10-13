@@ -300,9 +300,49 @@ The 437 frames without the upscale (1.4%) run the full-size chain on
 render-size inputs for that frame. "Not yet published" is a worker reaching
 the slot before the TAA consumer's worker; "not quiet" needs finer reasons.
 
+## Plan states and the silhouettes (v0.25.4)
+
+**The inputs' states come from the plan.** At the slot, each input's state is
+the after-state of its last planner node up to the slot (its own included; a
+child draw's nodes for an opcode-10 copy), or its tracker's initial state. A
+transition the planner moved between TAA and the slot is applied, and the
+slot no longer waits for TAA's worker. When TAA's consumer has already
+published, the plan's states at TAA must equal what it proved.
+
+**Silhouettes.** The hunter's late draws (keys 0x7ffffff4..fd, scene code)
+read the scene depth as `tVolumeBlendDepthMap` (`sub_14255CE10`, bound by the
+scene function) and GBuffer1 at the render size, and were drawn at the render
+size into the full-size chain. In full-post plans:
+- the existing silhouette route takes the late draws (target: the grade
+  output, plan resource 2); the hand-off is TAA, its copy, the slot, the late
+  draws, the final copy;
+- the slot keeps the depth's render region in its own buffer (copies only
+  when no binding snapshot is known), and before the first late draw in key
+  order the region is restored over the depth in the state the plan gives
+  there. The post chain before it reads the upscaled depth.
+
+**game-118 (v0.25.4): training grounds (silhouette), hub, field and three
+cutscenes, depth of field and motion blur on.** The user: the silhouette
+looked correct, the cutscenes "all looked perfect".
+
+| Measure | Count |
+| --- | --- |
+| DLSS frames | 41,672 (skips 4, fault 0) |
+| Frames switched to the full chain | 41,665 (11 armed at a transition, not switched) |
+| Upscales | 41,664 of 41,665 slots, no skips |
+| Plan states checked against TAA's consumer | 41,501 equal, 0 mismatches |
+| Plan states without the consumer yet (worker order) | 163 |
+| Depth restores before the late draws | 6,314 (0 skipped, 0 stale) |
+| Silhouettes corrected | 124,467 (22,521 silent draws stay native; 3 buffer refusals) |
+| Frame generation, HUD-less tagged | 41,440 (0 exceptions; no_restore 230) |
+
+The 41,501 agreements validate the plan reading against the depth admission
+and TAA's own barriers.
+
 **Still to do:**
 
-- the 1.4% without the upscale (reasons for both skips);
-- plan the late silhouette draws in armed frames;
-- the 4 frames armed at a transition;
-- an effects hunt with `full_post = on`.
+- the 11 frames armed at a transition (the chain stays at the render size
+  while the final copy is the full DLAA copy);
+- a broader effects hunt (special fights, other zones);
+- then make `full_post` the default and remove the per-effect route (the
+  user's call).
