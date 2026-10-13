@@ -22,10 +22,13 @@ inline bool matching_basis(Extent display,unsigned override_enabled,Extent basis
 // pillarboxed 3413-wide scene in a 5120 window quantizes against 5120. The
 // render extent is the scene times that scale, truncated per dimension. This
 // requires content==1 and preserves allocation/display dimensions.
+// Sides up to D3D12's largest 2D texture (D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
+// the float products stay exact (below 2^24).
+inline constexpr unsigned max_side=16384;
 inline Plan plan(Extent display,unsigned basis_width,float requested) noexcept {
     Plan p{display,{},requested};
-    if(display.width<64||display.height<64||display.width>8192||display.height>8192||
-       basis_width<display.width||basis_width>8192||
+    if(display.width<64||display.height<64||display.width>max_side||display.height>max_side||
+       basis_width<display.width||basis_width>max_side||
        !std::isfinite(requested)||requested<.5F||requested>1.F)return p;
     const auto width=static_cast<unsigned>(static_cast<float>(basis_width)*requested)&~15U;
     p.quantized=static_cast<float>(width)/static_cast<float>(basis_width);

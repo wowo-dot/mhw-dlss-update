@@ -25,11 +25,15 @@ constexpr float requested_scale(ReconstructionMode m) noexcept {
 // overlap and reach 0.5 (2r + 1 >= o). Exact 2:1 sizes satisfy it, as do a
 // 3413x1440 scene at 1706x720, and the presets' quantized extents (Quality
 // 1696x954 and Balanced 1472x828 of 2560x1440; render_resolution_tests checks
-// the plans of common displays).
+// the plans of common displays). The game multiplies in single-precision
+// float (cvtdq2ps, mulss, cvttss2si; view rectangles at RVA 0x26352b0), so
+// where output * q is exactly an integer it can truncate one pixel lower: the
+// intervals' upper ends are closed (5120x2880 at Quality renders 3408x1916,
+// not 1917; v0.24.0). A full side means q is exactly 1, so both are full.
 constexpr bool single_scale(std::uint64_t rw,std::uint64_t rh,std::uint64_t ow,std::uint64_t oh) noexcept {
     if(!rw||!rh||rw>ow||rh>oh||2*rw+1<ow||2*rh+1<oh)return false;
-    if(rw==ow&&rh==oh)return true;
-    return rw*oh<(rh+1)*ow&&rh*ow<(rw+1)*oh;
+    if(rw==ow||rh==oh)return rw==ow&&rh==oh;
+    return rw*oh<=(rh+1)*ow&&rh*ow<=(rw+1)*oh;
 }
 struct Extent {
     unsigned width{},height{};
@@ -47,11 +51,14 @@ struct Geometry {
         return {{w,h},{w,h},{w,h},ReconstructionMode::dlaa};
     }
 };
-// Up to 16,777,216 pixels: 3840x2160, 5120x1440 and 5120x2880 fit; 8K does not.
-constexpr std::uint64_t max_pixels=16777216;
+// Up to D3D12's largest 2D texture side (D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION).
+// v0.24.0 replaced the 16,777,216-pixel ceiling with it and a video memory
+// check (gpu_memory/budget.hpp), so 8K and DSR 4x fit when the memory does.
+// The game packs texture heights in 14 bits (temporal_bindings/inputs.cpp), so
+// its scenes are at most 16383 tall.
+inline constexpr unsigned max_side=16384;
 constexpr bool valid_extent(Extent e) noexcept {
-    return e.width>=32&&e.height>=32&&e.width<=8192&&e.height<=8192&&
-        std::uint64_t(e.width)*e.height<=max_pixels;
+    return e.width>=32&&e.height>=32&&e.width<=max_side&&e.height<=max_side;
 }
 constexpr bool valid_geometry(const Geometry &g) noexcept {
     if(!valid_extent(g.allocation)||!valid_extent(g.render)||!valid_extent(g.output)||

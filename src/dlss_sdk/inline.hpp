@@ -24,10 +24,12 @@ public:
     InlineFrame(ID3D12Device *,unsigned,unsigned,const std::array<ID3D12Resource *,3> &,
                 const std::filesystem::path &,const BorrowedInitialization &,bool continuous=false,bool caller_retained=false);
     // captures=false skips the five diagnostic readback buffers (about 450 MB
-    // at 4K); record_continuous() then refuses capture=true.
+    // at 4K); record_continuous() then refuses capture=true. byte_limit: the
+    // most its images may take, measured exactly as they are created (the
+    // alpha passes the room left in the video memory budget, gpu_memory).
     InlineFrame(ID3D12Device *,Geometry,const std::array<ID3D12Resource *,3> &,
                 const std::filesystem::path &,const BorrowedInitialization &,bool continuous=false,bool caller_retained=false,
-                bool captures=true);
+                bool captures=true,std::uint64_t byte_limit=419430400);
     ~InlineFrame();
     InlineFrame(const InlineFrame &)=delete;
     InlineFrame &operator=(const InlineFrame &)=delete;
@@ -56,6 +58,8 @@ public:
     // then frees the images instead of keeping them for the process.
     void retire(ID3D12Fence *,std::uint64_t value);
     bool released() const noexcept;
+    // Bytes of the images it created, measured with GetResourceAllocationInfo.
+    std::uint64_t allocation_bytes() const noexcept;
     // Converted color/depth/motion, SDK RGBA32 output, native packed output.
     std::array<std::vector<std::byte>,5> collect(ID3D12Fence *,std::uint64_t,bool recording_retired);
     void write(std::ostream &) const;

@@ -54,7 +54,8 @@ int main(){
     // the game's quantized extent is one scale per axis, as DLSS and the
     // shader adaptations require.
     for(const auto d:{rr::Extent{1920,1080},rr::Extent{2560,1440},rr::Extent{3440,1440},rr::Extent{3840,2160},rr::Extent{5120,1440},
-                      rr::Extent{2560,1080},rr::Extent{1600,900},rr::Extent{1366,768},rr::Extent{3413,1440}})
+                      rr::Extent{2560,1080},rr::Extent{1600,900},rr::Extent{1366,768},rr::Extent{3413,1440},
+                      rr::Extent{5120,2880},rr::Extent{7680,4320},rr::Extent{10240,2880}})
         for(const auto m:{mhw::dlss_sdk::ReconstructionMode::performance,mhw::dlss_sdk::ReconstructionMode::balanced,
                           mhw::dlss_sdk::ReconstructionMode::quality,mhw::dlss_sdk::ReconstructionMode::dlaa}){
             const auto planned=rr::plan(d,d.width==3413?5120U:d.width,mhw::dlss_sdk::requested_scale(m));
@@ -63,6 +64,8 @@ int main(){
         }
     check(rr::plan({3840,2160},.5F).render==rr::Extent{1920,1080},"4K geometry without allocation claim");
     check(rr::plan({5120,1440},.5F).render==rr::Extent{2560,720},"ultrawide geometry");
+    check(rr::plan({7680,4320},.5F).render==rr::Extent{3840,2160}&&rr::plan({16384,16384},1.F).render==rr::Extent{16384,16384},
+          "8K and the largest D3D12 side (v0.24.0)");
     // 21:9 pillarboxed in a 5120x1440 window: the scale quantizes against the
     // window (exactly 0.5), and the odd scene width truncates (game-20).
     const auto pillar=rr::plan({3413,1440},5120,.5F);
@@ -72,7 +75,7 @@ int main(){
     check(!rr::plan({3413,1440},3412,.5F).valid,"basis narrower than the scene");
     check(!rr::plan({65,64},.5F).valid,"reject native clamp disagreement");
     for(float scale:{0.F,.49F,1.01F,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})check(!rr::plan({2560,1440},scale).valid,"invalid scale");
-    check(!rr::plan({0,1440},.5F).valid&&!rr::plan({8193,1440},.5F).valid,"invalid display extent");
+    check(!rr::plan({0,1440},.5F).valid&&!rr::plan({16385,1440},.5F).valid&&!rr::plan({2560,16385},.5F).valid,"invalid display extent");
     check(rr::matching_basis({2560,1440},1,{2560,1440},{2560,1440}),"matching native override dimensions");
     check(!rr::matching_basis({2560,1440},1,{1920,1080},{2560,1440})&&!rr::matching_basis({2560,1440},2,{2560,1440},{2560,1440}),"reject different or unknown sizing basis");
     // 21:9 in a 2560x1440 window (game-17) and pillarboxed in 5120x1440.

@@ -95,14 +95,14 @@ Output::Output(ID3D12Device *device,unsigned w,unsigned h,bool continuous,bool c
 Output::Output(ID3D12Device *device,SpatialSource source,unsigned w,unsigned h,bool continuous,bool caller_retained)
     : Output(device,w,h,continuous,caller_retained,&source) {}
 Output::Output(ID3D12Device *device, unsigned w, unsigned h, bool continuous,bool caller_retained,const SpatialSource *source) : impl_(std::make_unique<Impl>()) {
-    require(device && w && h && w <= 8192 && h <= 8192 && UINT64(w)*h <= 16777216,
+    require(device && w && h && w <= dlss_sdk::max_side && h <= dlss_sdk::max_side,
             "presentation extent/device");
     require(!caller_retained||continuous,"presentation caller retention mode");
     auto &p = *impl_; p.device = device; p.width = w; p.height = h;p.continuous=continuous;p.caller_retained=caller_retained;
     p.spatial=source!=nullptr;p.region=source?*source:SpatialSource{w,h,w,h};
     const auto &r=p.region;
     require(r.width&&r.height&&r.width<=r.allocation_width&&r.height<=r.allocation_height&&r.width<=w&&r.height<=h&&
-        r.allocation_width<=8192&&r.allocation_height<=8192&&UINT64(r.allocation_width)*r.allocation_height<=16777216&&
+        r.allocation_width<=dlss_sdk::max_side&&r.allocation_height<=dlss_sdk::max_side&&
         // One render scale in [0.5, 1] per axis, truncated by the game: exact
         // proportions, the truncated half of a pillarboxed odd scene (3413x1440
         // at 1706x720), and the DLSS presets' quantized extents.

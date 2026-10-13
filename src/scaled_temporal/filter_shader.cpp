@@ -72,8 +72,9 @@ std::vector<Word> adapt(std::span<const Word> native,FilterGeometry g){
 }
 }
 bool valid_filter_geometry(FilterGeometry g) noexcept {
-    if(g.render_width<32||g.render_height<32||g.render_width>8192||g.render_height>8192||g.output_width>8192||g.output_height>8192||
-       std::uint64_t(g.output_width)*g.output_height>16777216)return false;
+    using dlss_sdk::max_side;
+    if(g.render_width<32||g.render_height<32||g.render_width>max_side||g.render_height>max_side||
+       g.output_width>max_side||g.output_height>max_side)return false;
     // One render scale in [0.5, 1] for both axes, truncated per axis: identity
     // (DLAA), exact 2:1, a pillarboxed odd scene (3413x1440 at 1706x720), and
     // the Quality and Balanced extents. The adaptations use the actual ratio

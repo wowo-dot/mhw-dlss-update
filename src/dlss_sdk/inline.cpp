@@ -58,12 +58,13 @@ struct InlineFrame::Impl {
     std::uint64_t evaluations{},resets{},captures{};
     HistoryFrame history;std::uint64_t generation{},allocation_bytes{},completion_fence{},completion_value{};std::string failure;
 };
+static_assert(max_side==D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
 InlineFrame::InlineFrame(ID3D12Device *device,unsigned w,unsigned h,const std::array<ID3D12Resource *,3> &raw,
                         const std::filesystem::path &runtime,const BorrowedInitialization &initialization,bool continuous,bool caller_retained):
     InlineFrame(device,Geometry::dlaa(w,h),raw,runtime,initialization,continuous,caller_retained){}
 InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array<ID3D12Resource *,3> &raw,
                         const std::filesystem::path &runtime,const BorrowedInitialization &initialization,bool continuous,bool caller_retained,
-                        bool captures):impl_(std::make_unique<Impl>()){
+                        bool captures,std::uint64_t byte_limit):impl_(std::make_unique<Impl>()){
     auto &p=*impl_;p.capture_buffers=captures;
     try {
         require(device&&device->GetNodeCount()==1&&valid_geometry(geometry),"inline extent/device");
@@ -90,7 +91,7 @@ InlineFrame::InlineFrame(ID3D12Device *device,Geometry geometry,const std::array
         auto out=texture(ow,oh,DXGI_FORMAT_R32G32B32A32_FLOAT);p.output=resource(device,out,D3D12_HEAP_TYPE_DEFAULT,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);if(captures){p.readbacks[3].prepare(device,out,16);
         p.readbacks[4].prepare(device,texture(ow,oh,DXGI_FORMAT_R11G11B10_FLOAT),4);}p.handoff=std::make_unique<temporal_present::Output>(device,ow,oh,continuous,caller_retained);
         const auto account=[&](ID3D12Resource *r){const auto desc=r->GetDesc();const auto bytes=device->GetResourceAllocationInfo(0,1,&desc).SizeInBytes;
-            require(bytes&&bytes!=UINT64_MAX&&bytes<=419430400-p.allocation_bytes,"inline image allocation budget");p.allocation_bytes+=bytes;};
+            require(bytes&&bytes!=UINT64_MAX&&bytes<=byte_limit-p.allocation_bytes,"inline image allocation budget");p.allocation_bytes+=bytes;};
         for(const auto &r:p.converted)account(r.Get());account(p.output.Get());account(p.handoff->packed());for(const auto &r:p.readbacks)if(r.buffer)account(r.buffer.Get());
         D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,7,D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,0};
         hr(device->CreateDescriptorHeap(&hd,IID_PPV_ARGS(&p.heap)),"inline heap");const auto step=device->GetDescriptorHandleIncrementSize(hd.Type);
@@ -217,6 +218,7 @@ void InlineFrame::retire(ID3D12Fence *fence,std::uint64_t value){
     p.destroy_result=NVSDK_NGX_D3D12_DestroyParameters(p.parameters);require(p.destroy_result==1,"inline retire DestroyParameters");p.parameters=nullptr;p.released=true;
 }
 bool InlineFrame::released() const noexcept{return impl_->released;}
+std::uint64_t InlineFrame::allocation_bytes() const noexcept{return impl_->allocation_bytes;}
 bool InlineFrame::recorded() const noexcept{return impl_->copied&&impl_->restored;}
 RecordAttempt InlineFrame::last_attempt() const noexcept{return impl_->last;}
 Geometry InlineFrame::geometry() const noexcept{return impl_->geometry;}

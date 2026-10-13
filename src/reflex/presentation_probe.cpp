@@ -241,7 +241,7 @@ void change_dlss_mode(mhw::dlss_sdk::ReconstructionMode wanted,DlssRetry &retry)
         mhw::alpha::status::dlss_sizes(rw,rh,sw,sh);
         mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
         retry={};
-    }else if((r.resumed||r.retry)&&retry.count<15){retry.at=GetTickCount64()+2000;retry.mode=wanted;++retry.count;}
+    }else if((r.resumed||r.retry)&&!r.memory&&retry.count<15){retry.at=GetTickCount64()+2000;retry.mode=wanted;++retry.count;}
     else retry={};
     if(generation&&!released)mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped,"mode-change-inputs");
 }

@@ -8,6 +8,7 @@
 #include "../reflex/frame_generation_policy.hpp"
 #include "../reflex/streamline.hpp"
 #include "../perf/toggles.hpp"
+#include "../gpu_memory/budget.hpp"
 #include <wrl/client.h>
 #include <algorithm>
 #include <cmath>
@@ -100,6 +101,7 @@ struct Session {
     std::array<SlotCamera, slot_count> cameras;
     D3D12_RESOURCE_DESC depth_desc{}, motion_desc{};
     bool created{}, create_failed{};
+    gpu_memory::Check memory;  // create()'s video memory check
     unsigned pending{none};
     Last last;
     ID3D12Fence *fence{};  // Owned by the SDK; only GetCompletedValue is called.
@@ -171,28 +173,47 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
     return b;
 }
 
+// The HUD-less image covers exactly the scene rectangle.
+D3D12_RESOURCE_DESC hudless_desc(const D3D12_RESOURCE_DESC &scene) {
+    D3D12_RESOURCE_DESC h{};
+    h.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    h.Width = scene.Width;
+    h.Height = scene.Height;
+    h.DepthOrArraySize = h.MipLevels = 1;
+    h.SampleDesc.Count = 1;
+    h.Format = HudlessPass::format;
+    h.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    return h;
+}
+
 bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Resource *scene) {
     ComPtr<ID3D12Device> device;
     if (FAILED(depth->GetDevice(IID_PPV_ARGS(&device)))) return false;
     s.depth_desc = depth->GetDesc();
     s.motion_desc = motion->GetDesc();
     const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    const auto scene_desc = scene->GetDesc();
+    const auto h = hudless_desc(scene_desc);
+    // v0.24.0: the depth/motion ring, the keyed staging copies (made on first
+    // use) and, when made here, the HUD-less images must fit the video memory
+    // budget (gpu_memory/budget.hpp); otherwise frame generation stays off.
+    {
+        auto d = s.depth_desc, m = s.motion_desc;
+        d.Flags = m.Flags = D3D12_RESOURCE_FLAG_NONE;
+        const auto bytes = [&](const D3D12_RESOURCE_DESC &x) { return device->GetResourceAllocationInfo(0, 1, &x).SizeInBytes; };
+        const std::uint64_t depth_bytes = bytes(d), motion_bytes = bytes(m), hudless_bytes = bytes(h);
+        if (depth_bytes == UINT64_MAX || motion_bytes == UINT64_MAX || hudless_bytes == UINT64_MAX) return false;
+        const unsigned copies = slot_count + (perf::on(perf::keyed_staging) ? staging_count : 0);
+        s.memory = gpu_memory::check(copies * (depth_bytes + motion_bytes) +
+                                     (!s.hudless && !s.hudless_failed ? slot_count * hudless_bytes : 0));
+        if (!s.memory.passed) return false;
+    }
     // HUD-less is optional: any failure here leaves depth/motion-only FG. It is
     // scene-sized, so a live preset change keeps it (release_inputs()).
-    const auto scene_desc = scene->GetDesc();
     if (!s.hudless && !s.hudless_failed) try {
-        // The HUD-less image covers exactly the scene rectangle.
         if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
             throw std::runtime_error("hudless scene extent");
         s.hudless = std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
-        D3D12_RESOURCE_DESC h{};
-        h.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        h.Width = scene_desc.Width;
-        h.Height = scene_desc.Height;
-        h.DepthOrArraySize = h.MipLevels = 1;
-        h.SampleDesc.Count = 1;
-        h.Format = HudlessPass::format;
-        h.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         for (auto &i : s.images) {
             if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &h, tag_state, nullptr, IID_PPV_ARGS(&i.hudless))))
                 throw std::runtime_error("hudless image");
@@ -902,7 +923,10 @@ void write(std::ostream &o) {
       << ",\"presented_frames\":[";
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"
-      << ",\"created\":" << s.created << ",\"create_failed\":" << s.create_failed << ",\"output\":[" << s.output_width << ','
+      << ",\"created\":" << s.created << ",\"create_failed\":" << s.create_failed
+      << ",\"video_memory\":{\"checked\":" << s.memory.done << ",\"read\":" << s.memory.read << ",\"passed\":" << s.memory.passed
+      << ",\"budget_mb\":" << (s.memory.budget >> 20) << ",\"usage_mb\":" << (s.memory.usage >> 20)
+      << ",\"needed_mb\":" << (s.memory.needed >> 20) << '}' << ",\"output\":[" << s.output_width << ','
       << s.output_height << "],\"scene\":[" << s.scene.x << ',' << s.scene.y << ',' << s.scene.width << ',' << s.scene.height
       << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
       << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged

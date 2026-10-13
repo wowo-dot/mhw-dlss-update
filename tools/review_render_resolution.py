@@ -14,7 +14,7 @@ def f32(v):
 
 def geometry(display, scale):
     require(isinstance(display, list) and len(display) == 2 and
-            all(type(n) is int and 64 <= n <= 8192 for n in display), "display extent")
+            all(type(n) is int and 64 <= n <= 16384 for n in display), "display extent")
     require(type(scale) in (int, float) and math.isfinite(scale) and .5 <= scale < 1, "scale")
     width = int(f32(f32(display[0]) * f32(scale))) & ~15
     quantized = f32(f32(width) / f32(display[0]))

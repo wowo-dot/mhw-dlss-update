@@ -32,6 +32,7 @@
 #include "../perf/hook_timing.hpp"
 #include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"
+#include "../gpu_memory/budget.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
 #ifdef MHW_FG_GAME
@@ -987,6 +988,26 @@ namespace {
 std::atomic<int> mode_request{-1};
 // Set once install() completed (any thread reads it; the worker owns pass).
 std::atomic<bool> live_installed{};
+// The last video memory check (install or rebuild), for the summary. Under Lock.
+gpu_memory::Check memory_check;
+// The game's adapter for the video memory budget: its swap chain's factory
+// enumerates it by the device's LUID (no second factory). Once a process.
+bool pin_adapter(ID3D12Device *device,std::uintptr_t swapchain) noexcept{
+    if(gpu_memory::pinned.load())return true;
+    ComPtr<IDXGISwapChain> chain;ComPtr<IDXGIFactory4> factory;ComPtr<IDXGIAdapter3> adapter;
+    return device&&swapchain&&SUCCEEDED(reinterpret_cast<IUnknown *>(swapchain)->QueryInterface(IID_PPV_ARGS(&chain)))&&
+        SUCCEEDED(chain->GetParent(IID_PPV_ARGS(&factory)))&&
+        SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(),IID_PPV_ARGS(&adapter)))&&gpu_memory::pin(adapter.Get());
+}
+// Whether `needed` more bytes fit the video memory budget; keeps the check for
+// the summary and, on a refusal, the reason.
+bool memory_fits(std::uint64_t needed,gpu_memory::Check &c,std::string &why){
+    c=gpu_memory::check(needed);{Lock lock;memory_check=c;}
+    if(c.passed)return true;
+    why=c.read?"video memory: "+std::to_string(needed>>20)+" MB needed, "+
+        std::to_string(gpu_memory::room({c.budget,c.usage})>>20)+" MB left in the budget":"video memory budget unavailable";
+    return false;
+}
 }
 void request_mode(dlss_sdk::ReconstructionMode m) noexcept{mode_request.store(static_cast<int>(m));}
 bool requested_mode(dlss_sdk::ReconstructionMode &m) noexcept{
@@ -1062,6 +1083,15 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         r.mode=mode;r.render_width=planned.render.width;r.render_height=planned.render.height;
         if(!scene&&mode==scaled_geometry.mode&&planned.render.width==render_width()&&planned.render.height==render_height()){
             configured_mode=requested;r.ok=r.unchanged=true;return r;}
+        // The new images must fit the video memory budget while the old ones
+        // still exist (they are released after the swap); nothing changed yet.
+        // A preset the budget refuses leaves the current one running; a scene
+        // change stops DLSS (the game's new scene needs them).
+        const bool new_copies=found.width!=runtime.width||found.height!=runtime.height;
+        gpu_memory::Check memory;
+        if(std::string why;!memory_fits(gpu_memory::dlss_bytes(found.width,found.height,planned.render.width,planned.render.height,new_copies),memory,why)){
+            if(scene)throw std::runtime_error(why);
+            r.reason=why;r.memory=r.resumed=true;return r;}
         // 1 pause.
         accepting.store(false);sr::stop();mark(1);
         // 2 drain.
@@ -1107,7 +1137,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         }
         // The private copies of the game's inputs are scene-sized.
         std::array<ComPtr<ID3D12Resource>,3> copies{raw[0],raw[1],raw[2]};
-        if(found.width!=runtime.width||found.height!=runtime.height){
+        if(new_copies){
             constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R32_FLOAT,DXGI_FORMAT_R32_UINT};
             for(unsigned i=0;i<3;++i){D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;desc.Width=found.width;desc.Height=found.height;
                 desc.DepthOrArraySize=desc.MipLevels=1;desc.Format=formats[i];desc.SampleDesc.Count=1;D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -1117,7 +1147,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         }
         const dlss_sdk::Geometry geometry{{found.width,found.height},{planned.render.width,planned.render.height},{found.width,found.height},mode};
         auto fresh=std::make_unique<dlss_sdk::InlineFrame>(device,geometry,std::array<ID3D12Resource *,3>{copies[0].Get(),copies[1].Get(),copies[2].Get()},
-            sdk_runtime,*initialization,true,true,false);
+            sdk_runtime,*initialization,true,true,false,gpu_memory::room({memory.budget,memory.usage}));
         auto fresh_spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{found.width,found.height,
             planned.render.width,planned.render.height},found.width,found.height,true,true);
         if(!sr::resize(planned.render.width,planned.render.height,found.width,found.height,r.reason))throw std::runtime_error(r.reason);
@@ -1205,6 +1235,22 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!qualified(image,runtime,reason))return false;
         cfg={image,0,runtime.backend,runtime.device};if(!pb::read(image+0x51c4480,cfg.renderer)||!cfg.renderer)throw std::runtime_error("continuous renderer");
         auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
+#ifdef MHW_CONTINUOUS_SCALED
+        {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,
+             dlss_sdk::requested_scale(configured_mode));
+         if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};
+         edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
+         edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);}
+        const unsigned planned_width=render_width(),planned_height=render_height();
+#else
+        const unsigned planned_width=runtime.width,planned_height=runtime.height;
+#endif
+        // The images must fit the video memory budget (gpu_memory/budget.hpp).
+        if(!pin_adapter(device,runtime.swapchain))throw std::runtime_error("video memory: the game's adapter");
+        gpu_memory::Check memory;
+        if(std::string why;!memory_fits(gpu_memory::dlss_bytes(runtime.width,runtime.height,planned_width,planned_height),memory,why))
+            throw std::runtime_error(why);
+        const auto byte_limit=gpu_memory::room({memory.budget,memory.usage});
         constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_R11G11B10_FLOAT,DXGI_FORMAT_R32_FLOAT,DXGI_FORMAT_R32_UINT};
         for(unsigned i=0;i<3;++i){D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;desc.Width=runtime.width;desc.Height=runtime.height;desc.DepthOrArraySize=desc.MipLevels=1;desc.Format=formats[i];desc.SampleDesc.Count=1;
             D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
@@ -1212,21 +1258,16 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         sdk_runtime=sdk;
         #ifdef MHW_CONTINUOUS_SCALED
-        {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,
-             dlss_sdk::requested_scale(configured_mode));
-         if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};
-         edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
-         edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);}
         // DLAA renders at the scene size. A basis width that is not a multiple
         // of 16 pixels quantizes 100% just below it; DLSS then upscales that
         // extent as Quality.
         auto mode=configured_mode;
         if(mode==dlss_sdk::ReconstructionMode::dlaa&&(render_width()!=runtime.width||render_height()!=runtime.height))mode=dlss_sdk::ReconstructionMode::quality;
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},mode};
-        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false);
+        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false,byte_limit);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
 #else
-        pass=std::make_unique<dlss_sdk::InlineFrame>(device,runtime.width,runtime.height,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true);
+        pass=std::make_unique<dlss_sdk::InlineFrame>(device,dlss_sdk::Geometry::dlaa(runtime.width,runtime.height),std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,true,byte_limit);
 #endif
         if(FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence))))throw std::runtime_error("continuous fence");
         if(!unfiltered_lifetime.initialize(device))throw std::runtime_error("unfiltered lifetime fence");
@@ -1379,6 +1420,9 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
        <<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<'}'
        <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"refreshes\":"<<reads.refreshes<<",\"queries\":"<<reads.queries<<",\"background_queries\":"<<reads.background_queries<<'}'
+       <<",\"video_memory\":{\"checked\":"<<memory_check.done<<",\"read\":"<<memory_check.read<<",\"passed\":"<<memory_check.passed
+       <<",\"budget_mb\":"<<(memory_check.budget>>20)<<",\"usage_mb\":"<<(memory_check.usage>>20)<<",\"needed_mb\":"<<(memory_check.needed>>20)
+       <<",\"images_mb\":"<<((pass?pass->allocation_bytes():0)>>20)<<'}'
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";

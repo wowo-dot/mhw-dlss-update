@@ -43,15 +43,19 @@ int main(){
     bad=upscale;bad.mode=ReconstructionMode::dlaa;if(valid_geometry(bad))return 23;
     bad=upscale;bad.render=bad.output;if(valid_geometry(bad))return 24;
     bad=upscale;bad.mode=static_cast<ReconstructionMode>(99);if(valid_geometry(bad))return 25;
-    // 4K, 5120x1440 (32:9) and 5120x2880 fit the pixel ceiling; 8K does not.
-    for(Extent e: {Extent{3840,2160},{5120,1440},{5120,2880}})if(!valid_extent(e))return 32;
-    if(valid_extent({7680,4320})||valid_extent({4097,4096}))return 33;
-    for(Extent e: {Extent{0,720},{31,720},{8193,32},{8192,8192},{UINT32_MAX,UINT32_MAX}}){
+    // Up to D3D12's 16384 a side (v0.24.0; video memory is checked at
+    // creation): 4K, 32:9, 5K, 8K, DSR 4x of 5120x1440 and the largest.
+    for(Extent e: {Extent{3840,2160},{5120,1440},{5120,2880},{7680,4320},{10240,2880},{16384,16384}})if(!valid_extent(e))return 32;
+    if(valid_extent({16385,32})||valid_extent({32,16385}))return 33;
+    for(Extent e: {Extent{0,720},{31,720},{16385,32},{32,16385},{UINT32_MAX,UINT32_MAX}}){
         bad=upscale;bad.allocation=e;if(valid_geometry(bad))return 26;
         bad=upscale;bad.render=e;if(valid_geometry(bad))return 27;
         bad=upscale;bad.output=e;if(valid_geometry(bad))return 28;
     }
     if(!render_supported(upscale,{1280,720},{640,360},{2560,1440}))return 29;
+    // The game truncates in float at an exact integer (v0.24.0): 5120x2880 at
+    // Quality renders 3408x1916. A full side still needs the other full.
+    if(!single_scale(3408,1916,5120,2880)||single_scale(5120,2879,5120,2880)||single_scale(5119,2880,5120,2880))return 49;
     // A pillarboxed 21:9 scene in a 5120x1440 window: the game truncates
     // 1706.5 where the SDK may round to 1707 (game-20).
     const Geometry pillar{{3413,1440},{1706,720},{3413,1440},ReconstructionMode::performance};

@@ -38,6 +38,8 @@ struct ModeChange {
     bool ok{}, resumed{}, unchanged{};
     bool scene{};   // change_scene()
     bool retry{};   // not ready yet (discovery, drain): the worker tries again
+    bool memory{};  // refused before anything changed: the new images would not
+                    // fit the video memory budget (no retry; the old mode runs)
     unsigned phase{};  // the last phase reached (above)
     std::string reason;
     std::array<std::uint64_t, 7> us{};  // microseconds from the start at the end of each phase

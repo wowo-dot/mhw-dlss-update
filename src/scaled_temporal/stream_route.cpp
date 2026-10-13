@@ -1196,7 +1196,11 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
  for(const auto &g:gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="stream code gate";return false;}
  targets[0]=c.image+0x24ca1f0;targets[1]=c.image+0x259d670;targets[3]=c.image+0x2297e20;targets[4]=c.image+0x259c650;targets[5]=c.image+0x259d740;
  auto *device=reinterpret_cast<ID3D12Device *>(c.device);ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
+#ifndef MHW_ALPHA
+ // Research builds only: two scene-sized readbacks of the native depth (a
+ // diagnostic; about 66 MB at 4K). Unprepared, they record nothing.
  for(auto &capture:compute_depth_pixels)if(!capture.prepare(device,w,h)){reason="compute depth readback allocation";return false;}
+#endif
  if(FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)))||
     FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||
     !pb::system_method(reinterpret_cast<std::uintptr_t>(list.Get()),16,targets[2])){reason="stream method discovery";return false;}

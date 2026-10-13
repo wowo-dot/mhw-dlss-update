@@ -219,7 +219,7 @@ void run(int argc,wchar_t **argv){
     reflection(native,one);reflection(native,two);save(out/"identity.dxbc",one);save(out/"scaled.dxbc",two);disassemble(out/"scaled.asm",two);
     save(out/"expanded-texture-reference.dxbc",reference);disassemble(out/"expanded-texture-reference.asm",reference);
     unsigned rejections=0;
-    for(const auto g:std::array<sf::FilterGeometry,6>{{{0,32,64,64},{64,32,128,32},{64,32,96,48},{UINT_MAX,32,128,64},{64,32,32,16},{4096,4096,8192,8192}}}){
+    for(const auto g:std::array<sf::FilterGeometry,6>{{{0,32,64,64},{64,32,128,32},{64,32,96,48},{UINT_MAX,32,128,64},{64,32,32,16},{8192,8192,16385,16385}}}){
         rejects([&]{sf::make_filter_shader(native,g);});++rejections;}
     for(const auto offset:std::array<std::size_t,6>{0,4,24,28,4000,10007}){auto changed=native;changed[offset]^=std::byte{1};rejects([&]{sf::make_filter_shader(changed,scaled);});++rejections;}
     rejects([&]{sf::make_filter_shader(std::span(native).first(native.size()-1),scaled);});++rejections;

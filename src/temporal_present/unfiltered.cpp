@@ -15,7 +15,7 @@ void transition(ID3D12GraphicsCommandList *list,ID3D12Resource *r,D3D12_RESOURCE
 }
 bool can_copy_unfiltered(ID3D12GraphicsCommandList *list,ID3D12Resource *source,ID3D12Resource *destination,
                      unsigned w,unsigned h,D3D12_RESOURCE_STATES state) noexcept {
-    if(!list||!source||!destination||source==destination||!w||!h||w>8192||h>8192||UINT64(w)*h>16777216||
+    if(!list||!source||!destination||source==destination||!w||!h||w>D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION||h>D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION||
        (state!=D3D12_RESOURCE_STATE_COPY_DEST && state!=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE &&
         state!=(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE))||
        list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT)return false;
