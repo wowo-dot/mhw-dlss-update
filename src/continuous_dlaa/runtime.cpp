@@ -1353,7 +1353,7 @@ void save_inserted_effect(const std::filesystem::path &prefix) noexcept {
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;const auto reads=bridge_probe::read_cache_stats();
     out<<"{\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()
        <<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<'}'
-       <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"queries\":"<<reads.queries<<'}'
+       <<",\"reads\":{\"level1_misses\":"<<reads.level1_misses<<",\"region_hits\":"<<reads.region_hits<<",\"refreshes\":"<<reads.refreshes<<",\"queries\":"<<reads.queries<<'}'
        <<",\"evaluations\":"<<h.evaluations<<",\"resets\":"<<h.resets<<",\"reasons\":{";
     for(unsigned i=0;i<reset_reason_count;++i){if(i)out<<',';out<<'"'<<reset_reason_names[i]<<"\":"<<h.counts[i];}
     out<<"},\"projection_changes_retained\":"<<h.projection_changes_retained<<",\"skip_reasons\":[";

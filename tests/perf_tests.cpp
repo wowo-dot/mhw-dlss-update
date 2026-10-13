@@ -154,7 +154,8 @@ void region_level_tests() {
     before = bp::read_cache_stats();
     check(touch(), "after the window");
     after = bp::read_cache_stats();
-    check(after.queries - before.queries == 2, "expired blocks refresh through one region query");
+    check(after.queries - before.queries == 1 && after.refreshes - before.refreshes == 1,
+          "expired blocks refresh through one query from the region's base");
     // A region made inaccessible is seen once the window has passed.
     DWORD old{};
     check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");

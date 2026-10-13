@@ -69,26 +69,39 @@ void remember(SharedRegion &slot, std::uintptr_t base, std::uintptr_t end,
 // nodes a frame) refreshed each of its blocks every 100 ms, and
 // NtQueryVirtualMemory took 10% of the Present thread. An entry keeps the time
 // of its own query and the first level copies it, so no answer outlives the
-// window.
+// window. game-89 (v0.23.4) still made about 2,000 queries a second: about a
+// hundred hot regions, each expiring every 100 ms and queried twice. An
+// expired region is now refreshed with one query from its base, and 256 are
+// kept.
 struct Region {
   std::uintptr_t base{}, end{};
   std::uint32_t tick{};
 };
-constexpr unsigned region_count = 64U;
+constexpr unsigned region_count = 256U;
 std::array<Region, region_count> region_list{};
 unsigned region_next{};
 SRWLOCK region_lock = SRWLOCK_INIT;
-std::atomic<std::uint64_t> level1_misses{}, region_hits{}, queries{};
+std::atomic<std::uint64_t> level1_misses{}, region_hits{}, refreshes{},
+    queries{};
 
-bool known_region(std::uintptr_t address, std::uint32_t now,
-                  Region &out) noexcept {
-  bool found = false;
+// The region holding address: `known` within the window, `expired` (out is
+// the expired entry, to refresh) or `none`.
+enum class Known { none, expired, known };
+Known known_region(std::uintptr_t address, std::uint32_t now,
+                   Region &out) noexcept {
+  Known found = Known::none;
   AcquireSRWLockShared(&region_lock);
   for (const auto &r : region_list)
-    if (address >= r.base && address < r.end && now - r.tick < cache_ms) {
-      out = r;
-      found = true;
-      break;
+    if (address >= r.base && address < r.end) {
+      if (now - r.tick < cache_ms) {
+        out = r;
+        found = Known::known;
+        break;
+      }
+      if (found == Known::none) {
+        out = r;
+        found = Known::expired;
+      }
     }
   ReleaseSRWLockShared(&region_lock);
   return found;
@@ -151,8 +164,16 @@ std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
   if (const auto end = cached_end(slot, address, now))
     return end;
   level1_misses.fetch_add(1, std::memory_order_relaxed);
-  if (known_region(address, now, r)) {
+  const auto known = known_region(address, now, r);
+  Region fresh;
+  if (known == Known::known) {
     region_hits.fetch_add(1, std::memory_order_relaxed);
+  } else if (known == Known::expired && query(r.base, false, fresh) &&
+             fresh.base == r.base && fresh.end == r.end) {
+    // The same run from the same base: one query refreshes the region.
+    refreshes.fetch_add(1, std::memory_order_relaxed);
+    r.tick = now;
+    add_region(r);
   } else {
     if (!query(address, true, r))
       return 0U;
@@ -166,6 +187,7 @@ std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
 ReadCacheStats read_cache_stats() noexcept {
   return {level1_misses.load(std::memory_order_relaxed),
           region_hits.load(std::memory_order_relaxed),
+          refreshes.load(std::memory_order_relaxed),
           queries.load(std::memory_order_relaxed)};
 }
 

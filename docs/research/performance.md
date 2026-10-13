@@ -170,3 +170,28 @@ its own query.
 - Tests (`perf_tests`): a 4 MB region's 64 blocks cost two queries, also
   after the window, and a region made inaccessible is seen once the window
   has passed.
+
+## Session 20261013-perf3 (v0.23.4, game-89): the region cache in game
+
+Same spot; FG off; Reflex Boost; the profiler off.
+
+| Run | fps | 1% low | p50 / p99 ms | CPU busy | GPU busy |
+|---|---|---|---|---|---|
+| Quality, v0.23.2 (perf1) | 225 | 136 | 4.38 / 7.35 | 4.31 ms | 2.89 ms |
+| **Quality, v0.23.4** (05:52:37-05:53:52) | **234** | **162** | 4.20 / 6.15 | 4.14 | 2.86 |
+| DLAA, v0.23.4 (menu segment, 94 s) | 228 | 152 | 4.29 / 6.60 | 4.24 | 3.97 |
+| Unmodded (perf1) | 249 | 178 | 3.95 / 5.63 | 3.89 | 3.24 |
+
+- At Quality: +4% fps, p99 down 1.2 ms, 1% low up 19%. CPU busy is 0.25 ms
+  above the unmodded game (it was 0.42 ms).
+- DLAA is unchanged: at about 4 ms of GPU work per frame the GPU is now near
+  the limit.
+- **The counters:** in a steady 20 s window, about 57k first-level misses,
+  36k region hits and 40k queries, so about 8.5 VirtualQuery calls a frame
+  (2,000 a second). About a hundred hot regions each expired every 100 ms
+  and were queried twice, and 64 entries were too few.
+
+**v0.23.5:**
+- An expired region is refreshed with one query from its base (`refreshes`
+  in the counters).
+- The second level keeps 256 regions.
