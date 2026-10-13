@@ -155,8 +155,17 @@ matched.
   capture, and the matched root parameter; 43,200 channels within 1.5 steps
   of 10-bit of the reference. SDR is unchanged (69,120 channels), also after
   HDR.
-- **Next:** an HDR run. Read `hdr.valid`, `white`, `parameter` and
-  `probe_default`, and look at generated frames, the HUD especially.
+- **Confirmed in game-109 (v0.24.8 tagged).** The user restarted the game
+  with HDR on (the first process stayed 8-bit and its SDR path was as before).
+  - In HDR10 the HUD-less image was recorded 11,086 times and tagged 11,081
+    times, with 0 skips.
+  - 11,082 probes used a valid capture and 1 used the defaults (the first
+    frame).
+  - Captured: white 720.69, ratio 0.137931, gamma 0.972414, GUI gamma off, at
+    graphics root parameter 4.
+  - DLSS fault 0. The user: "just georgeous".
+  - Not exercised in game: a slider change during a run, and an SDR/HDR switch
+    within one process (the WARP test covers the re-creation).
 
 ## Also open from the day
 
