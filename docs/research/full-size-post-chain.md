@@ -150,7 +150,41 @@ silhouettes) become unnecessary.
 6. **Frame generation and Reflex.** Unaffected in principle: the final copy and
    the HUD-less capture stay as they are. Check depth and motion tags.
 
-## Next step
+## Census result (game-113, v0.24.11)
+
+The post census ran in the hub, the sauna (haze) and the field, at Quality,
+DLAA and Performance: 19 samples, 14 written.
+
+Hub, Quality (frame 25259) against DLAA (19259):
+
+- Same packets: same keys, opcodes and targets (all output-size R11G11B10).
+  The only differences are rectangles and the dispatches derived from them.
+- Render rectangle at Quality, full at DLAA:
+  - the grade (15, 0x7fffff1), motion (15, 100), haze (15, 20000) and the
+    depth-of-field composition (15, 26005);
+  - the tone map's early draw (15, 0);
+  - the TAA dispatch (15, 2): 106x60 groups, against 160x90;
+  - the TAA copy (15, 2).
+- Already output-sized at Quality, and identical:
+  - the six depth-of-field dispatches (8x1440, 128x5, 16x9, 80x45 x3);
+  - the tone map's three exposure dispatches (80x45).
+- The (15, 0x7ffffff) dispatch is `CSTiledDeferredCopyGBufferID`, recorded by
+  the scene function, not the scheduler. It copies the GBuffer ID for next
+  frame's TAA, belongs to the scene, and correctly stays at render size.
+- Stage 16 (the final copy at order 0, the UI at 4000-11000) is full-size in
+  both.
+- The sauna pair (31259 against 40259) adds the haze descriptor (order 20000)
+  with the same pattern.
+
+**This confirms the model.** Every scheduler-recorded effect after TAA uses the
+context's render rectangle at Quality. Nothing else differs. The switch needs no
+per-effect knowledge beyond the tone map's two keys, the projection helper, and
+the render-size inputs.
+
+The census cap (224 packets) was hit on UI-heavy frames: the queue holds stage
+16 before stage 15. A later census should keep only stage 15 and the final copy.
+
+## Next step (done: census above)
 
 A diagnostic build, with no rendering change, that logs the post census:
 
