@@ -8,7 +8,9 @@
 #include <atomic>
 #include <cstdio>
 #include <span>
+#include <sstream>
 #include <string>
+#include "../src/perf/hook_timing.hpp"
 namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
 
 namespace {
@@ -225,9 +227,33 @@ void sha_memo_tests() {
     check(mhw::projection_binding::bytes_sha256("abc", 3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
           "short input (not memoized)");
 }
+// v0.23.7: hook timing. 6,400 calls on one thread time 100 of them; the
+// estimate is 6,400 calls over the window's frames, and the forwarded part
+// (a spin inside forward_begin/end) is counted apart from the hook's own.
+void hook_timing_tests() {
+    namespace ht = mhw::perf::hook_timing;
+    ht::enable();
+    const auto before = ht::totals[ht::draw].timed.load();
+    for (unsigned i = 0; i < 6400; ++i) {
+        auto s = ht::begin(ht::draw);
+        ht::forward_begin(s);
+        for (volatile unsigned k = 0; k < 50; ++k) {}
+        ht::forward_end(s);
+        ht::end(s);
+    }
+    check(ht::totals[ht::draw].timed.load() - before == 100, "every 64th call is timed");
+    check(ht::totals[ht::draw].forwarded.load() > 0, "forwarded time counted");
+    std::ostringstream out;
+    ht::write(out, 64);
+    const auto text = out.str();
+    check(text.find("\"event\":\"hook_timing\"") != std::string::npos && text.find("\"draw\":{\"calls_per_frame\":100") != std::string::npos,
+          "6,400 calls over 64 frames: 100 a frame");
+    ht::enabled.store(false);
+}
 }  // namespace
 
 int main() {
+    hook_timing_tests();
     frame_stats_tests();
     region_tests();
     shared_cache_tests();

@@ -24,6 +24,8 @@ namespace mhw::alpha {
 //   perf_ab = off           ; on: DLSS alternates every 30 s between running and
 //                           ; paused (hooks installed), for A/B timing in one
 //                           ; launch; needs frame_generation = off
+//   hook_timing = off       ; on: every 64th hooked call is timed ("hook_timing"
+//                           ; events every 20 s; perf/hook_timing.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
@@ -47,6 +49,7 @@ struct Config {
     ReflexMode reflex = ReflexMode::on;
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
+    bool hook_timing{};          // hook_timing = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -161,6 +164,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "frame_generation_auto") {
             if (value == "on" || value == "off") c.generation_auto = value == "on";
             else c.warnings.push_back(where + "frame_generation_auto must be on or off");
+        } else if (key == "hook_timing") {
+            if (value == "on" || value == "off") c.hook_timing = value == "on";
+            else c.warnings.push_back(where + "hook_timing must be on or off");
         } else if (key == "perf_ab") {
             if (value == "on" || value == "off") c.perf_ab = value == "on";
             else c.warnings.push_back(where + "perf_ab must be on or off");

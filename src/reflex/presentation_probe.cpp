@@ -36,6 +36,7 @@
 #include "../render_resolution/runtime.hpp"
 #include "../scaled_temporal/stream_route.hpp"
 #include "../bridge_probe/readable_region.hpp"
+#include "../perf/hook_timing.hpp"
 #include <cstddef>
 #include <iterator>
 #include <vector>
@@ -894,6 +895,7 @@ DWORD WINAPI worker(void*) noexcept {
             << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
             << ",\"dynamic\":" << alpha_config.dynamic << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
             << ",\"frame_generation_auto\":" << alpha_config.generation_auto << ",\"profile\":" << alpha_config.profile
+            << ",\"perf_ab\":" << alpha_config.perf_ab << ",\"hook_timing\":" << alpha_config.hook_timing
             << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -981,6 +983,7 @@ DWORD WINAPI worker(void*) noexcept {
             if(alpha_config.profile)mhw::perf::sampler::start();
             // Hot game-memory regions stay validated off the render thread.
             mhw::bridge_probe::start_region_refresher();
+            if(alpha_config.hook_timing)mhw::perf::hook_timing::enable();
 #endif
 #endif
 #ifdef MHW_ALPHA
@@ -1230,6 +1233,7 @@ DWORD WINAPI worker(void*) noexcept {
                             << ",\"session\":";mhw::frame_generation::game::write(log);log << "}\n" << std::flush;
 #ifdef MHW_ALPHA
                         log << "{\"event\":\"dlss_summary\",\"runtime\":";mhw::reflex::temporal::summary(log);log << "}\n" << std::flush;
+                        mhw::perf::hook_timing::write(log,frames.completed);
 #endif
                         log_fg_buffers(log, "status");
                         log_frames(log, "armed");log_latency(log);mhw::perf::sampler::write(log);

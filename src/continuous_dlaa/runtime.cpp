@@ -29,6 +29,7 @@
 #include "../temporal_bindings/shader.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../bridge_probe/readable_region.hpp"
+#include "../perf/hook_timing.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -454,8 +455,8 @@ bool consumer_before(const NativeFrame &f,bool depth,ForwardedRequest *forwarded
 }
 void consumer_after(bool admitted,bool returned){if(admitted){if(!returned)fail(10);current_kind=0;current_list=nullptr;}consumer.resources={};}
 void WINAPI barrier_hook(ID3D12GraphicsCommandList *list,UINT n,const D3D12_RESOURCE_BARRIER *data){
-    Guard guard;
-    reinterpret_cast<BarrierFn>(originals[8])(list,n,data);
+    perf::hook_timing::Scope timing(perf::hook_timing::barrier);Guard guard;
+    {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<BarrierFn>(originals[8])(list,n,data);}
     #ifdef MHW_CONTINUOUS_SCALED
     if(!injected)sr::barriers(list,n,data);
 #endif
@@ -468,8 +469,9 @@ void WINAPI barrier_hook(ID3D12GraphicsCommandList *list,UINT n,const D3D12_RESO
 using DrawFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,UINT,UINT);
 using IndexedFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,UINT,INT,UINT);
 void WINAPI indexed_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT first,INT base,UINT instance){
- Guard guard;if(!sr::indexed_draw(list,n,instances,first,base,instance,reinterpret_cast<std::uintptr_t>(_ReturnAddress())))
-  reinterpret_cast<IndexedFn>(originals[12])(list,n,instances,first,base,instance);
+ perf::hook_timing::Scope timing(perf::hook_timing::indexed);Guard guard;
+ if(!sr::indexed_draw(list,n,instances,first,base,instance,reinterpret_cast<std::uintptr_t>(_ReturnAddress()))){
+  perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<IndexedFn>(originals[12])(list,n,instances,first,base,instance);}
 }
 struct DepthDraw {
  std::array<std::uintptr_t,4> bindings{};std::array<unsigned,2> arguments{};std::array<unsigned,4> rectangle{};
@@ -487,7 +489,7 @@ bool depth_draw_snapshot(DepthDraw &out){
     gate(6,out.arguments[0]>0&&out.arguments[0]<=6);
 }
 void WINAPI draw_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT first,UINT instance){
- Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());DepthDraw before;
+ perf::hook_timing::Scope timing(perf::hook_timing::draw);Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());DepthDraw before;
  if(!injected&&current_kind==2&&accepting.load()){
     unsigned reason{};
     if(list!=current_list||caller!=cfg.image+0x259d72e)reason=1;
@@ -506,12 +508,13 @@ void WINAPI draw_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT
             if(at){++values[at];values[at+1]=b.Flags;values[at+2]=b.Transition.Subresource;values[at+3]=b.Transition.StateBefore;values[at+4]=b.Transition.StateAfter;}}
         note_depth(6,0,depth_consumer,values);}
  }
- if(!sr::draw(list,n,instances,first,instance,caller))reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);
+ if(!sr::draw(list,n,instances,first,instance,caller)){
+    perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);}
 }
 #endif
 void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destination,ID3D12Resource *source){
-    Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    reinterpret_cast<CopyFn>(originals[10])(list,destination,source);
+    perf::hook_timing::Scope timing(perf::hook_timing::copy);Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<CopyFn>(originals[10])(list,destination,source);}
 #ifdef MHW_CONTINUOUS_SCALED
     // The scaled build copies depth at the TAA dispatch, on its own recording,
     // at every render scale (DepthConsumerAdmission; render scale 1.0 is its
@@ -768,7 +771,7 @@ void dispatch_call(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::uin
         [&]{reinterpret_cast<DispatchFn>(originals[9])(list,x,y,z);});
     if(candidate){Lock lock;resolve_telemetry.end(result);}
 }
-void WINAPI dispatch_hook(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z){Guard guard;dispatch_call(list,x,y,z,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}
+void WINAPI dispatch_hook(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z){perf::hook_timing::Scope timing(perf::hook_timing::dispatch);Guard guard;dispatch_call(list,x,y,z,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}
 // The game creates and releases command lists while it runs (the
 // nDraw::ExternalRegion proxies each own one; game-86 filled the 128 slots
 // over a few minutes), so the registry cannot pin every list it has seen.
@@ -810,7 +813,8 @@ List *list_slot(){
     return l;
 }
 HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator *allocator,ID3D12PipelineState *pipeline){
-    Guard guard;const auto result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *,ID3D12CommandAllocator *,ID3D12PipelineState *)>(originals[5])(list,allocator,pipeline);
+    perf::hook_timing::Scope timing(perf::hook_timing::reset_close);Guard guard;HRESULT result;
+    {perf::hook_timing::ForwardScope forward(timing.sample);result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *,ID3D12CommandAllocator *,ID3D12PipelineState *)>(originals[5])(list,allocator,pipeline);}
     if(FAILED(result)||!child(list)||list->GetType()!=D3D12_COMMAND_LIST_TYPE_DIRECT)return result;
     Lock lock;auto *l=find(list);
     if(!l){if(!accepting.load())return result;l=list_slot();if(!l){fail(15);return result;}*l=List{};l->value=list;
@@ -830,7 +834,7 @@ HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator
     obs::reset(list,l->generation,pipeline);return result;
 }
 HRESULT WINAPI close_hook(ID3D12GraphicsCommandList *list){
-    Guard guard;
+    perf::hook_timing::Scope close_timing(perf::hook_timing::reset_close);Guard guard;
 #ifdef MHW_FG_GAME
     // FG brightness capture: the list's last commands, before the native Close.
     if(!injected&&frame_generation::game::capture_wanted()){
@@ -839,13 +843,15 @@ HRESULT WINAPI close_hook(ID3D12GraphicsCommandList *list){
         if(open&&obs::inspect(list,roots)){injected=true;frame_generation::game::closing(list,roots);injected=false;}
     }
 #endif
-    const auto result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *)>(originals[6])(list);
+    HRESULT result;
+    {perf::hook_timing::ForwardScope forward(close_timing.sample);result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *)>(originals[6])(list);}
     Lock lock;if(auto *l=find(list)){if(SUCCEEDED(result))l->closed=true;else if(lease.list==list||unfiltered_lifetime.tracked(list,l->generation))fail(17);}return result;
 }
 void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList *const *submitted){
     // Keep native Execute and both completion signals in the same CPU order.
     // Reserving a fence value under Lock alone cannot prevent two submitters
     // from publishing the larger value first after leaving that lock.
+    perf::hook_timing::Scope execute_timing(perf::hook_timing::execute);
     SubmissionGuard submission_guard;
     Guard guard;std::array<ID3D12CommandList *,128> copy{};
     bool selected=false,signal_requested=false;ID3D12GraphicsCommandList *selected_list{};std::uint64_t value{};
@@ -911,7 +917,8 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
         unfiltered_valid=unfiltered_lifetime.before(queue,batch,unfiltered_submission);
         if(!unfiltered_valid)fail(36);
     }else if(accepting.load())fail(21);
-    reinterpret_cast<void(WINAPI *)(ID3D12CommandQueue *,UINT,ID3D12CommandList *const *)>(originals[7])(queue,count,submitted);
+    {perf::hook_timing::ForwardScope forward(execute_timing.sample);
+    reinterpret_cast<void(WINAPI *)(ID3D12CommandQueue *,UINT,ID3D12CommandList *const *)>(originals[7])(queue,count,submitted);}
     #ifdef MHW_CONTINUOUS_SCALED
     if(observed_batch)sr::observe_submission(reinterpret_cast<std::uintptr_t>(queue),GetTickCount64(),std::span(observed_lists).first(count));
     #endif

@@ -104,6 +104,8 @@ int main() {
         check(ab.perf_ab && ab.warnings.empty(), "perf_ab with frame generation off");
         const auto ab_fg = a::parse_config("frame_generation = 2x\nperf_ab = on\n", folder);
         check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1, "perf_ab refused with frame generation on");
+        check(!a::parse_config("", folder).hook_timing && a::parse_config("hook_timing = on\n", folder).hook_timing,
+              "hook_timing off by default; on");
 
         const auto edited = a::with_value(a::with_value("frame_generation = 2x\r\n", "dynamic_target", "165"), "frame_generation_auto", "on");
         check(edited == "frame_generation = 2x\r\ndynamic_target = 165\r\nframe_generation_auto = on\r\n", "new keys appended with CRLF");

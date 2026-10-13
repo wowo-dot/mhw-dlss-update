@@ -274,3 +274,39 @@ Tests:
   memo's hashes;
 - `alpha_config_tests`: `perf_ab` and its FG refusal;
 - `test_presentmon_summary`: the `perf:` lines.
+
+## Session 20261013-perf6 (v0.23.6, game-91): perf_ab and unmodded
+
+One PresentMon session. The mod launch had `perf_ab = on` (Quality, FG off,
+Boost; nine switches 30 s apart); then an unmodded launch.
+
+| Steady phases | fps | CPU busy | p99 | 1% low | GPU busy |
+|---|---|---|---|---|---|
+| DLSS running (4 phases) | 236-237 | 4.07-4.09 ms | 5.71-5.84 ms | 171-175 | 2.88 |
+| DLSS paused, hooks installed (3 phases after the first) | 244 | 3.96-3.97 | 5.56-5.64 | 177-180 | 2.26 |
+| Unmodded, settled (06:49:26-06:50:56) | 260-263 | 3.68-3.73 | 5.18-5.38 | 186-193 | 3.19 |
+
+- **DLSS's own work:** 0.11 ms of CPU a frame (237 against 244 fps).
+- **The installed hooks while DLSS is paused:** 0.27 ms a frame (244
+  against 261 fps). This is now the larger part.
+- **Read-path queries:** about 700 in the whole session. The refresher made
+  326k, off the render thread.
+- **The mod's code on the other threads** (the game's command-list
+  recorders), from game-90's rotation samples:
+  - the binding observer's hooks (`after`, `address_call<13>`, `find`,
+    `table_call<7>`, `Bindings::descriptor`) lead, with SRW-lock activity;
+  - each observer call takes two atomic adds on one process-wide `pending`
+    counter, a per-list lock and a state update;
+  - the rotation spreads samples over about a hundred threads, so these
+    shares understate the cost on the few recording threads.
+
+## v0.23.7: hook timing
+
+`hook_timing = on` (diagnostic) times every 64th hooked call of a thread with
+the time-stamp counter: the hook's own time (entry to exit, less the
+forwarded native call) and the forwarded call itself.
+- **Categories:** observer, reset/close, execute, barrier, draw, indexed,
+  dispatch, copy.
+- **Output:** a `hook_timing` event every 20 s, with estimated calls per
+  frame and own and forwarded microseconds per frame
+  (`perf/hook_timing.hpp`).
