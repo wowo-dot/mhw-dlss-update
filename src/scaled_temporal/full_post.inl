@@ -191,7 +191,7 @@ void full_states(const tb::Snapshot &s,unsigned depth_state,std::uintptr_t depth
 // the candidate as it is (game-119, v0.25.5: they cleared it, and no frame
 // armed).
 void full_candidate(const pb::Frame &f,unsigned slot){
- if(!full_post_enabled.load()||!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return;
+ if(!full_copy||!full_viewport||!full_inputs.ready()||slot==UINT_MAX||fault.load()||!accepting.load()||(render_w==width&&render_h==height))return;
  FinalQuad q;{Lock lock;q=final_quads[slot];}
  auto &s=full_state;s=FullPostState{};
  if(!q.entered||q.stamp.context!=f.gpr[2]||!field(f.gpr[2],0x154,s.key)||!field(f.gpr[2],0x15c,s.order)||!field(f.gpr[2],0x2b80,s.quad_at)){
@@ -352,7 +352,7 @@ void full_project_dispatch(pb::Frame *f){
    auto *v=reinterpret_cast<float *>(out);v[0]*=scale;v[1]*=scale;++full_counts.projections;}}
 }
 void full_post_write(std::ostream &o){
- o<<"{\"enabled\":"<<full_post_enabled.load()<<",\"final_copies\":"<<full_counts.final_copies<<",\"schedulers\":"<<full_counts.schedulers
+ o<<"{\"final_copies\":"<<full_counts.final_copies<<",\"schedulers\":"<<full_counts.schedulers
   <<",\"switches\":"<<full_counts.switches<<",\"tone_map_switches\":"<<full_counts.tone_map_switches<<",\"projections\":"<<full_counts.projections
   <<",\"restores\":"<<full_counts.restores<<",\"not_switched\":"<<full_counts.not_switched<<",\"rect_mismatch\":"<<full_counts.rect_mismatch
   <<",\"stale\":"<<full_counts.stale<<",\"declined\":"<<full_counts.declined<<",\"no_taa\":"<<full_counts.no_taa<<",\"taa_unreadable\":"<<full_counts.taa_unreadable<<",\"unadmitted\":"<<full_counts.unadmitted<<",\"unpublished\":"<<full_counts.unpublished

@@ -1326,17 +1326,15 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
  targets[0]=c.image+0x24ca1f0;targets[1]=c.image+0x259d670;targets[3]=c.image+0x2297e20;targets[4]=c.image+0x259c650;targets[5]=c.image+0x259d740;
  // full_post (full_post.hpp): the tone map's callback and the projection
  // helper are hooked; setViewport and the copy helper are called.
- if(full_post_enabled.load()){
-  constexpr Gate full_gates[]{
-   {0x23c9250,313,"48dc45a224fa9a3d25c884c46039221b34a7b8e21e880889250fd997f3ecb283"},
-   {0x23d0330,1271,"cd3085a7946eaef138f9c0af8b882a4fbc9c8df969107b954b278e157c0d907e"},
-   {0x23cb520,301,"4fa9724b3eff99c5bddb0295302b6f73d1836521129f59f911ad7b94bb910ac8"}};
-  for(const auto &g:full_gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="full_post code gate";return false;}
-  targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
-  full_viewport=reinterpret_cast<FullViewportFn>(c.image+0x23d0330);full_copy=reinterpret_cast<FullCopyFn>(c.image+0x23c9250);
-  // The inputs' upscale (full_post_inputs.hpp); without it no frame arms.
-  if(std::string why;!full_inputs.prepare(reinterpret_cast<ID3D12Device *>(c.device),w,h,why))full_inputs_failure=why;
- }
+ constexpr Gate full_gates[]{
+  {0x23c9250,313,"48dc45a224fa9a3d25c884c46039221b34a7b8e21e880889250fd997f3ecb283"},
+  {0x23d0330,1271,"cd3085a7946eaef138f9c0af8b882a4fbc9c8df969107b954b278e157c0d907e"},
+  {0x23cb520,301,"4fa9724b3eff99c5bddb0295302b6f73d1836521129f59f911ad7b94bb910ac8"}};
+ for(const auto &g:full_gates)if(!pb::verify_code(c.image,g.rva,g.bytes,g.sha)){reason="full_post code gate";return false;}
+ targets[7]=c.image+0x24d0780;targets[8]=c.image+0x23cb520;
+ full_viewport=reinterpret_cast<FullViewportFn>(c.image+0x23d0330);full_copy=reinterpret_cast<FullCopyFn>(c.image+0x23c9250);
+ // The inputs' upscale (full_post_inputs.hpp); without it no frame arms.
+ if(std::string why;!full_inputs.prepare(reinterpret_cast<ID3D12Device *>(c.device),w,h,why))full_inputs_failure=why;
  auto *device=reinterpret_cast<ID3D12Device *>(c.device);ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;
 #ifndef MHW_ALPHA
  // Research builds only: two scene-sized readbacks of the native depth (a

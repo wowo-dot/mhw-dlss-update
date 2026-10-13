@@ -31,6 +31,6 @@
 // - The post chain's render-size inputs (scene depth, GBuffer4/5 motion) are
 //   upscaled over their output-size textures, at a copy slot the scheduler
 //   records right after TAA (full_post.inl, full_post_inputs.hpp).
-namespace mhw::scaled_temporal {
-inline std::atomic<bool> full_post_enabled{};
-}
+//
+// Since v0.26.0 this is the only route at a reduced render scale: a frame it
+// does not arm keeps the game's own upscale (no DLSS for that frame).

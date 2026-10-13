@@ -26,9 +26,6 @@ namespace mhw::alpha {
 //                           ; launch; needs frame_generation = off
 //   hook_timing = off       ; on: every 64th hooked call is timed ("hook_timing"
 //                           ; events every 20 s; perf/hook_timing.hpp)
-//   full_post = off         ; prototype: after DLSS the game's own post chain
-//                           ; runs at the output size, as at DLAA
-//                           ; (scaled_temporal/full_post.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%); it applies from the next start.
@@ -53,7 +50,6 @@ struct Config {
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
     bool hook_timing{};          // hook_timing = on (diagnostic; not in the shipped ini)
-    bool full_post{};            // full_post = on (prototype; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -172,8 +168,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
             if (value == "on" || value == "off") c.hook_timing = value == "on";
             else c.warnings.push_back(where + "hook_timing must be on or off");
         } else if (key == "full_post") {
-            if (value == "on" || value == "off") c.full_post = value == "on";
-            else c.warnings.push_back(where + "full_post must be on or off");
+            // Retired in v0.26.0: after DLSS the game's post chain always runs
+            // at the output size (scaled_temporal/full_post.hpp). Older ini
+            // files keep the line harmlessly.
         } else if (key == "perf_ab") {
             if (value == "on" || value == "off") c.perf_ab = value == "on";
             else c.warnings.push_back(where + "perf_ab must be on or off");

@@ -123,7 +123,6 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    put(packet+0x30,std::array<unsigned,2>{xy[0],xy[1]});put(packet+0x38,std::array<unsigned,4>{r[0],r[1],r[2],r[3]});
    put(array+16ULL*count,((key&31U)<<27)|(((key>>5)+(sub>>5))&0x7ffffffU));put(array+16ULL*count+8,packet);put(c+0x2b80,count+1);};
   route::full_viewport=[](std::uintptr_t c,const int *r){viewports.push_back({r[0],r[1],r[2],r[3]});std::memcpy(reinterpret_cast<void *>(c+0x5c),r,16);};
-  mhw::scaled_temporal::full_post_enabled.store(true);
   {std::string why;require(route::full_inputs.prepare(f.device.Get(),128,64,why),"full_post inputs prepared");}
   put(layer,image.base+0x351bda8);  // TAA's unit, for the registration list
   const std::array<int,4> render_rect{0,0,64,32},full_rect{0,0,128,64};const unsigned taa_key=15U|(2U<<5);
@@ -321,7 +320,7 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
    require(summary.str().find("\"inputs\":{\"ready\":1,\"failure\":\"\",\"bytes\":")!=std::string::npos,"inputs in the summary");
    std::cout<<"PASS full_post inputs: slot at (15, 3) in TAA's key, planned before the final copy, plan states, refusals\n";}
   put(renderer+0x1f210,s.frame);put(context+0x5c,std::array<unsigned,4>{0,0,128,64});put(layer,std::uintptr_t{});
-  mhw::scaled_temporal::full_post_enabled.store(false);route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;route::full_finals={};
+  route::full_frame.store(UINT64_MAX);route::full_viewport=nullptr;route::full_copy=nullptr;route::full_finals={};
   std::cout<<"PASS full_post: admitted with TAA registered, armed after TAA's callback when published, the DLAA copy in the quad's key, "
              "full rectangle after TAA, restored at the exit, unplanned copies dropped, the scene capture widened, refusals\n";}
  check_queue_completion(s,filters,motion,4);

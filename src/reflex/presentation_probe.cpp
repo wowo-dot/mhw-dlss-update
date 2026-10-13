@@ -37,7 +37,6 @@
 #include "../scaled_temporal/stream_route.hpp"
 #include "../bridge_probe/readable_region.hpp"
 #include "../perf/hook_timing.hpp"
-#include "../scaled_temporal/full_post.hpp"
 #include <cstddef>
 #include <iterator>
 #include <vector>
@@ -900,7 +899,6 @@ DWORD WINAPI worker(void*) noexcept {
             << ",\"dynamic\":" << alpha_config.dynamic << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
             << ",\"frame_generation_auto\":" << alpha_config.generation_auto << ",\"profile\":" << alpha_config.profile
             << ",\"perf_ab\":" << alpha_config.perf_ab << ",\"hook_timing\":" << alpha_config.hook_timing
-            << ",\"full_post\":" << alpha_config.full_post
             << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex)) << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
             << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
         for (unsigned i = 0; i < alpha_config.warnings.size(); ++i) log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
@@ -989,8 +987,6 @@ DWORD WINAPI worker(void*) noexcept {
             // Hot game-memory regions stay validated off the render thread.
             mhw::bridge_probe::start_region_refresher();
             if(alpha_config.hook_timing)mhw::perf::hook_timing::enable();
-            // Before arming: the route installs the full_post hooks only when on.
-            mhw::scaled_temporal::full_post_enabled.store(alpha_config.full_post);
 #endif
 #endif
 #ifdef MHW_ALPHA
