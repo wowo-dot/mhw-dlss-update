@@ -1,5 +1,6 @@
 """presentmon_summary: rates, lows, drops, slices, menu segments and missing columns on owned CSVs."""
 import datetime as dt
+import os
 import sys
 import tempfile
 import unittest
@@ -26,10 +27,13 @@ def frames(start, count, interval_ms):
 
 
 class Summary(unittest.TestCase):
-    def write(self, text, name='capture-MonsterHunterWorld-1.csv'):
+    def write(self, text, name='capture-MonsterHunterWorld-1.csv', written=START):
+        """The file's modification time is `written` (PresentMon closes the
+        file after its last row; the summary corrects the clock by it)."""
         folder = Path(tempfile.mkdtemp())
         path = folder / name
         path.write_text(text, encoding='utf-8')
+        os.utime(path, (written.timestamp(), written.timestamp()))
         return folder, path
 
     def test_rates_and_lows(self):
@@ -90,6 +94,24 @@ class Summary(unittest.TestCase):
         self.assertEqual((start['presents'], start['displayed_fps']), (1000, 200.0))
         self.assertEqual(quality['label'], 'capture-MonsterHunterWorld-1 05:00:10 dlss_mode=quality')
         self.assertEqual((quality['presents'], quality['displayed_fps']), (1250, 250.0))
+
+    def test_presentmon_26_columns_and_clock(self):
+        # 2.6.0's names, and its clock three hours ahead of local time: the
+        # rows say 08:00, the file was closed at 05:00:02 local.
+        header = ('Application,ProcessID,SwapChainAddress,CPUStartDateTime,FrameTime,CPUBusy,GPUBusy,'
+                  'DisplayLatency,DisplayedTime,AllInputToPhotonLatency\n')
+        body = ''.join(f'MonsterHunterWorld.exe,1,0x1,2026-10-13 8:00:0{i // 250}.{(i % 250) * 4:03d}000000,4.0,1.0,3.5,'
+                       f'{"NA" if i == 7 else "6.0"},{"NA" if i == 7 else "4.0"},NA\n' for i in range(500))
+        folder, path = self.write(header + body, written=START + dt.timedelta(seconds=2, milliseconds=300))
+        log = folder / 'mhw_dlss.log'
+        log.write_text('05:00:01.000 INFO menu: dlss_mode = quality (applied now)\n', encoding='utf-8')
+        whole, start, quality = pm.summarise(path, log=log, settle=0)
+        self.assertEqual(whole['first'], '2026-10-13 05:00:00.000')
+        self.assertEqual((whole['presents'], whole['presented_fps'], whole['displayed_fps']), (500, 250.0, 250.0))
+        self.assertEqual((whole['cpu_busy_ms'], whole['gpu_busy_ms'], whole['display_latency_ms']), (1.0, 3.5, 6.0))
+        self.assertEqual(whole['dropped'], 1)
+        self.assertIsNone(whole['input_to_photon_ms'])
+        self.assertEqual((start['presents'], quality['presents']), (250, 250))
 
     def test_missing_columns(self):
         _, path = self.write('Application,SwapChainAddress,MsBetweenPresents\nMonsterHunterWorld.exe,0x1,5\n')

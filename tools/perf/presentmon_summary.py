@@ -24,7 +24,14 @@ Each row shows:
 - PC latency when Reflex reports it;
 - dropped frames.
 
-Columns a PresentMon version does not write are skipped. With frame
+Column names differ between versions (2.4: MsBetweenPresents,
+MsBetweenDisplayChange, MsGPUBusy...; 2.6: FrameTime, DisplayedTime,
+GPUBusy...); both are read, and columns a version does not write are skipped.
+
+PresentMon 2.6.0 writes --date_time hours off from local time (2026-10-13:
+three hours ahead on a UTC+3 machine). Each capture's clock is corrected by
+the whole quarter hours between its last row and the file's modification
+time, so the times match the mod's menu log. With frame
 generation every present (rendered or generated) is counted; the mod's own
 frame_stats give the rendered rate.
 """
@@ -109,8 +116,17 @@ def times(intervals_ms: list[float]) -> dict:
     }
 
 
+def clock_offset(path: Path, last: dt.datetime) -> dt.timedelta:
+    """Whole quarter hours between the capture's last row and the file's
+    modification time (PresentMon closes the file after its last row)."""
+    written = dt.datetime.fromtimestamp(path.stat().st_mtime)
+    quarters = round((last - written) / dt.timedelta(minutes=15))
+    return dt.timedelta(minutes=15 * quarters)
+
+
 def load(path: Path) -> list[dict]:
-    """The game's presents on its main swap chain, with `_t` (datetime or None)."""
+    """The game's presents on its main swap chain, with `_t` (local datetime
+    or None)."""
     with path.open(newline='', encoding='utf-8-sig') as f:
         rows = [r for r in csv.DictReader(f) if (r.get('Application') or '').lower() == GAME]
     if not rows:
@@ -122,6 +138,13 @@ def load(path: Path) -> list[dict]:
     for r in rows:
         r['_t'] = timestamp(r.get('CPUStartDateTime'))
         r['_chains'] = len(chains)
+    stamped = [r['_t'] for r in rows if r['_t']]
+    if stamped:
+        offset = clock_offset(path, stamped[-1])
+        if offset:
+            for r in rows:
+                if r['_t']:
+                    r['_t'] -= offset
     return rows
 
 
@@ -129,8 +152,8 @@ def stats(label: str, rows: list[dict]) -> dict:
     result: dict = {'label': label, 'presents': len(rows)}
     if not rows:
         return result
-    presents = column(rows, 'MsBetweenPresents')
-    displayed = [v for v in column(rows, 'MsBetweenDisplayChange') if v > 0]
+    presents = column(rows, 'MsBetweenPresents', 'FrameTime')
+    displayed = [v for v in column(rows, 'MsBetweenDisplayChange', 'DisplayedTime') if v > 0]
     result.update(
         swap_chains=rows[0].get('_chains'),
         duration_s=sum(presents) / 1000 if presents else None,
@@ -140,14 +163,16 @@ def stats(label: str, rows: list[dict]) -> dict:
         display_ms=times(displayed),
         low_1pct_fps=low(displayed or presents, 99),
         low_0_1pct_fps=low(displayed or presents, 99.9),
-        cpu_busy_ms=mean(column(rows, 'MsCPUBusy')),
-        gpu_busy_ms=mean(column(rows, 'MsGPUBusy', 'MsGPUActive')),
-        gpu_time_ms=mean(column(rows, 'MsGPUTime')),
-        pc_latency_ms=mean(column(rows, 'MsPCLatency')),
-        input_to_photon_ms=mean(column(rows, 'MsAllInputToPhotonLatency')),
+        cpu_busy_ms=mean(column(rows, 'MsCPUBusy', 'CPUBusy')),
+        gpu_busy_ms=mean(column(rows, 'MsGPUBusy', 'GPUBusy', 'MsGPUActive')),
+        gpu_time_ms=mean(column(rows, 'MsGPUTime', 'GPUTime')),
+        display_latency_ms=mean(column(rows, 'MsUntilDisplayed', 'DisplayLatency')),
+        pc_latency_ms=mean(column(rows, 'MsPCLatency', 'PCLatency')),
+        input_to_photon_ms=mean(column(rows, 'MsAllInputToPhotonLatency', 'AllInputToPhotonLatency')),
     )
-    if 'MsUntilDisplayed' in rows[0]:
-        result['dropped'] = sum(1 for r in rows if number(r.get('MsUntilDisplayed')) is None)
+    shown = next((n for n in ('MsUntilDisplayed', 'DisplayLatency') if n in rows[0]), None)
+    if shown:
+        result['dropped'] = sum(1 for r in rows if number(r.get(shown)) is None)
     elif 'Dropped' in rows[0]:
         result['dropped'] = sum(1 for r in rows if number(r.get('Dropped')) == 1)
     if 'FrameType' in rows[0]:
@@ -217,14 +242,14 @@ def fmt(value, digits=1) -> str:
 
 def table(results: list[dict]) -> str:
     header = ('capture', 'seconds', 'presents', 'fps', 'shown', '1% low', 'p50 ms', 'p99 ms', 'max ms',
-              'GPU busy', 'CPU busy', 'PC lat', 'dropped')
+              'GPU busy', 'CPU busy', 'disp lat', 'PC lat', 'dropped')
     lines = [header]
     for r in results:
         d = r.get('display_ms') or {}
         lines.append((r['label'], fmt(r.get('duration_s')), str(r.get('presents', 0)), fmt(r.get('presented_fps')),
                       fmt(r.get('displayed_fps')), fmt(r.get('low_1pct_fps')), fmt(d.get('p50'), 2), fmt(d.get('p99'), 2),
                       fmt(d.get('max'), 2), fmt(r.get('gpu_busy_ms'), 2), fmt(r.get('cpu_busy_ms'), 2),
-                      fmt(r.get('pc_latency_ms'), 2), str(r.get('dropped', '-'))))
+                      fmt(r.get('display_latency_ms'), 2), fmt(r.get('pc_latency_ms'), 2), str(r.get('dropped', '-'))))
     widths = [max(len(line[i]) for line in lines) for i in range(len(header))]
     return '\n'.join('  '.join(cell.ljust(widths[i]) for i, cell in enumerate(line)) for line in lines)
 
