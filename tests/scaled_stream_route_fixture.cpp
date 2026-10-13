@@ -19,6 +19,7 @@ void WINAPI copy_forward(ID3D12GraphicsCommandList *l,const D3D12_TEXTURE_COPY_L
 #include "scaled_indexed_fixture.hpp"
 #include "scaled_late_candidates_fixture.hpp"
 #include "scaled_radial_occlusion_fixture.hpp"
+#include "scaled_identity_stream_fixture.hpp"
 #ifdef MHW_STREAM_RUNTIME_FIXTURE
 #include "scaled_return_fixture.hpp"
 #endif
@@ -38,6 +39,7 @@ int wmain(int argc,wchar_t **argv){try{
     ViewportFeed::expected=f.list.Get();
     route::cfg.device=reinterpret_cast<std::uintptr_t>(f.device.Get());route::originals[2]=reinterpret_cast<void *>(copy_forward);
     route::width=128;route::height=64;route::render_w=64;route::render_h=32;route::begin();
+    if(mode=="identity"||mode=="identity_split"||mode=="identity_native"){identity_stream_fixture::run(f,mode);require(obs::finish(),"identity observer cleanup");return 0;}
     if(mode=="indexed-ownership"){check_indexed_ownership(f);require(obs::finish(),"indexed observer cleanup");return 0;}
     if(mode=="late-candidates"){check_late_candidates(f);require(obs::finish(),"late observer cleanup");return 0;}
     if(mode=="radial-occlusion"){check_radial_occlusion(f);require(obs::finish(),"occlusion observer cleanup");return 0;}
