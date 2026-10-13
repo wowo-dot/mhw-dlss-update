@@ -4,10 +4,15 @@ Records Monster Hunter: World frame timing with the Intel PresentMon console
 application, for the performance check.
 
 .DESCRIPTION
-Start it before or after the game. In game, each press of the hotkey records
--Seconds seconds into a new CSV under local\perf\<session>\ (PresentMon adds
-the recording's index to the file name). Close the window when done, then run
-tools\perf\presentmon_summary.py on the folder.
+Start it before or after the game. It records every frame of every
+MonsterHunterWorld.exe it sees, continuously, into one CSV per game launch
+under local\perf\<session>\ (the file names end in the process ID). Press
+Ctrl+C in its window when done, then run tools\perf\presentmon_summary.py on
+the folder: it cuts the captures into time slices, or into the settings the
+mod's menu log records.
+
+There is no hotkey: MHW keeps other programs' hotkeys from arriving while it
+has focus (2026-10-13: PresentMon saw the game, Alt+Shift+F11 did nothing).
 
 PresentMon reads Windows ETW events and needs administrator rights, so the
 script asks once (UAC) and continues in an elevated window.
@@ -18,12 +23,10 @@ first. Pass -PresentMon to choose one.
 
 .EXAMPLE
 pwsh -File tools\perf\presentmon_capture.ps1
-pwsh -File tools\perf\presentmon_capture.ps1 -Session baseline -Seconds 60
+pwsh -File tools\perf\presentmon_capture.ps1 -Session baseline
 #>
 param(
     [string]$Session = (Get-Date -Format 'yyyyMMdd-HHmmss'),
-    [ValidateRange(5, 600)][int]$Seconds = 30,
-    [string]$Hotkey = 'ALT+SHIFT+F11',
     [string]$PresentMon = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -46,7 +49,7 @@ $identity = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $shell = (Get-Process -Id $PID).Path
     $relaunch = @('-NoProfile', '-NoExit', '-File', "`"$PSCommandPath`"", '-Session', $Session,
-        '-Seconds', $Seconds, '-Hotkey', $Hotkey, '-PresentMon', "`"$PresentMon`"")
+        '-PresentMon', "`"$PresentMon`"")
     Start-Process -FilePath $shell -Verb RunAs -ArgumentList $relaunch
     Write-Host "Continuing in an elevated window (session $Session)."
     return
@@ -57,17 +60,17 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 [ordered]@{
     session    = $Session
     presentmon = (Split-Path $PresentMon -Leaf)
-    seconds    = $Seconds
-    hotkey     = $Hotkey
+    recording  = 'continuous, one CSV per process'
     started    = (Get-Date).ToString('o')
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'session.json') -Encoding utf8
 
 Write-Host "PresentMon: $PresentMon"
 Write-Host "Output:     $out"
-Write-Host "In game, press $Hotkey to record $Seconds s; every press makes a new CSV."
-Write-Host 'Close this window when you are done.'
-# --date_time: wall-clock start times, to line captures up with the mod's
-# menu log (mhw_dlss.log). --track_pc_latency: Reflex's PC Latency events.
-& $PresentMon --process_name MonsterHunterWorld.exe --output_file (Join-Path $out 'capture.csv') `
-    --hotkey $Hotkey --timed $Seconds --date_time --v2_metrics --track_pc_latency `
-    --session_name MHWPerf --stop_existing_session
+Write-Host 'Recording now, continuously: one CSV per game launch.'
+Write-Host 'Press Ctrl+C in this window when you are done.'
+# No --hotkey: recording starts at once and runs until Ctrl+C. --multi_csv:
+# one file per process, so each launch has its own. --date_time: local
+# wall-clock start times, to line captures up with the mod's menu log
+# (mhw_dlss.log). --track_pc_latency: Reflex's PC Latency events.
+& $PresentMon --process_name MonsterHunterWorld.exe --output_file (Join-Path $out 'capture.csv') --multi_csv `
+    --date_time --v2_metrics --track_pc_latency --session_name MHWPerf --stop_existing_session

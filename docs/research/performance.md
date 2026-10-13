@@ -10,14 +10,15 @@ Other mods are out of scope.
   application on `MonsterHunterWorld.exe`.
   - It asks for administrator rights once (PresentMon needs them for ETW) and
     continues in an elevated window.
-  - Each press of the hotkey (default Alt+Shift+F11) records 30 s into a new
-    CSV under `local/perf/<session>/`. `session.json` records the PresentMon
-    version, the hotkey and the start time.
-  - It writes 2.x metrics, wall-clock start times (`--date_time`) and Reflex
-    PC latency (`--track_pc_latency`).
+  - It records continuously until Ctrl+C, one CSV per game launch
+    (`--multi_csv`), under `local/perf/<session>/`.
+  - It writes 2.x metrics, local wall-clock start times (`--date_time`) and
+    Reflex PC latency (`--track_pc_latency`).
   - It prefers a copy of the console exe under `local/tools/presentmon-*/`
     (from the GameTechDev/PresentMon GitHub release) to the installed one,
     newest version first.
+  - **No hotkey.** On 2026-10-13 PresentMon saw the game but Alt+Shift+F11
+    did nothing while MHW had focus, so the hotkey was dropped.
 - **`tools/perf/presentmon_summary.py <folder>`** prints one row per capture:
   - duration and presents;
   - presented and displayed frame rates;
@@ -28,8 +29,13 @@ Other mods are out of scope.
   - PC latency;
   - dropped frames.
 
-  `--json` saves everything, including frame types and the first and last
-  start times.
+  It cuts the captures with:
+  - `--slices N`: consecutive N-second slices;
+  - `--log mhw_dlss.log`: the stretches between the mod's live menu changes,
+    skipping `--settle` seconds after each;
+  - `--window HH:MM:SS HH:MM:SS`: one interval.
+
+  `--json` saves everything.
 - **The mod's own logs:**
   - `frame_stats` gives the rendered frame rate and frame-time percentiles,
     and `latency` gives Reflex's latency report;
@@ -47,8 +53,9 @@ rendered; the rendered rate comes from `frame_stats`.
   - windowed 2560x1440, 16:9, the game window focused (DLSS-G only generates
     with focus);
   - V-Sync off in the game and in the NVIDIA profile.
-- **Recordings:** 30 s each, after the frame rate settles. Two recordings per
-  scenario, so variation shows.
+- **Recordings:** about 60 s per scenario, standing still after the frame
+  rate settles. The summary cuts the scenarios by time (menu changes, or
+  slices).
 - **Runs** (the same graphics settings in all of them):
   1. **Unmodded:** the mod disabled in MO2 (Astera Loader stays).
   2. **The mod, FG off, Reflex Boost:** DLAA, Quality, Balanced and
