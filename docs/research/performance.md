@@ -469,3 +469,39 @@ exit.
   - the hooks on game functions;
   - launch-to-launch variance (an unmodded launch's own slices ranged
     241-266 fps).
+
+## Session 20261013-perf10: final A/B against the game's TAA (v0.23.10)
+
+The fair baseline: the mod forces the TAA pass into the queue and replaces
+it, so the unmodded game is measured with its own TAA. Both launches ran in
+one PresentMon session with the mod's diagnostics off. The game's AA was off
+for the mod. The release will force the game's AA setting off, so the mod
+with the game's TAA on is not supported (the user's decision).
+
+| Settled plateau | fps | CPU busy | GPU busy | 1% low | p99 |
+|---|---|---|---|---|---|
+| Unmodded, TAA (07:47:27-07:48:27) | 257-259 | 3.72-3.82 ms | 3.24-3.27 ms | 187-193 | 5.17-5.33 ms |
+| Unmodded, AA off (07:48:47-07:50:17) | 255-261 | 3.70-3.79 | 3.20-3.24 | 187-193 | 5.18-5.36 |
+| **Mod v0.23.10, Quality** (07:51:34-07:52:49) | **248-252** | 3.83-3.91 | **2.85** | 180-190 | 5.26-5.54 |
+
+- **TAA against AA off** in the unmodded game: about 0.04 ms of GPU and no
+  measurable CPU difference.
+- **The mod against TAA:** about -3% fps, +0.1 ms of CPU busy, -12% GPU busy.
+  1% lows and p99 are close.
+- **The first plateau after loading** (both launches have one): 221 against
+  232 (-5%).
+
+**Result of the performance step (roadmap step 3):** in this CPU-bound
+extreme (hub, 1440p, RTX 5090, about 250 fps), the mod went from 225 fps
+(-13%) this morning to about 250 (-3%), with slow frames close to the
+unmodded game. Where the GPU is the limit, the presets' GPU savings decide
+(Quality -12% GPU busy here, Performance more).
+
+**The day's fixes:**
+1. a region-level read cache, one-query refresh, then a refresher thread;
+2. one SHA-256 provider and a byte-checked hash memo;
+3. the lean binding observer (sparse clears, no locked instructions per call,
+   owner_lists).
+
+**Diagnostics added:** `profile`, `perf_ab`, `hook_timing`,
+`observer_bench`, and the PresentMon capture and summary tools.
