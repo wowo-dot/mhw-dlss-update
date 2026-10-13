@@ -1,5 +1,6 @@
 #include "game_options.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../ngx_startup/startup.hpp"
 #include <windows.h>
 #include <MinHook.h>
 #include <xmmintrin.h>
@@ -187,7 +188,8 @@ void write(std::ostream &out){
     if(image&&pb::read(image+renderer_global,renderer)&&renderer){pb::read(renderer+0x7b3b0,variable);pb::read(renderer+0x1f0,scale);}
     // The game's own DLSS 1 (0x23842a0 at cD3DRender::initForD3D12): its NGX
     // context at backend +0x42700, or why it has none (0x51c6c28: 1 NGX
-    // init, 2 SuperSampling, 3 ImageSignalProcessing unavailable).
+    // init, 2 SuperSampling, 3 ImageSignalProcessing unavailable), and this
+    // mod's decline of it (ngx_startup::game_dlss(): 2 none made, 3 declined).
     std::uintptr_t backend{},context{};unsigned game_ngx{};
     if(image&&pb::read(image+0x51c7050,backend)&&backend)pb::read(backend+0x42700,context);
     if(image)pb::read(image+0x51c6c28,game_ngx);
@@ -197,6 +199,7 @@ void write(std::ostream &out){
        <<",\"take_overs\":"<<take_overs.load()<<",\"give_backs\":"<<give_backs.load()<<",\"call_faults\":"<<call_faults.load()
        <<",\"aa\":["<<aa_applies.load()<<','<<aa_forced.load()<<"],\"rs\":["<<rs_applies.load()<<','<<rs_forced.load()
        <<"],\"rows\":{\"locked\":"<<rows_locked.load()<<",\"greyed\":"<<rows_greyed.load()<<",\"helps\":"<<helps.load()
-       <<",\"defaults_kept\":"<<defaults_kept.load()<<"},\"game_dlss\":{\"context\":"<<(context!=0)<<",\"refusal\":"<<game_ngx<<"}}";
+       <<",\"defaults_kept\":"<<defaults_kept.load()<<"},\"game_dlss\":{\"context\":"<<(context!=0)<<",\"refusal\":"<<game_ngx
+       <<",\"declined\":"<<ngx_startup::game_dlss()<<"}}";
 }
 }

@@ -29,6 +29,16 @@ unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 bool run(HMODULE,const char *version,bool hook_pool_reserved=false,bool shared_provider=false) noexcept;
+// Alpha: the game's own DLSS 1 is declined (docs/research/game-dlss1.md):
+// right after the game's NGX init, which this transaction observes, the game
+// builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,
+// as on cards DLSS 1 does not support (RTX 50, where the mod was tested).
+// Call before run().
+void decline_game_dlss() noexcept;
+// What became of it: 0 not requested, 1 hooked and not called yet, 2 the game
+// made none (DLSS 1 unsupported), 3 declined, 4 kept (unexpected wrapper
+// state), 5 not hooked (the game's code differs).
+unsigned game_dlss() noexcept;
 // Alpha: run() logs to this folder and takes the NGX runtime from this folder
 // (mhw_dlss.ini), instead of the research sidecars <dll>.output-dir and
 // <output>/sdk-runtime-dir.txt. Both must be existing absolute directories.

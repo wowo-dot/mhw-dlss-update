@@ -57,8 +57,12 @@ An open-source mod that adds NVIDIA DLSS Super Resolution, DLSS Frame
 Generation and NVIDIA Reflex to Monster Hunter: World (DirectX 12).
 
 Requirements
-- Monster Hunter: World on Steam, DirectX 12 enabled. In-game anti-aliasing
-  and the game's own DLSS option off.
+- Monster Hunter: World on Steam, DirectX 12 enabled. While DLSS runs, the
+  mod sets the game's Anti-Aliasing and Resolution Scaling options as the
+  game's own DLSS did (shown greyed in its graphics settings); your choices
+  return when DLSS is Off. The game's own NVIDIA DLSS (DLSS 1) is unavailable
+  while the mod is installed; if it was on, the game says once that NVIDIA
+  DLSS has been switched off.
 - An NVIDIA GeForce RTX GPU. Frame Generation needs an RTX 40 or 50 series
   GPU; 3x and above need an RTX 50 series GPU, and Dynamic also needs NVIDIA
   driver 595.41 or newer. On other hardware the mod turns itself off and the

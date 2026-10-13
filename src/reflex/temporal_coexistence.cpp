@@ -68,6 +68,7 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
 #ifdef MHW_ALPHA
     mhw::ngx_startup::use_paths(directory,runtime);  // mhw_dlss.ini, no research sidecars
+    mhw::ngx_startup::decline_game_dlss();            // its own DLSS 1: never with this mod
 #endif
     require(mhw::ngx_startup::run(module,temporal_version,true,true),"coexistence-NGX-startup");
 #else

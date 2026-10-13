@@ -86,7 +86,7 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
             while(!(graphics=startup::write_graphics_snapshot())&&GetTickCount64()-display_wait<120000)Sleep(100);
         log<<"{\"event\":\"stopped\",\"transaction_complete\":"<<startup::done()<<",\"capabilities_supported\":"<<startup::supported()
            <<",\"calls\":"<<startup::calls()<<",\"hook_disabled\":"<<disabled<<",\"settled\":"<<startup::settled()
-           <<",\"swapchain_observed\":"<<graphics
+           <<",\"swapchain_observed\":"<<graphics<<",\"game_dlss\":"<<startup::game_dlss()
            <<",\"dll_pinned\":true,\"trampoline_retained\":true,\"sdk_shutdown_deferred\":true,\"sdk_evaluation_verified\":false}\n"<<std::flush;
         // If a callback is still active, the stream must outlive this worker.
         if(!disabled||!startup::settled()){while(true)Sleep(1000);}
