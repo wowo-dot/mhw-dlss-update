@@ -543,6 +543,7 @@ bool pin(const tb::Owner &o,ComPtr<ID3D12Resource> &out){
 #include "dependency_route.inl"
 #include "compute_resources.inl"
 #include "dof_native_plan.inl"
+#include "post_census.inl"
 Plan::Recording *track_recording(Plan &p,ID3D12GraphicsCommandList *list,std::uint64_t gen,bool create){
  if(!list||!gen)return nullptr;Plan::Recording *empty{};
  for(auto &r:p.recordings){if(r.list==list)return r.generation==gen?&r:nullptr;if(!r.list&&!empty)empty=&r;}
@@ -1140,6 +1141,7 @@ void post_queue_complete(std::uintptr_t manager,std::uintptr_t context,std::uint
  // Observe the shared preparation contract before applying the prototype's
  // motion/grade/haze whitelist. An unfamiliar filter remains visible here.
  prepared_queues.observe(reader,cfg,manager,context,view,taa);
+ {const auto &q=plans[frame%plans.size()];census_observe(frame,context,q.published&&q.stamp.frame==frame&&q.stamp.context==context?&q.stamp:nullptr);}
  auto &p=plans[frame%plans.size()];
  if(!p.published||p.queue_finished||p.stamp.frame!=frame||p.stamp.context!=context||p.stamp.view!=view||
     p.stamp.layer!=taa||!same_stamp(p.stamp)||p.motion_thread!=GetCurrentThreadId())return;
@@ -1679,7 +1681,7 @@ void write(std::ostream &o){
  o<<",\"shared_key_prepared\":"<<overlay_shared_prepared<<",\"shared_key_completed\":"<<overlay_shared_completed;
  o<<",\"extended_draws\":"<<overlay_extended_draws<<",\"extended_layout\":";
  if(overlay_extended_draws){o<<'[';for(unsigned i=0;i<overlay_extended_layout.size();++i){if(i)o<<',';o<<overlay_extended_layout[i];}o<<']';}else o<<"null";o<<"}";
- o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
+ o<<",\"prepared_queue\":";prepared_queues.write(o);o<<",\"post_census\":";census_write(o);o<<",\"draw_state_failures\":";draw_state_trace.write(o);
  o<<",\"dependency_route\":{\"schema\":2,\"copy_draws\":"<<dependency_draws[0]<<",\"radial_draws\":"<<dependency_draws[1]<<",\"dof_draws\":"<<dependency_draws[2]<<",\"screen_filter_draws\":"<<dependency_draws[3]<<",\"rejection\":"<<dependency_rejection<<",\"last_description\":[";
  for(unsigned i=0;i<dependency_description.size();++i){if(i)o<<',';o<<dependency_description[i];}
  o<<"],\"texture_check\":"<<dependency_texture_check<<",\"failures\":"<<dependency_failures<<",\"first_failure\":[";

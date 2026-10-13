@@ -85,6 +85,25 @@ unsigned check_plan(Fixture &f,std::span<const std::byte> haze_vs={},std::span<c
  put(attachment+0x58,owners[0]);bad();put(attachment+0x58,owners[4]);
  put(renderer+0x93,static_cast<unsigned char>(0));bad();put(renderer+0x93,static_cast<unsigned char>(1));
  require(route::build_plan(p,motion),"restored native graph");
+ // v0.24.10 post census: the queue as recorded, without changing it.
+ {route::census=route::PostCensus{};route::census_observe(s.frame,context,&s);
+  const auto &cs=route::census.samples[0];
+  require(route::census.captured==1&&cs.commands==4&&cs.packet_count==4&&cs.descriptor_count==4&&cs.render_w==64&&cs.width==128,"census sample");
+  const auto resource_of=[&](unsigned index){return index<cs.resource_count?cs.resources[index]:route::PostCensus::Resource{};};
+  const auto &copy_packet=cs.packets[0];
+  require(copy_packet.key==0x78000002&&copy_packet.opcode==13&&copy_packet.rect==std::array<int,4>{0,0,64,32}&&
+          resource_of(copy_packet.target).pointer==reinterpret_cast<std::uintptr_t>(resources[1].Get())&&
+          resource_of(copy_packet.source).pointer==reinterpret_cast<std::uintptr_t>(resources[0].Get()),"census copy");
+  for(unsigned i=0;i<3;++i){const auto &k=cs.packets[1+i];const auto r=resource_of(k.target);
+   require(k.opcode==0&&k.rect==std::array<int,4>{0,0,i==2?128:64,i==2?64:32}&&r.pointer==reinterpret_cast<std::uintptr_t>(resources[i+2].Get())&&
+           r.width==128&&r.height==64&&r.format==static_cast<unsigned>(DXGI_FORMAT_R11G11B10_FLOAT),"census draw rectangle and target");}
+  require(cs.descriptors[1].order==100&&cs.descriptors[1].type==0x3537a70&&cs.descriptors[2].type==0x3538400&&cs.descriptors[3].order==0x7fffff1,"census descriptors");
+  require(cs.inputs[4][4]<cs.resource_count&&cs.resources[cs.inputs[4][4]].pointer==reinterpret_cast<std::uintptr_t>(resources[0].Get()),"census TAA bindings");
+  route::census_observe(s.frame,context,&s);require(route::census.captured==2,"census latest sample");
+  route::census_observe(s.frame,context,&s);require(route::census.captured==2,"census bounded");
+  std::ostringstream first,second;route::census_write(first);route::census_write(second);
+  require(first.str().find("\"packets\":[[2013265922,13,0,0,64,32,")!=std::string::npos&&second.str()=="{\"captured\":2,\"samples\":[]}","census written once");
+  std::cout<<"PASS post census: descriptors, copy, draws and targets of the native queue, written once\n";}
  check_queue_completion(s,filters,motion,4);
  if(!dependency_dir.empty()){
  #include "scaled_dependency_plan_fixture.inl"
