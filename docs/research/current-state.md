@@ -2,6 +2,9 @@
 
 Updated 2026-10-08.
 
+> This page stops at v0.13.4. The release candidate (v0.28.4) is described in
+> the [README](../../README.md); later work is in the dated notes here.
+
 **What works**
 - **DLSS Frame Generation and multi-frame generation**, on the DLSS
   Performance path with Reflex On. The multiplier changes live from 2x to 6x on
