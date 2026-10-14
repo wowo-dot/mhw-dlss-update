@@ -33,6 +33,11 @@ constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
 // The player's Off frees DLSS-G's resources this many Presents after it, when
 // its last On frames are done on the GPU (the paced chain queues one frame).
 constexpr unsigned free_after_presents = 4;
+// A planned Off from more than plain 2x (multi frame, Dynamic, Auto) first
+// shows plain 2x for at least this many tagged Presents and this long, at
+// most the longest (v0.28.3, reconcile()).
+constexpr unsigned wind_down_presents = 24;
+constexpr std::uint64_t wind_down_min_ms = 150, wind_down_max_ms = 400;
 
 
 struct Images {
@@ -83,6 +88,12 @@ struct Session {
     // The player's setting (enable()); Presents since it went Off, whether
     // DLSS-G's resources were freed for it, and how often that was done.
     std::atomic<bool> enabled{true};
+    // What the worker (arm()) and the player (enable()) ask for; armed and
+    // enabled follow at the next Present, after a wind-down (reconcile()).
+    std::atomic<bool> armed_request{}, enabled_request{true};
+    bool winding{};
+    unsigned wind_presents{};
+    std::uint64_t wind_began{}, winds{}, wound_presents{};
     unsigned disabled_presents{};
     bool freed{};
     std::uint64_t frees{}, free_failed{};
@@ -378,6 +389,8 @@ struct Wanted {
 };
 Wanted wanted_options(Session &s) {
     read_state_once(s);
+    // Winding down for a planned Off: plain 2x (reconcile()).
+    if (s.winding) return {sl::DLSSGMode::eOn, 1, 0, false};
     const auto mode = static_cast<Mode>(s.requested_mode.load());
     if (mode == Mode::dynamic && !s.dynamic_refused.load() && s.state_valid &&
         s.state.bIsDynamicMFGSupported == sl::Boolean::eTrue && s.state.numFramesToGenerateMax)
@@ -395,8 +408,16 @@ void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_h
     session.scene = scene;
 }
 
-void arm(bool armed) noexcept { session.armed.store(armed); }
-void enable(bool enabled) noexcept { session.enabled.store(enabled); }
+// On applies at once; Off at the next Present (reconcile()), at once while
+// DLSS-G is not on.
+void arm(bool armed) noexcept {
+    session.armed_request.store(armed);
+    if (armed || !session.on.load()) session.armed.store(armed);
+}
+void enable(bool enabled) noexcept {
+    session.enabled_request.store(enabled);
+    if (enabled || !session.on.load()) session.enabled.store(enabled);
+}
 
 void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
 bool frame_generation_on() noexcept { return session.on.load(); }
@@ -769,6 +790,38 @@ void reset(std::uint64_t list, std::uint64_t generation) noexcept {
 
 static void finish_pending(Session &s, bool presented);
 
+// Owner thread, under the session lock, each Present: the worker's and the
+// player's requests become effective. DLSS-G paces a multiplier above 2x with
+// a frame limit that stays after it is turned off and unloaded (perf13, RTX
+// 5090: a flat 208 fps after 6x, DLSS on or off, until the player's Reflex
+// Off; a stretch at 2x before the unload left none). So a planned Off from
+// anything but plain 2x first shows plain 2x (wanted_options()), as a player
+// stepping down would. Window changes (lifecycle_guard()) and missing inputs
+// still turn it Off at once.
+void reconcile(Session &s) {
+    const bool armed = s.armed_request.load(), enabled = s.enabled_request.load();
+    const bool turning_off = (s.armed.load() && !armed) || (s.enabled.load() && !enabled);
+    if (turning_off && s.on.load() && s.sdk->frame_generation()) {
+        const auto now = GetTickCount64();
+        const bool plain = s.applied_mode == sl::DLSSGMode::eOn && s.applied_generated == 1;
+        if (!s.winding && !plain) {
+            s.winding = true;
+            s.wind_presents = 0;
+            s.wind_began = now;
+            ++s.winds;
+        }
+        if (s.winding && now - s.wind_began < wind_down_max_ms &&
+            (s.wind_presents < wind_down_presents || now - s.wind_began < wind_down_min_ms))
+            return;
+    }
+    if (s.winding) {
+        s.winding = false;
+        s.wound_presents += s.wind_presents;
+    }
+    s.armed.store(armed);
+    s.enabled.store(enabled);
+}
+
 bool lifecycle_guard(unsigned) noexcept {
     auto &s = session;
     try {
@@ -806,6 +859,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         if (!s.sdk) return;
         // A missed present_end must not leak a tagged slot.
         if (s.pending != none) finish_pending(s, false);
+        reconcile(s);
         // v0.27.4: DLSS-G unloaded (fg-live-toggle.md): nothing to tag or set;
         // it is Off with nothing held when it loads again with a new chain.
         if (!s.sdk->frame_generation()) {
@@ -945,6 +999,7 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             s.shown_generated.store(w.generated);
             s.shown_dynamic.store(w.mode == sl::DLSSGMode::eDynamic);
         }
+        if (s.winding && s.applied_mode == sl::DLSSGMode::eOn && s.applied_generated == 1) ++s.wind_presents;
         s.pending = slot;
         s.last = {true, entry.frame, entry.epoch, camera};
         ++s.tagged;
@@ -1000,6 +1055,7 @@ void write(std::ostream &o) {
     const auto &r = s.ring.counters();
     o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
       << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees << ",\"free_failed\":" << s.free_failed
+      << ",\"winds\":" << s.winds << ",\"wound_presents\":" << s.wound_presents
       << ",\"loaded\":" << (s.sdk && s.sdk->frame_generation())
       << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
       << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
