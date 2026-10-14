@@ -51,7 +51,7 @@ class PackageRelease(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in folder.iterdir()), ['AsteraLoader'])
         self.assertEqual(sorted(p.name for p in (folder / 'AsteraLoader' / 'plugins').iterdir()), ['mhw_dlss'])
         self.assertEqual(pr.sha(data / 'mhw_dlss.dll'), pr.sha(self.dll))
-        for name in ['mhw_dlss.ini', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
+        for name in ['mhw_dlss.ini', 'README.txt', 'LICENSE.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
                      *pr.STREAMLINE, *pr.NGX, *(f'licenses/{dst}' for _, dst in pr.LICENSES['streamline'] + pr.LICENSES['dlss']),
                      *(f'licenses/{dst}' for _, _, dst in pr.BUILT_IN)]:
             self.assertTrue((data / name).is_file(), name)
@@ -70,6 +70,8 @@ class PackageRelease(unittest.TestCase):
         self.assertIn('an Astera Loader plugin', readme)
         self.assertIn('With CMFM installed', readme)
         self.assertNotIn('winmm', readme)
+        self.assertIn('MIT License (LICENSE.txt)', readme)
+        self.assertIn('MIT License', (data / 'LICENSE.txt').read_text(encoding='utf-8'))
         notices = (data / 'THIRD-PARTY-NOTICES.txt').read_text(encoding='utf-8')
         for component, _, dst in pr.BUILT_IN:
             self.assertIn(component, notices); self.assertIn(f'licenses/{dst}', notices)

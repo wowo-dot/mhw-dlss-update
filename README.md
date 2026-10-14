@@ -167,5 +167,4 @@ Loader and CMFM headers are used under their licenses
 Monster Hunter: World is a trademark of CAPCOM CO., LTD. This mod is not
 affiliated with Capcom.
 
-The project's own open-source license is still to be chosen before the first
-public release.
+The mod itself is released under the MIT License ([`LICENSE`](LICENSE)).

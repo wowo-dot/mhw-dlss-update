@@ -11,7 +11,7 @@ required and loads only mhw_dlss.dll from it):
   AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini          default configuration
   AsteraLoader/plugins/mhw_dlss/sl.*.dll, nvngx_*     NVIDIA runtime, unmodified, verified by SHA-256
   AsteraLoader/plugins/mhw_dlss/licenses/             NVIDIA's license files for those DLLs
-  AsteraLoader/plugins/mhw_dlss/README.txt, THIRD-PARTY-NOTICES.txt, manifest.json
+  AsteraLoader/plugins/mhw_dlss/README.txt, LICENSE.txt, THIRD-PARTY-NOTICES.txt, manifest.json
 
 NVIDIA files are copied only when they match the pinned hashes of the tested
 runtime (fg_runtime.py), and only into release packages: never into git
@@ -125,7 +125,8 @@ This mod uses NVIDIA DLSS, NVIDIA DLSS Frame Generation, NVIDIA Streamline
 and NVIDIA Reflex. It is not affiliated with, sponsored or endorsed by NVIDIA.
 The NVIDIA DLLs in this package are unmodified and distributed under NVIDIA's
 licenses in the licenses folder (see THIRD-PARTY-NOTICES.txt); they are not
-covered by the mod's own open-source license.
+covered by the mod's own license.
+The mod itself is open source under the MIT License (LICENSE.txt).
 Monster Hunter: World is a trademark of CAPCOM CO., LTD. This mod is not
 affiliated with Capcom.
 """
@@ -171,6 +172,7 @@ def main():
     licenses = [(a.streamline_sdk / src, dst) for src, dst in LICENSES['streamline']] + \
                [(a.dlss_sdk / src, dst) for src, dst in LICENSES['dlss']]
     licenses += [(repo / src, dst) for _, src, dst in BUILT_IN if src]
+    require((repo / 'LICENSE').is_file(), "the mod's LICENSE is missing")
     for src, _ in licenses:
         require(src.is_file(), f'license file {src} is missing')
 
@@ -184,6 +186,7 @@ def main():
     for src, dst in licenses:
         shutil.copyfile(src, data / 'licenses' / dst)
     (data / 'README.txt').write_text(README.format(version=a.version), encoding='utf-8', newline='\r\n')
+    shutil.copyfile(repo / 'LICENSE', data / 'LICENSE.txt')
     notices = ['Third-party components compiled into mhw_dlss.dll', '']
     for component, _, license_file in BUILT_IN:
         notices += [component, f'  License: licenses/{license_file}', '']
