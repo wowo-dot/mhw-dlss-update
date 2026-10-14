@@ -9,9 +9,6 @@ namespace mhw::reflex {
 void request_mode(unsigned mode) noexcept;
 // The mode Streamline last accepted; 3 before the frame hooks are armed.
 unsigned applied_mode() noexcept;
-// DLSS Frame Generation on this card and system, known once the game's device
-// exists: 0 not known yet, 1 no (or frame_generation_plugin = off), 2 yes.
-unsigned frame_generation_support() noexcept;
 // DLSS-G is loaded: Reflex stays on until the game closes (Streamline paces
 // the swap chain; without Reflex the frame rate halves).
 bool frame_generation_loaded() noexcept;

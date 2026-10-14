@@ -820,24 +820,6 @@ if(TARGET mhw_dlss_sdk_live)
         target_link_options(mhw_fg_game_probe PRIVATE /guard:cf /OPT:NOICF /MAP)
         set_target_properties(mhw_fg_game_probe PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-        # Alpha (v0.13): the FG game build configured by mhw_dlss.ini, arming itself
-        # once the game is ready, every lean path on and light logging.
-        get_target_property(fg_game_sources mhw_fg_game_probe SOURCES)
-        # v0.16: the status lines and the optional CMFM pages (third_party/cmfm).
-        # v0.27.6: the game's own DLSS rules for its AA and resolution scaling options.
-        add_library(mhw_dlss_alpha SHARED ${fg_game_sources} src/alpha/status.cpp src/alpha/menu.cpp src/continuous_dlaa/game_options.cpp)
-        target_compile_features(mhw_dlss_alpha PRIVATE cxx_std_20)
-        target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
-            "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
-        target_compile_definitions(mhw_dlss_alpha PRIVATE MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL
-            MHW_CONTINUOUS_SCALED MHW_FG_GAME MHW_ALPHA WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-        target_link_libraries(mhw_dlss_alpha PRIVATE minhook bcrypt d3d12 dxgi dxguid
-            mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
-        target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
-        target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
-        # An Astera Loader plugin: AL loads it from its plugin folder.
-        set_target_properties(mhw_dlss_alpha PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
         # Opt-in metadata variant; default observer targets retain their behavior.
         add_library(mhw_fg_temporal_state STATIC src/temporal_present/observer.cpp)
         target_compile_features(mhw_fg_temporal_state PUBLIC cxx_std_20)
@@ -868,6 +850,48 @@ if(TARGET mhw_dlss_sdk_live)
             target_compile_options(frame_generation_scene_trace_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
             add_test(NAME frame_generation_scene_trace COMMAND frame_generation_scene_trace_tests)
         endif()
+    endif()
+    # The released mod (mhw_dlss.dll in the package, an Astera Loader plugin):
+    # DLSS/DLAA, frame generation and Reflex, configured by mhw_dlss.ini and the
+    # optional CMFM pages. It began as the research build mhw_fg_game_probe plus
+    # the alpha's files (v0.13) and compiles the same sources; listed here
+    # (v0.28.4) so the research targets above can change without touching it.
+    if(TARGET mhw_fg_reflex_presentation)
+        add_library(mhw_dlss_alpha SHARED
+            # Continuous DLSS on the game's TAA pass (mhw_continuous_dlaa, _dlss).
+            src/continuous_dlaa/runtime.cpp
+            src/continuous_dlaa/activation.cpp src/continuous_dlaa/activation_entry.asm
+            src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
+            src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm
+            src/projection_binding/recorder.cpp src/projection_binding/policy.cpp
+            src/projection_binding/provenance.cpp src/projection_binding/provenance_policy.cpp src/projection_binding/depth_readback.cpp
+            src/projection_binding/attachments.cpp src/projection_binding/attachment_output.cpp
+            src/projection_binding/trampoline_pool.cpp src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
+            src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/output.cpp
+            src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
+            src/scaled_temporal/stream_route.cpp src/scaled_temporal/stream_entry.asm
+            src/render_resolution/runtime.cpp src/render_resolution/resolution_entry.asm
+            # Reflex, presentation and the DLL's entry (mhw_reflex_dlss_probe).
+            src/reflex/presentation_probe.cpp src/reflex/live_frames.cpp
+            src/reflex/frame_boundaries_entry.asm src/reflex/temporal_coexistence.cpp
+            # Frame generation (mhw_fg_game_probe).
+            src/frame_generation/game_session.cpp src/frame_generation/hudless_pass.cpp
+            src/frame_generation/crash_log.cpp src/perf/sampler.cpp
+            # v0.16: the status lines and the optional CMFM pages (third_party/cmfm).
+            # v0.27.6: the game's own DLSS rules for its AA and resolution scaling options.
+            src/alpha/status.cpp src/alpha/menu.cpp src/continuous_dlaa/game_options.cpp)
+        target_compile_features(mhw_dlss_alpha PRIVATE cxx_std_20)
+        target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
+            "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
+        target_compile_definitions(mhw_dlss_alpha PRIVATE MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL
+            MHW_CONTINUOUS_SCALED MHW_FG_GAME MHW_ALPHA WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+        target_link_libraries(mhw_dlss_alpha PRIVATE minhook bcrypt d3d12 dxgi dxguid
+            mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
+        target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive-;/EHsc;/utf-8;/external:W0;/guard:cf>)
+        # The map file names this DLL's functions in stack-sampler profiles (tools/profile_report.py).
+        target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
+        set_target_properties(mhw_dlss_alpha PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     endif()
     if(BUILD_TESTING)
         add_executable(scaled_runtime_route_fixture tests/scaled_stream_route_fixture.cpp ${native_activation_sources}

@@ -65,7 +65,7 @@ void loader_log(al_log_level_t level, const std::string& text) noexcept;
 // swap chain, Reflex stays on); v0.27.4 loads and unloads it with the swap
 // chain (fg-live-toggle.md), so the worker updates it after each switch.
 namespace { bool fg_plugin = true, fg_loaded = false; unsigned fg_multiplier = 2;
-            std::atomic<unsigned> fg_support_state{};std::atomic<bool> fg_loaded_state{}; }
+            std::atomic<bool> fg_loaded_state{}; }
 #ifdef MHW_ALPHA
 // The ini's frame generation mode and dynamic target (game_session.hpp).
 namespace { mhw::frame_generation::game::Mode fg_mode{}; unsigned fg_target{}; }
@@ -619,7 +619,7 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     // swap chain. Usable: requested and supported (loaded now or later).
     fg_loaded = sdk.frame_generation();
     fg_plugin = fg_plugin && sdk.frame_generation_requested();
-    fg_loaded_state.store(fg_loaded); fg_support_state.store(fg_plugin ? 2U : 1U);
+    fg_loaded_state.store(fg_loaded);
     log << "{\"event\":\"fg_loaded\",\"loaded\":" << fg_loaded << ",\"usable\":" << fg_plugin << "}\n" << std::flush;
     if (fg_loaded) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");
 #endif
@@ -1788,7 +1788,6 @@ extern "C" __declspec(dllexport) al_result_t AL_CALL al_plugin_init(const al_api
 namespace mhw::reflex {
 void request_mode(unsigned mode) noexcept { if(mode<=2)reflex_requested.store(mode); }
 unsigned applied_mode() noexcept { return reflex_applied.load(); }
-unsigned frame_generation_support() noexcept { return fg_support_state.load(); }
 bool frame_generation_loaded() noexcept { return fg_loaded_state.load(); }
 }
 #endif
