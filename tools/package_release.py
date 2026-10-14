@@ -40,6 +40,19 @@ COVERAGE = [
     ('nvngx_dlssg.dll', 'NVIDIA DLSS Frame Generation', 'NVIDIA-RTX-SDKs-LICENSE-Streamline.txt'),
     ('nvngx_dlss.dll', 'NVIDIA DLSS Super Resolution', 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
 ]
+# Third-party code compiled into mhw_dlss.dll (its link map lists each library):
+# component, license file in this repository (None: one of NVIDIA's above), name
+# in the package's licenses folder.
+BUILT_IN = [
+    ('MinHook 1.3.4 (hooking library)', 'third_party/minhook-LICENSE.txt', 'MinHook-LICENSE.txt'),
+    ('DxilHash from Microsoft DirectXShaderCompiler (shader container checksum)', 'third_party/dxc_hash/LICENSE.TXT',
+     'DirectXShaderCompiler-NCSA-LICENSE.txt'),
+    ('NVIDIA DLSS SDK NGX library (nvsdk_ngx_d.lib)', None, 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
+    ('NVIDIA Streamline SDK headers', None, 'Streamline-MIT-LICENSE.txt'),
+    ('NVIDIA NVAPI declarations (Reflex sleep status)', 'third_party/nvapi-sleep-status-LICENSE.txt', 'NVAPI-MIT-LICENSE.txt'),
+    ('Astera Loader plugin header', 'third_party/al/LICENSE', 'AsteraLoader-MIT-LICENSE.txt'),
+    ('CMFM menu header', 'third_party/cmfm/LICENSE', 'CMFM-MIT-LICENSE.txt'),
+]
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 dlss_mode = performance    ; off, dlaa, quality, balanced, performance (off: the game's own anti-aliasing and resolution)
@@ -144,7 +157,8 @@ def main():
     a = p.parse_args()
     marker = ('"version":"%s","build":"alpha"' % a.version).encode()
     require(a.dll.is_file() and marker in a.dll.read_bytes(), f'{a.dll} is not the alpha build of version {a.version}')
-    commit, dirty = git_identity(Path(__file__).resolve().parents[1])
+    repo = Path(__file__).resolve().parents[1]
+    commit, dirty = git_identity(repo)
     require(a.allow_dirty or not dirty, 'the working tree has uncommitted changes')
     name = f'mhw-dlss-{a.version}'
     folder, archive = a.out / name, a.out / f'{name}.zip'
@@ -156,6 +170,7 @@ def main():
             require((root / file).is_file() and sha(root / file) == digest, f'{root / file} does not match the tested runtime')
     licenses = [(a.streamline_sdk / src, dst) for src, dst in LICENSES['streamline']] + \
                [(a.dlss_sdk / src, dst) for src, dst in LICENSES['dlss']]
+    licenses += [(repo / src, dst) for _, src, dst in BUILT_IN if src]
     for src, _ in licenses:
         require(src.is_file(), f'license file {src} is missing')
 
@@ -169,7 +184,10 @@ def main():
     for src, dst in licenses:
         shutil.copyfile(src, data / 'licenses' / dst)
     (data / 'README.txt').write_text(README.format(version=a.version), encoding='utf-8', newline='\r\n')
-    notices = ['Third-party components (unmodified NVIDIA binaries)', '']
+    notices = ['Third-party components compiled into mhw_dlss.dll', '']
+    for component, _, license_file in BUILT_IN:
+        notices += [component, f'  License: licenses/{license_file}', '']
+    notices += ['Third-party components (unmodified NVIDIA binaries)', '']
     for files, product, license_file in COVERAGE:
         notices += [f'{product}: {files}', f'  License: licenses/{license_file}', '']
     notices += ['NVIDIA, GeForce RTX, DLSS and Reflex are trademarks of NVIDIA Corporation.',

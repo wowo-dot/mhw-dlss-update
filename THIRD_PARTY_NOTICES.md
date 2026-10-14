@@ -126,6 +126,43 @@ research dependencies record `reflex.license.txt` SHA256
 `ebf83c07fb3b2939908c3795d887afde3161c89a28ba391724efc784ce1bdabe`
 and `nvngx_dlss.license.txt` SHA256
 `3027f23ca5a46dd9cb8183fbd522983a86f64d7daac5982912bf9f214671f294`.
-Production SDK/NGX DLLs are kept in ignored local research folders and are not
-committed or redistributed with this source. Distribution packaging and its
-runtime license obligations must be reviewed when an alpha is prepared.
+NVIDIA's runtime DLLs are never committed. Release packages
+(`tools/package_release.py`) ship the unmodified DLLs the build was tested
+with, verified by SHA-256, together with NVIDIA's license files and the
+attribution notice (`AGENTS.md`).
+
+## NVIDIA DLSS SDK
+
+Source: <https://github.com/NVIDIA/DLSS>, commit
+`a291cc7d2cc642a51566f3dfd5376f635cd1b284` (`cmake/NgxReplay.cmake` pins the
+files by SHA-256). The mod compiles against its headers and links its NGX
+library `nvsdk_ngx_d.lib` into `mhw_dlss.dll`. License: NVIDIA RTX SDKs
+License, the SDK's `LICENSE.txt` (shipped in release packages as
+`NVIDIA-RTX-SDKs-LICENSE-DLSS.txt`).
+
+## NVIDIA NVAPI declarations
+
+`third_party/nvapi_sleep_status.hpp` declares a public ABI subset adapted from
+NVIDIA/nvapi commit `70d337db9186e968eab622f7e786de7e437faf3d`. MIT license:
+`third_party/nvapi-sleep-status-LICENSE.txt`. No NVAPI runtime is distributed.
+
+## DirectXShaderCompiler DxilHash
+
+Unmodified `DxilHash.cpp` and `DxilHash.h` from Microsoft's
+DirectXShaderCompiler, commit `69c311af7091953427a6d67c16e811ce65313b93`
+(`third_party/dxc_hash`). University of Illinois/NCSA Open Source License:
+`third_party/dxc_hash/LICENSE.TXT`.
+
+## Astera Loader and CMFM headers
+
+`third_party/al/al_plugin.h` (Astera Loader's plugin API) and
+`third_party/cmfm/cmfm.h` (CMFM's menu interface) are copied unchanged from
+those projects; their folders' README files record the commits. MIT licenses:
+`third_party/al/LICENSE` and `third_party/cmfm/LICENSE`.
+
+## In release packages
+
+`tools/package_release.py` lists every component above that is compiled into
+`mhw_dlss.dll` in the package's `THIRD-PARTY-NOTICES.txt` and copies its license
+file into the package's `licenses` folder. The MinHook license is
+`third_party/minhook-LICENSE.txt`, copied unchanged from the pinned commit.

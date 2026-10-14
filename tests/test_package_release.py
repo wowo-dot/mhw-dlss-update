@@ -52,7 +52,8 @@ class PackageRelease(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (folder / 'AsteraLoader' / 'plugins').iterdir()), ['mhw_dlss'])
         self.assertEqual(pr.sha(data / 'mhw_dlss.dll'), pr.sha(self.dll))
         for name in ['mhw_dlss.ini', 'README.txt', 'THIRD-PARTY-NOTICES.txt', 'manifest.json',
-                     *pr.STREAMLINE, *pr.NGX, *(f'licenses/{dst}' for _, dst in pr.LICENSES['streamline'] + pr.LICENSES['dlss'])]:
+                     *pr.STREAMLINE, *pr.NGX, *(f'licenses/{dst}' for _, dst in pr.LICENSES['streamline'] + pr.LICENSES['dlss']),
+                     *(f'licenses/{dst}' for _, _, dst in pr.BUILT_IN)]:
             self.assertTrue((data / name).is_file(), name)
         for name, digest in {**pr.STREAMLINE, **pr.NGX}.items():
             self.assertEqual(pr.sha(data / name), digest)
@@ -69,6 +70,10 @@ class PackageRelease(unittest.TestCase):
         self.assertIn('an Astera Loader plugin', readme)
         self.assertIn('With CMFM installed', readme)
         self.assertNotIn('winmm', readme)
+        notices = (data / 'THIRD-PARTY-NOTICES.txt').read_text(encoding='utf-8')
+        for component, _, dst in pr.BUILT_IN:
+            self.assertIn(component, notices); self.assertIn(f'licenses/{dst}', notices)
+        self.assertIn('Copyright (C) 2009-2017 Tsuda Kageyu', (data / 'licenses' / 'MinHook-LICENSE.txt').read_text(encoding='utf-8-sig'))
         with zipfile.ZipFile(self.out / 'mhw-dlss-9.8.7.zip') as z:
             self.assertEqual(sorted(z.namelist()),
                              sorted(f'mhw-dlss-9.8.7/{p}' for p in [e['path'] for e in manifest['files']] + ['AsteraLoader/plugins/mhw_dlss/manifest.json']))
