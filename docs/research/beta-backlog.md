@@ -101,3 +101,39 @@ This deferral does not change runtime recovery policy: unavailable inputs
 suspend reconstruction; a real failure remains reported and latched. Shared
 components changed for DLSS or frame generation still receive focused checks.
 The integrated suite then receives broader beta testing and optimization.
+
+## Depth-schedule skip bursts in DLAA (closed beta, kana-1)
+
+Not a release blocker (user, 2026-10-14). Bundle 0.28.5, RTX 5080, 2560x1440
+window, game aspect 21:9 (scene 2560x1080), DLAA with frame generation 3x.
+In a 1 h 50 min session (764,268 DLSS frames, 0 faults):
+- DLSS skipped 2,162 frames, 2,043 of them with skip reason 7 (the depth
+  lease is missing, so the frame falls back to an unfiltered resolve).
+- `consumer_depth` rejected 521 copies with reason 5: the expected depth
+  writer span was not in the game's depth state schedule (`span_index` not
+  found; the failure samples have indices UINT_MAX).
+- Most were single frames. Four bursts of 450-555 frames (about 3-4 s each)
+  came about 54, 61, 72 and 86 minutes in (summaries 163, 184, 216 and
+  257).
+- The image stays up, without temporal reconstruction. The mod recovers by
+  itself.
+
+Likely scene-specific: some pass changes the depth schedule, as the Fatalis
+rain (uDepthColorFilter) once did. The scene is not known yet; kana was
+asked what was happening at those times.
+
+Next step when picked up: on the first reason-5 failure of a burst, log the
+depth tracker's spans (the schedule that was not recognised), so a tester's
+log names the pass. Then admit that schedule properly. Never reuse stale
+depth. Logs: `local/beta-reports/kana-1/`.
+
+## The menu log lists multipliers on cards without frame generation
+
+Cosmetic (closed beta, flejmzi-2, RTX 3080 Ti):
+- The log line "menu: 2 of 2 pages added ... multipliers 2x/3x/4x/6x,
+  Dynamic" appears on a card without frame generation.
+- Cause: `offer_for()` uses `multiplier_choices(0)` (no limit) when
+  frame_generation is `no`, and `dynamic` is still `unknown`.
+- The frame generation rows are greyed with their reason, so players see
+  the right thing.
+- Fix: offer no multipliers and no Dynamic when frame generation is `no`.
