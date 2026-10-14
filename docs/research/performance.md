@@ -616,3 +616,51 @@ field on.
       (`dof_qualify`, `dof_native_record.inl`).
     - The two single frames with a radial blur (order 4100) and a 26005
       filter remain to look at.
+
+## perf13: the release candidate (v0.28.0 to v0.28.3, 2026-10-14)
+
+Hub start, windowed 2560x1440, the game's AA Off and Image Quality High,
+Reflex On, diagnostics off. PresentMon sessions `20261014-perf13` to
+`perf13e`, cut with `presentmon_summary.py --log`.
+
+| Stretch (v0.28.0, launch 1) | fps | 1% low | GPU busy |
+|---|---|---|---|
+| Quality, frame generation off | 250-256 | 163-183 | 2.6-3.0 ms |
+| DLAA | 237.5 | 172 | 4.07 ms |
+| Balanced / Performance | 252.6 / 252.6 | 183 / 182 | 2.95 / 2.79 ms |
+| Frame generation 2x then 6x (shown) | 718 | 242 | 1.39 ms |
+| DLSS Off (the mod standing by), launch 2 | 257.6 | 185 | 3.33 ms |
+
+The DLSS paths match perf10 (Quality 248-252 against the unmodded
+255-261). The game is CPU-bound here, so the presets barely differ. The
+engine caps at 300 fps (the user).
+
+The unmodded run (perf13e) settled at 272 fps, above every earlier unmodded
+baseline. The user called it an outlier and it was not chased.
+
+**Found: a frame limit left behind by 6x.**
+- After frame generation was turned off or unloaded at 6x, the game ran at a
+  flat **208 fps** (1250 / 6), with DLSS on or off. The cause was a wait
+  between frames: simulation and submit were unchanged, the interval grew
+  0.9 ms, and display latency grew 1 ms.
+- It cleared only while the player's Reflex was Off (253).
+- At 2x to 4x the leftover limit is above this game's rate. A stretch at 2x
+  before the unload left none (perf13c's second cycle).
+- DLSS-G's own Off options already carry `numFramesToGenerate = 1`.
+- Failed fixes:
+  - v0.28.1 set the same Reflex options again: they do not reach the driver;
+  - v0.28.2 set Reflex Off and back: the limit returned with On.
+- **v0.28.3** (`game_session.cpp` `reconcile()`): a planned Off (the player's
+  frame generation Off, or the worker's pause for DLSS Off or a preset change)
+  from anything but plain 2x first shows plain 2x for 24 tagged Presents and
+  150 ms (at most 400 ms).
+  - Window changes and missing inputs still turn DLSS-G Off at once.
+  - Logged as `winds` / `wound_presents`.
+  - game-139: one wind-down of 32 Presents (156 ms), then 246 fps after DLSS
+    Off at 6x.
+- A 2x leftover, if one exists (by the same pattern ~625 fps), cannot show
+  under the engine's 300 fps cap. Mention it to NVIDIA with the release notice.
+
+`presentmon_summary.py` now follows a launch's swap chains one after another
+(live frame generation rebuilds the chain). Before, it kept only the
+busiest one.
