@@ -78,7 +78,9 @@ void Streamline::initialize(const std::filesystem::path& runtime, const std::fil
         (selection != StreamlineFeatures::reflex_only && selection != StreamlineFeatures::reflex_and_frame_generation))
         throw std::runtime_error("Streamline initialization arguments");
     frame_generation_ = frame_generation_requested_ = selection == StreamlineFeatures::reflex_and_frame_generation;
-    const auto root = std::filesystem::canonical(runtime);
+    // As given (v0.28.5): under MO2, canonical() of a game folder that also
+    // exists in overwrite names overwrite's copy, without these DLLs.
+    const auto root = runtime.lexically_normal();
     // Official 2.12.0 production binaries only. Verify every requested plugin
     // before executing any SDK code. No OTA or downloaded plugin loading.
     verify(root/L"sl.interposer.dll", "2a79db6857ae8c75bbd871a9489c48bc6a39f7fcc88b9b02afd53d0376cbec66");

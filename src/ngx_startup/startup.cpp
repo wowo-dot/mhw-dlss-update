@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <ostream>
 #include <stdexcept>
+#include <string>
 
 namespace mhw::ngx_startup {
 namespace {
@@ -169,7 +170,15 @@ bool install(const Config &config,std::ostream &log){
     require(!installed&&!original&&config.target&&config.caller&&config.client_slots,"startup-install-contract");
     cfg=config;out=&log;log<<std::boolalpha;
     require(cfg.runtime.is_absolute()&&cfg.data.is_absolute(),"startup-paths");
-    require(projection_binding::file_sha256((cfg.runtime/L"nvngx_dlss.dll").wstring())==provider_sha,"startup-provider-sha256");
+    {
+        // v0.28.5: the provider's path and why its hash is missing, if it is
+        // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
+        const auto path=cfg.runtime/L"nvngx_dlss.dll";const auto digest=projection_binding::file_digest(path.wstring());
+        const auto utf8=path.u8string();
+        log<<"{\"event\":\"provider_check\",\"path\":"<<std::quoted(std::string(utf8.begin(),utf8.end()))<<",\"stage\":\""<<digest.stage
+           <<"\",\"error\":"<<digest.error<<",\"size\":"<<digest.size<<",\"read\":"<<digest.read<<",\"matches\":"<<(digest.sha==provider_sha)<<"}\n"<<std::flush;
+        require(digest.sha==provider_sha,"startup-provider-sha256");
+    }
     require(zero_slots(),"native-init-already-observed");
     require(!GetModuleHandleW((cfg.runtime/L"nvngx_dlss.dll").c_str())||shared_provider_verified(),"modern-provider-already-loaded");
     std::filesystem::create_directories(cfg.data);

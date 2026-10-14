@@ -2,6 +2,7 @@
 #include "readiness.hpp"
 #include "../projection_binding/memory.hpp"
 #include <windows.h>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -59,9 +60,15 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
     try {
         wchar_t dll_name[32768]{},host_name[32768]{};
         require(GetModuleFileNameW(module,dll_name,32768)>0&&GetModuleFileNameW(nullptr,host_name,32768)>0,"module-path");
-        const fs::path dll(dll_name),host(host_name);const auto preset=[](const fs::path &p){require(p.is_absolute()&&fs::is_directory(p),"config-directory");return fs::canonical(p).make_preferred();};
+        // The alpha's paths (use_paths) are absolute and lexically normal, from
+        // the DLL's own folder, and stay that way (v0.28.5). Under MO2 a game
+        // folder that also exists in overwrite (the log folder's parent, after
+        // the first launch) canonicalizes to overwrite's copy, which has no
+        // runtime: the provider was "missing" from the second launch on.
+        const fs::path dll(dll_name),host(host_name);const auto preset=[](const fs::path &p){require(p.is_absolute()&&fs::is_directory(p),"config-directory");return p.lexically_normal().make_preferred();};
         const auto folder=preset_output.empty()?read_path(fs::path(dll.wstring()+L".output-dir")):preset(preset_output);
-        require(folder!=fs::canonical(host.parent_path()),"output-game-directory");
+        const auto game=preset_output.empty()?fs::canonical(host.parent_path()):host.parent_path().lexically_normal().make_preferred();
+        require(_wcsicmp(folder.c_str(),game.c_str())!=0,"output-game-directory");
         const auto runtime=preset_runtime.empty()?read_path(folder/L"sdk-runtime-dir.txt"):preset(preset_runtime);
         const auto base=reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));std::string reason;
         require(pb::host_identity(base,reason),"host-identity");

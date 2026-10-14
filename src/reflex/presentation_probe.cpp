@@ -1023,7 +1023,13 @@ DWORD WINAPI worker(void*) noexcept {
             if (perf_in >> mask && mask <= mhw::perf::toggle_mask) mhw::perf::toggles.store(mask);
         }
 #endif
+#ifdef MHW_ALPHA
+        // The ini's folders are lexical (config.hpp), so the game folder is too
+        // (v0.28.5): under MO2 its canonical form can be overwrite's folder.
+        const auto game_root = std::filesystem::path(host_name).parent_path().lexically_normal().wstring();
+#else
         const auto game_root = std::filesystem::canonical(std::filesystem::path(host_name).parent_path()).wstring();
+#endif
         const auto under = [](const std::wstring& text, const std::wstring& root) {
             return text.size() >= root.size() && CompareStringOrdinal(text.data(), static_cast<int>(root.size()),
                 root.data(), static_cast<int>(root.size()), TRUE) == CSTR_EQUAL &&

@@ -166,6 +166,16 @@ const PoolState &pool_state() noexcept;
 bool reserve_startup(std::uintptr_t base,std::string &reason);
 bool reserve_pool(const std::array<std::uintptr_t,10> &,std::string &reason);
 std::string file_sha256(const std::wstring &);
+// A file's hash with the reason it could not be taken (v0.28.5): the stage
+// that stopped ("open", "size", "read", "short", "hash"; empty when complete),
+// its GetLastError and how far it got.
+struct FileDigest {
+  std::string sha;
+  const char *stage = "";
+  unsigned long error = 0;
+  std::uint64_t size = 0, read = 0;
+};
+FileDigest file_digest(const std::wstring &);  // CreateFileW and ReadFile
 std::string bytes_sha256(const void *,unsigned);
 // hash_file=false: the caller verified the exe file hash another way (AL).
 bool host_identity(std::uintptr_t,std::string &,bool hash_file=true);

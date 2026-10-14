@@ -70,6 +70,29 @@ std::string file_sha256(const std::wstring &path) {
     if (n > 0 && !hash.add(buffer.data(), static_cast<ULONG>(n))) return {}; }
   return file.eof() ? hash.finish() : std::string{};
 }
+FileDigest file_digest(const std::wstring &path) {
+  FileDigest d;
+  const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+  if (file == INVALID_HANDLE_VALUE) { d.stage = "open"; d.error = GetLastError(); return d; }
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size)) { d.stage = "size"; d.error = GetLastError(); CloseHandle(file); return d; }
+  d.size = static_cast<std::uint64_t>(size.QuadPart);
+  Hash hash; std::vector<char> buffer(65536);
+  while (true) {
+    DWORD n{};
+    if (!ReadFile(file, buffer.data(), static_cast<DWORD>(buffer.size()), &n, nullptr)) { d.stage = "read"; d.error = GetLastError(); break; }
+    if (!n) break;
+    if (!hash.add(buffer.data(), n)) { d.stage = "hash"; break; }
+    d.read += n;
+  }
+  CloseHandle(file);
+  if (*d.stage) return d;
+  if (d.read != d.size) { d.stage = "short"; return d; }
+  d.sha = hash.finish();
+  if (d.sha.empty()) d.stage = "hash";
+  return d;
+}
 // Memo (v0.23.6): the stream route identifies overlay and haze shaders by their
 // SHA-256 on every plan build, so the same few bytecodes were hashed every
 // frame (perf4). Inputs from 256 bytes to 256 KB are kept with their hash (32,
