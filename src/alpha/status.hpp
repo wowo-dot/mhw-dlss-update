@@ -117,59 +117,59 @@ inline std::string mod_line(const View &v) {
     return "Active";
 }
 
+// The Now lines (v0.28.0): the state in a few words, short enough for the
+// value box; the help lines explain.
 inline std::string dlss_line(const View &v) {
     if (v.dlss == Stage::starting) return "Starting";
     if (v.dlss == Stage::off) return with_reason("Off", reason_text(v.dlss_reason));
-    if (!v.dlss_healthy) return "Stopped; the game renders without DLSS";
-    if (v.dlss == Stage::player_off) return "Off (the game's own anti-aliasing and resolution)";
-    if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return v.dlss_mode;
-    if (v.render_width == v.scene_width && v.render_height == v.scene_height)
-        return v.dlss_mode + ", " + size_text(v.scene_width, v.scene_height);
-    return v.dlss_mode + ", " + size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
+    if (!v.dlss_healthy) return "Stopped (see the log)";
+    if (v.dlss == Stage::player_off) return "Off";
+    return v.dlss_mode;
+}
+
+// The render resolution and the output, or the game's own while DLSS is not
+// running.
+inline std::string resolution_line(const View &v) {
+    if (v.dlss == Stage::starting) return "Starting";
+    if (v.dlss != Stage::running || !v.dlss_healthy) return "The game's own";
+    if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return "Not known yet";
+    if (v.render_width == v.scene_width && v.render_height == v.scene_height) return size_text(v.scene_width, v.scene_height);
+    return size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
 }
 
 // A failure is "Off: why"; the player's own Off is plain "Off" (not degraded).
 inline std::string reflex_line(const View &v) {
     if (v.reflex == Stage::starting) return "Starting";
     if (v.reflex == Stage::off) return with_reason("Off", reason_text(v.reflex_reason));
-    if (v.reflex_mode == "Off") return "Off";
-    if (v.reflex_mode == "Boost") return "Boost (low latency, GPU clocks kept up)";
-    return "On (low latency)";
+    return v.reflex_mode;
 }
 
 inline std::string generation_line(const View &v) {
     switch (v.generation) {
     case Generation::off: return "Off";
     case Generation::starting: return "Starting";
-    case Generation::unavailable: return with_reason("Unavailable", reason_text(v.generation_reason));
-    case Generation::stopped: return with_reason("Off", reason_text(v.generation_reason));
+    case Generation::unavailable: return with_reason("Not available", reason_text(v.generation_reason));
+    case Generation::stopped: return with_reason("Stopped", reason_text(v.generation_reason));
     case Generation::armed: break;
     }
     if (!v.generation_enabled) return "Off";
     // Its inputs come from DLSS.
-    if (v.dlss == Stage::player_off) return "Paused while DLSS is off";
+    if (v.dlss == Stage::player_off) return "Paused (DLSS is off)";
     const bool dynamic = v.generation_mode == 2, automatic = v.generation_mode == 1;
     if (!v.generating) return (dynamic ? std::string("Dynamic") : std::to_string(v.requested) + "x") + ", paused";
     if (dynamic && v.dynamic_applied) {
-        auto line = "Dynamic (" +
-                    (v.target       ? std::to_string(v.target) + " fps"
-                     : v.display_hz ? "display refresh, " + std::to_string(v.display_hz) + " Hz"
-                                    : std::string("display refresh")) +
-                    ")";
         // Dynamic never goes past its target: at 1x for a while, the game
         // already runs above half of it (game-81: ~175 fps at 240 Hz).
-        if (v.presented_now == 1 && v.single_streak >= auto_pause_presents)
-            return line + ", showing 1x: the game is already above half the target";
-        return v.presented_now ? line + ", showing " + std::to_string(v.presented_now) + "x" : line + ", generating";
+        if (v.presented_now == 1 && v.single_streak >= auto_pause_presents) return "Dynamic, 1x (target reached)";
+        return v.presented_now ? "Dynamic, showing " + std::to_string(v.presented_now) + "x" : std::string("Dynamic, generating");
     }
-    const auto shown = v.generated + 1;
-    auto line = std::to_string(shown) + (automatic ? "x Auto, " : "x, ");
-    line += automatic && v.single_streak >= auto_pause_presents ? "paused (the game runs faster without it)" : "generating";
-    if (dynamic && v.dynamic_support == 1) line += " (Dynamic is not available here)";
-    else if (dynamic && v.dynamic_refused) line += " (DLSS refused Dynamic; see the log)";
-    else if (dynamic) line += " (switching to Dynamic)";
-    else if (v.requested > shown) line += " (" + std::to_string(v.requested) + "x is more than this graphics card allows)";
-    return line;
+    const auto shown = std::to_string(v.generated + 1) + "x";
+    if (dynamic && v.dynamic_support == 1) return shown + " (no Dynamic here)";
+    if (dynamic && v.dynamic_refused) return shown + " (Dynamic refused)";
+    if (dynamic) return shown + ", switching to Dynamic";
+    if (automatic) return shown + (v.single_streak >= auto_pause_presents ? " Auto, paused" : " Auto, generating");
+    if (v.requested > v.generated + 1) return shown + " (the card's most)";
+    return shown + ", generating";
 }
 
 inline std::string generated_line(const View &v) {

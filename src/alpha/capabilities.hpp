@@ -107,26 +107,34 @@ inline bool available(const Capabilities &c, Option option, unsigned value, std:
     return true;
 }
 
-// Status page lines.
-inline std::string card_line(const Capabilities &c) {
-    if (!c.known || c.card.name.empty()) return "Not known yet";
-    auto line = c.card.name;
-    if (c.card.memory_mb) line += ", " + std::to_string((c.card.memory_mb + 512) / 1024) + " GB";
-    if (c.card.driver_major) line += ", driver " + version_text(c.card.driver_major, c.card.driver_minor);
-    return line;
+// The Status page's System lines (v0.28.0: one fact each, short enough for
+// the value box).
+inline std::string card_name_line(const Capabilities &c) {
+    return c.known && !c.card.name.empty() ? c.card.name : "Not known yet";
 }
-inline std::string features_line(const Capabilities &c) {
+// Whole gigabytes, rounded up: DXGI reports a little less than the size on
+// the box (32,187 MB on a 32 GB RTX 5090).
+inline std::string memory_line(const Capabilities &c) {
+    return c.known && c.card.memory_mb ? std::to_string((c.card.memory_mb + 1023) / 1024) + " GB" : "Not known yet";
+}
+inline std::string driver_line(const Capabilities &c) {
+    return c.known && c.card.driver_major ? version_text(c.card.driver_major, c.card.driver_minor) : "Not known yet";
+}
+inline std::string generation_support_line(const Capabilities &c) {
     if (!c.known) return "Not known yet";
-    std::string line;
-    const auto add = [&](const std::string &part) { line += (line.empty() ? "" : ", ") + part; };
-    if (c.dlss != Support::no) add("DLSS");
-    if (c.reflex != Support::no) add("Reflex");
-    if (c.frame_generation == Support::yes || c.frame_generation == Support::unknown) {
-        add(c.max_multiplier ? "frame generation up to " + std::to_string(c.max_multiplier) + "x" : std::string("frame generation"));
-        if (c.dynamic == Support::yes) add("Dynamic");
-    }
-    if (line.empty()) line = "Nothing this mod uses";
-    if (c.frame_generation == Support::no && c.missing != Missing::plugin_off) line += "; no frame generation";
+    if (c.frame_generation == Support::no) switch (c.missing) {
+        case Missing::plugin_off: return "Not loaded (mhw_dlss.ini)";
+        case Missing::card: return "No: needs an RTX 40 or 50";
+        case Missing::driver:
+            return c.driver_required_major ? "No: needs driver " + version_text(c.driver_required_major, c.driver_required_minor)
+                                           : std::string("No: needs a newer driver");
+        case Missing::os: return "No: needs a newer Windows";
+        case Missing::scheduling: return "No: GPU scheduling is off";
+        case Missing::none:
+        case Missing::other: return "No (see the log)";
+        }
+    auto line = c.max_multiplier ? "Up to " + std::to_string(c.max_multiplier) + "x" : std::string("Yes");
+    if (c.dynamic == Support::yes) line += ", Dynamic";
     return line;
 }
 

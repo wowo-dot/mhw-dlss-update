@@ -511,6 +511,8 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
             WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, static_cast<int>(sizeof(name)), nullptr, nullptr);
             caps.card.name = name; caps.card.vendor = d.VendorId; caps.card.device = d.DeviceId;
             caps.card.memory_mb = static_cast<std::uint64_t>(d.DedicatedVideoMemory) >> 20;
+            // DLSS is NVIDIA's (the menu locks it with that reason).
+            if (caps.card.vendor != caps_ns::nvidia) caps.dlss = caps_ns::Support::no;
         }
     }
     mhw::alpha::status::card_capabilities(caps);
@@ -633,6 +635,8 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
         << ",\"missing\":" << static_cast<unsigned>(caps.missing) << ",\"result\":" << caps.frame_generation_result
         << ",\"driver_required\":" << quoted(caps_ns::version_text(caps.driver_required_major, caps.driver_required_minor))
         << ",\"max_multiplier\":" << caps.max_multiplier << ",\"dynamic\":" << static_cast<unsigned>(caps.dynamic) << "}\n" << std::flush;
+    // v0.28.0: the menu's choices follow the card.
+    mhw::alpha::menu::card_ready();
 #endif
     device_checked = true;
     log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"loader\":" << (out == nullptr)

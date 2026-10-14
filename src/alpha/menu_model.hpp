@@ -4,27 +4,28 @@
 #include <string>
 #include <vector>
 #include "../dlss_sdk/geometry.hpp"
+#include "capabilities.hpp"
 #include "config.hpp"
 
-// The settings CMFM's "Settings" page shows, as the ini holds them (alpha).
-// - "DLSS mode" changes at once while DLSS runs: the worker rebuilds the
-//   pipeline at the new render scale (continuous_dlaa::change_mode). Off
-//   hands the game back (continuous_dlaa::turn_off): its own anti-aliasing,
-//   resolution and aspect; the last mode is kept in memory for the way back.
-// - "Frame generation" Off/On changes at once: DLSS-G loads at every start
-//   where the card supports it (frame_generation_plugin = auto); with
-//   frame_generation_plugin = off it never loads and the row is locked.
-// - "Multiplier" changes at once while frame generation runs: 2x to 6x, or
-//   Dynamic (DLSS-G picks the count toward "Target frame rate").
-// - One ini key holds both: Off writes "off", On writes the multiplier or
-//   "dynamic". While frame generation is Off the choice is kept in memory, so
-//   On restores it; while Dynamic, the last fixed multiplier is kept too.
-// - "Target frame rate" (dynamic_target) and "Auto pause"
-//   (frame_generation_auto) change at once; the first is used only by Dynamic,
-//   the second only by fixed multipliers.
-// - "Reflex" changes at once. Off only while DLSS-G is not loaded (it paces
-//   the swap chain and needs Reflex); turning frame generation on turns
-//   Reflex on again.
+// The settings CMFM's "Settings" page shows (alpha, v0.28.0), as the ini holds
+// them. Every row applies at once; a row that cannot change now stays visible,
+// greyed, with the reason in the help line (lock_reason()).
+// - "DLSS" On/Off: Off hands the game back (continuous_dlaa::turn_off): its own
+//   anti-aliasing, resolution and aspect. "Mode" is the mode it runs at, kept
+//   while Off. One ini key holds both: dlss_mode = off or the mode.
+// - "Frame generation" On/Off: DLSS-G loads at every start where the card
+//   supports it (frame_generation_plugin = auto); it needs DLSS (its inputs
+//   come from it), so it is locked while DLSS is Off.
+// - "Multiplier": the fixed multipliers this card can show (its DLSS-G limit,
+//   read when the page is added).
+// - "Pacing": Fixed, Auto pause (NVIDIA's Auto mode pauses a fixed multiplier
+//   when the game would run faster without it) or Dynamic (DLSS-G picks the
+//   count toward "Target frame rate"; on cards that support it).
+// - One ini key holds frame generation, the multiplier and Dynamic:
+//   frame_generation = off, 2x...6x or dynamic; frame_generation_auto holds
+//   Auto pause. While Off or Dynamic the multiplier is kept in memory.
+// - "Reflex": Off only while DLSS-G is not loaded (it paces the swap chain and
+//   needs Reflex); turning frame generation on turns Reflex on again.
 // Pure (tests/alpha_menu_tests.cpp).
 namespace mhw::alpha::menu_model {
 
@@ -39,27 +40,22 @@ struct Settings {
     bool generation_auto{};
 };
 
-// "DLSS mode" choices: Off, then the modes, highest quality first.
+// "Mode" choices, highest quality first.
 inline constexpr std::array<dlss_sdk::ReconstructionMode, 4> modes{
     dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality, dlss_sdk::ReconstructionMode::balanced,
     dlss_sdk::ReconstructionMode::performance};
-inline constexpr const char *mode_names[]{"Off", "DLAA", "Quality", "Balanced", "Performance"};
-inline constexpr int off_choice = 0;
-static_assert(std::size(mode_names) == modes.size() + 1);
+inline constexpr const char *mode_names[]{"DLAA", "Quality", "Balanced", "Performance"};
+static_assert(std::size(mode_names) == modes.size());
 // The CHOICE index of a mode (that of Performance for any other value).
 constexpr int choice_of(dlss_sdk::ReconstructionMode mode) {
     for (unsigned i = 0; i < modes.size(); ++i)
-        if (modes[i] == mode) return static_cast<int>(i) + 1;
-    return static_cast<int>(modes.size());
+        if (modes[i] == mode) return static_cast<int>(i);
+    return static_cast<int>(modes.size()) - 1;
 }
-// The CHOICE index of the DLSS setting: Off or the mode.
-constexpr int dlss_choice(const Settings &s) { return s.dlss ? choice_of(s.dlss_mode) : off_choice; }
-// The setting at a CHOICE index: Off (`mode` unchanged) or a mode; false
-// outside the list.
-constexpr bool mode_at(int index, bool &dlss, dlss_sdk::ReconstructionMode &mode) {
-    if (index < 0 || index > static_cast<int>(modes.size())) return false;
-    dlss = index != off_choice;
-    if (dlss) mode = modes[static_cast<unsigned>(index - 1)];
+// The mode at a CHOICE index; false outside the list.
+constexpr bool mode_at(int index, dlss_sdk::ReconstructionMode &mode) {
+    if (index < 0 || index >= static_cast<int>(modes.size())) return false;
+    mode = modes[static_cast<unsigned>(index)];
     return true;
 }
 
@@ -91,24 +87,40 @@ constexpr unsigned reflex_sdk_value(ReflexMode mode) {
     return mode == ReflexMode::off ? 0U : mode == ReflexMode::boost ? 2U : 1U;
 }
 
-// "Multiplier" choices: the fixed multipliers, then Dynamic.
+// The fixed multipliers (total frames per rendered frame) the mod offers.
 inline constexpr std::array<unsigned, 4> multipliers{2, 3, 4, 6};
-inline constexpr const char *multiplier_names[]{"2x", "3x", "4x", "6x", "Dynamic"};
-inline constexpr int dynamic_choice = static_cast<int>(multipliers.size());
-static_assert(std::size(multiplier_names) == multipliers.size() + 1);
+// The "Multiplier" choices for a card that shows `max` frames at most (0: not
+// known, every one).
+inline std::vector<unsigned> multiplier_choices(unsigned max) {
+    std::vector<unsigned> out;
+    for (const auto m : multipliers)
+        if (!max || m <= max) out.push_back(m);
+    if (out.empty()) out.push_back(multipliers.front());
+    return out;
+}
+inline std::string multiplier_name(unsigned m) { return std::to_string(m) + "x"; }
+// The CHOICE index of `m`: its own, else the largest choice below it, else 0.
+inline int multiplier_index(const std::vector<unsigned> &choices, unsigned m) {
+    int best = 0;
+    for (unsigned i = 0; i < choices.size(); ++i)
+        if (choices[i] <= m) best = static_cast<int>(i);
+    return best;
+}
 
-// The CHOICE index of a multiplier (that of 2x for any other value).
-constexpr int choice_of(unsigned multiplier) {
-    for (unsigned i = 0; i < multipliers.size(); ++i)
-        if (multipliers[i] == multiplier) return static_cast<int>(i);
-    return 0;
+// "Pacing" choices; Dynamic only where the card supports it (or it is not known).
+enum class Pacing : unsigned { fixed, auto_pause, dynamic };
+inline constexpr const char *pacing_names[]{"Fixed", "Auto pause", "Dynamic"};
+inline constexpr unsigned pacing_count(bool dynamic_offered) { return dynamic_offered ? 3U : 2U; }
+constexpr Pacing pacing(const Settings &s, bool dynamic_offered) {
+    return s.dynamic && dynamic_offered ? Pacing::dynamic : s.generation_auto ? Pacing::auto_pause : Pacing::fixed;
 }
-// The CHOICE index of the frame generation setting: Dynamic or the multiplier.
-constexpr int generation_choice(const Settings &s) { return s.dynamic ? dynamic_choice : choice_of(s.multiplier); }
-// The multiplier at a CHOICE index; 0 outside the list and for Dynamic.
-constexpr unsigned multiplier_at(int index) {
-    return index >= 0 && index < static_cast<int>(multipliers.size()) ? multipliers[static_cast<unsigned>(index)] : 0;
+// Applies a pacing: Dynamic keeps the Auto pause setting for the way back.
+constexpr void set_pacing(Settings &s, Pacing p) {
+    s.dynamic = p == Pacing::dynamic;
+    if (p != Pacing::dynamic) s.generation_auto = p == Pacing::auto_pause;
 }
+// The session's mode (frame_generation::game::Mode order: fixed, automatic, dynamic).
+constexpr unsigned generation_mode(const Settings &s) { return s.dynamic ? 2U : s.generation_auto ? 1U : 0U; }
 
 // "Target frame rate" choices: the display's refresh rate (0), then common
 // rates; a value from the ini that is not one of them is added in order.
@@ -130,8 +142,53 @@ inline int target_index(const std::vector<unsigned> &choices, unsigned target) {
     return at == choices.end() ? -1 : static_cast<int>(at - choices.begin());
 }
 
-// The session's mode (frame_generation::game::Mode order: fixed, automatic, dynamic).
-constexpr unsigned generation_mode(const Settings &s) { return s.dynamic ? 2U : s.generation_auto ? 1U : 0U; }
+// What the Settings page offers, fixed when it is added (CMFM keeps its
+// choices): the card's multipliers and whether Dynamic is one of the pacings.
+struct Offer {
+    std::vector<unsigned> multipliers = multiplier_choices(0);
+    bool dynamic = true;
+};
+inline Offer offer_for(const capabilities::Capabilities &c) {
+    Offer o;
+    o.multipliers = multiplier_choices(c.frame_generation == capabilities::Support::no ? 0 : c.max_multiplier);
+    o.dynamic = c.dynamic != capabilities::Support::no;
+    return o;
+}
 
+// The Settings page's rows.
+enum class Row : unsigned { dlss, mode, frame_generation, multiplier, pacing, target, reflex };
+// Why `row` cannot change now (the help line while it is greyed), or empty.
+// `fg_requested`: DLSS-G loads at start (frame_generation_plugin = auto).
+inline std::string lock_reason(Row row, const Settings &s, const capabilities::Capabilities &c, const Offer &offer,
+                               bool fg_requested) {
+    namespace caps = capabilities;
+    std::string why;
+    switch (row) {
+    case Row::dlss:
+        return caps::available(c, caps::Option::dlss, 0, why) ? std::string() : why;
+    case Row::mode:
+        if (!caps::available(c, caps::Option::dlss, 0, why)) return why;
+        return s.dlss ? std::string() : "Turn DLSS on first.";
+    case Row::reflex:
+        return caps::available(c, caps::Option::reflex, 0, why) ? std::string() : why;
+    case Row::frame_generation:
+    case Row::multiplier:
+    case Row::pacing:
+    case Row::target:
+        break;
+    }
+    if (!fg_requested) return caps::frame_generation_reason({.missing = caps::Missing::plugin_off});
+    if (!caps::available(c, caps::Option::frame_generation, 0, why)) return why;
+    // Its inputs (depth, motion, the HUD-less image) come from DLSS.
+    if (!s.dlss) return "Frame generation needs DLSS; turn DLSS on first.";
+    if (row == Row::frame_generation) return {};
+    if (!s.frame_generation) return "Turn frame generation on first.";
+    const bool dynamic = pacing(s, offer.dynamic) == Pacing::dynamic;
+    if (row == Row::multiplier && dynamic) return "Dynamic pacing picks the number of frames itself.";
+    if (row == Row::multiplier && offer.multipliers.size() == 1)
+        return "This graphics card shows " + multiplier_name(offer.multipliers.front()) + " at most; 3x and up need an RTX 50.";
+    if (row == Row::target && !dynamic) return "Used only by Dynamic pacing.";
+    return {};
+}
 
 }  // namespace mhw::alpha::menu_model

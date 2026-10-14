@@ -13,7 +13,6 @@
 #include "status.hpp"
 #include "version.hpp"
 #include "../continuous_dlaa/runtime.hpp"
-#include "../frame_generation/display_refresh.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
@@ -35,39 +34,68 @@ caps::Capabilities card() {
     return c;
 }
 
+// Setting ids, unique on their page.
 enum Row : std::uint32_t {
-    frame_generation_row = 1,
+    dlss_row = 1,
+    mode_row,
+    frame_generation_row,
     multiplier_row,
-    dlss_mode_row,
-    reflex_setting_row,
+    pacing_row,
     target_row,
-    auto_row,
+    reflex_row,
     upscaling_section = 20,
     generation_section,
     latency_section,
-    mod_row = 10,
-    dlss_row,
-    reflex_row,
-    generation_row,
-    generated_row,
-    card_row,
-    features_row,
+    // Status page.
+    mod_line_row = 40,
+    dlss_line_row,
+    resolution_line_row,
+    generation_line_row,
+    generated_line_row,
+    reflex_line_row,
+    card_line_row,
+    memory_line_row,
+    driver_line_row,
+    support_line_row,
+    now_section = 60,
+    system_section,
 };
+// The model's row for a Settings id.
+bool model_row(std::uint32_t id, mm::Row &row) {
+    switch (id) {
+    case dlss_row: row = mm::Row::dlss; return true;
+    case mode_row: row = mm::Row::mode; return true;
+    case frame_generation_row: row = mm::Row::frame_generation; return true;
+    case multiplier_row: row = mm::Row::multiplier; return true;
+    case pacing_row: row = mm::Row::pacing; return true;
+    case target_row: row = mm::Row::target; return true;
+    case reflex_row: row = mm::Row::reflex; return true;
+    default: return false;
+    }
+}
 
-// Touched on CMFM's menu thread (and once by add_pages before any page exists).
+// Touched on CMFM's menu thread (and once by add_now before any page exists).
 struct State {
     std::mutex mutex;
     const al_api_t *api{};
     al_plugin_t *self{};
+    const cmfm_menu_t *menu{};
     std::filesystem::path folder, ini;
     mm::Settings settings;  // what the ini holds, or will hold once saved
     bool dirty{};           // changed since the last save
     bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{};  // which keys
     bool fg_requested{};    // DLSS-G loads at start where supported: frame generation applies live
-    // "Target frame rate" choices, fixed when the page is added (CMFM keeps the pointers).
+    // Fixed when the pages are added (CMFM keeps the choices): what this card
+    // offers, the target frame rates, and the texts built from them.
+    mm::Offer offer;
     std::vector<unsigned> targets;
-    std::vector<std::string> target_names;
-    std::vector<const char *> target_pointers;
+    std::vector<std::string> names;  // multiplier and target names
+    std::vector<const char *> multiplier_pointers, target_pointers;
+    std::string multiplier_help, pacing_help;
+    // The pages wait for the card (card_ready(), which may come first) or
+    // 20 s, then are added once.
+    std::atomic<HANDLE> ready{};
+    std::atomic<bool> card_known{}, added{};
 };
 State state;
 
@@ -207,66 +235,91 @@ void apply_generation_live(const mm::Settings &s) {
     fg::mode(static_cast<fg::Mode>(mm::generation_mode(s)), s.dynamic_target);
 }
 
+// Under the lock: the dlss_mode key, now while DLSS is installed (the worker
+// rebuilds it at the new scale, or hands the game back for Off).
+void apply_dlss(const mm::Settings &s) {
+    state.dirty = state.mode_dirty = true;
+    const bool now = continuous_dlaa::live_modes();
+    if (now && s.dlss) continuous_dlaa::request_mode(s.dlss_mode);
+    else if (now) continuous_dlaa::request_off();
+    log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_setting_value(s.dlss, s.dlss_mode) +
+                         (now ? " (applied now)" : " (from the next start)"));
+}
+
+// Under the lock: the frame generation keys, now where DLSS-G loads at start.
+void apply_generation(const mm::Settings &s, bool auto_changed) {
+    state.dirty = state.generation_dirty = true;
+    if (auto_changed) state.auto_dirty = true;
+    const bool live = state.fg_requested;
+    if (live) apply_generation_live(s);
+    log(AL_LOG_INFO, "menu: frame_generation = " + frame_generation_value(s.frame_generation, s.multiplier, s.dynamic) +
+                         ", frame_generation_auto = " + (s.generation_auto ? "on" : "off") +
+                         (live ? " (applied now)" : " (from the next start)"));
+}
+
 cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
     try {
         std::lock_guard lock(state.mutex);
-        if (id == frame_generation_row) value->i = state.settings.frame_generation ? 1 : 0;
-        else if (id == multiplier_row) value->i = mm::generation_choice(state.settings);
-        else if (id == target_row) value->i = std::max(0, mm::target_index(state.targets, state.settings.dynamic_target));
-        else if (id == auto_row) value->i = state.settings.generation_auto ? 1 : 0;
-        else if (id == dlss_mode_row) value->i = mm::dlss_choice(state.settings);
-        else if (id == reflex_setting_row) value->i = mm::choice_of(state.settings.reflex);
-        else return CMFM_ERROR;
+        const auto &s = state.settings;
+        switch (id) {
+        case dlss_row: value->i = s.dlss ? 1 : 0; break;
+        case mode_row: value->i = mm::choice_of(s.dlss_mode); break;
+        case frame_generation_row: value->i = s.frame_generation ? 1 : 0; break;
+        case multiplier_row: value->i = mm::multiplier_index(state.offer.multipliers, s.multiplier); break;
+        case pacing_row: value->i = static_cast<int>(mm::pacing(s, state.offer.dynamic)); break;
+        case target_row: value->i = std::max(0, mm::target_index(state.targets, s.dynamic_target)); break;
+        case reflex_row: value->i = mm::choice_of(s.reflex); break;
+        default: return CMFM_ERROR;
+        }
         return CMFM_OK;
     } catch (...) {
         return CMFM_ERROR;
     }
 }
 
+// Also guards CMFM's "Reset to defaults", which sets locked rows too: a value
+// the row could not take now is refused with the row's reason.
 cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *value, char *why, std::uint32_t why_size) {
     try {
-        if (id == reflex_setting_row) {
-            std::string reason = "Unknown Reflex mode.";
-            ReflexMode mode{};
-            bool generation{};
-            {
-                std::lock_guard lock(state.mutex);
-                generation = state.settings.frame_generation;
-            }
-            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, generation, reflex::frame_generation_loaded(), reason))
-                return CMFM_OK;
-            copy(why, why_size, reason);
-            return CMFM_ERROR;
-        }
-        if (id == target_row) {
-            bool known{};
-            {
-                std::lock_guard lock(state.mutex);
-                known = value->i >= 0 && value->i < static_cast<int>(state.targets.size());
-            }
-            if (known) return CMFM_OK;
-            copy(why, why_size, "Unknown frame rate.");
-            return CMFM_ERROR;
-        }
-        // What the card offers (capabilities.hpp).
         std::string reason;
         const auto c = card();
-        if (id == dlss_mode_row) {
-            if (value->i == mm::off_choice || caps::available(c, caps::Option::dlss, 0, reason)) return CMFM_OK;
-        } else if (id == frame_generation_row) {
-            if (!value->i || caps::available(c, caps::Option::frame_generation, 0, reason)) return CMFM_OK;
-        } else if (id == multiplier_row) {
-            reason = "Unknown multiplier.";
-            if (value->i == mm::dynamic_choice) {
-                if (caps::available(c, caps::Option::dynamic, 0, reason)) return CMFM_OK;
-            } else if (const auto m = mm::multiplier_at(value->i); m && caps::available(c, caps::Option::multiplier, m, reason)) {
-                return CMFM_OK;
-            }
-        } else {
-            return CMFM_OK;
+        std::lock_guard lock(state.mutex);
+        const auto &s = state.settings;
+        const auto refuse = [&](std::string_view text) {
+            copy(why, why_size, text);
+            return CMFM_ERROR;
+        };
+        switch (id) {
+        case dlss_row:
+        case mode_row:
+            if ((id == mode_row || value->i) && !caps::available(c, caps::Option::dlss, 0, reason)) return refuse(reason);
+            return id == mode_row && (value->i < 0 || value->i >= static_cast<int>(mm::modes.size())) ? refuse("Unknown mode.") : CMFM_OK;
+        case frame_generation_row:
+            if (!value->i) return CMFM_OK;
+            reason = mm::lock_reason(mm::Row::frame_generation, s, c, state.offer, state.fg_requested);
+            return reason.empty() ? CMFM_OK : refuse(reason);
+        case multiplier_row: {
+            if (value->i < 0 || value->i >= static_cast<int>(state.offer.multipliers.size())) return refuse("Unknown multiplier.");
+            // A limit DLSS-G reported after the page was added.
+            const auto m = state.offer.multipliers[static_cast<unsigned>(value->i)];
+            return caps::available(c, caps::Option::multiplier, m, reason) ? CMFM_OK : refuse(reason);
         }
-        copy(why, why_size, reason);
-        return CMFM_ERROR;
+        case pacing_row:
+            if (value->i < 0 || value->i >= static_cast<int>(mm::pacing_count(state.offer.dynamic))) return refuse("Unknown pacing.");
+            if (static_cast<mm::Pacing>(value->i) == mm::Pacing::dynamic && !caps::available(c, caps::Option::dynamic, 0, reason))
+                return refuse(reason);
+            return CMFM_OK;
+        case target_row:
+            return value->i >= 0 && value->i < static_cast<int>(state.targets.size()) ? CMFM_OK : refuse("Unknown frame rate.");
+        case reflex_row: {
+            ReflexMode mode{};
+            reason = "Unknown Reflex mode.";
+            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, s.frame_generation, reflex::frame_generation_loaded(), reason))
+                return CMFM_OK;
+            return refuse(reason);
+        }
+        default: return CMFM_OK;
+        }
     } catch (...) {
         return CMFM_ERROR;
     }
@@ -276,22 +329,52 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
     try {
         std::lock_guard lock(state.mutex);
         auto &s = state.settings;
-        bool live = false;
-        if (id == dlss_mode_row) {
-            bool dlss{};
-            if (!mm::mode_at(value->i, dlss, s.dlss_mode)) return CMFM_ERROR;
-            s.dlss = dlss;
-            state.dirty = state.mode_dirty = true;
-            // Live while DLSS is installed (the worker rebuilds it at the new
-            // scale, or hands the game back for Off).
-            const bool now = continuous_dlaa::live_modes();
-            if (now && dlss) continuous_dlaa::request_mode(s.dlss_mode);
-            else if (now) continuous_dlaa::request_off();
-            log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_setting_value(s.dlss, s.dlss_mode) +
-                                 (now ? " (applied now)" : " (from the next start)"));
+        switch (id) {
+        case dlss_row:
+            s.dlss = value->i != 0;
+            apply_dlss(s);
+            return CMFM_OK;
+        case mode_row:
+            if (!mm::mode_at(value->i, s.dlss_mode)) return CMFM_ERROR;
+            apply_dlss(s);
+            return CMFM_OK;
+        case frame_generation_row:
+            s.frame_generation = value->i != 0;
+            if (s.frame_generation && s.reflex == ReflexMode::off) {
+                // Frame generation needs Reflex: on again, at once.
+                s.reflex = ReflexMode::on;
+                state.dirty = state.reflex_dirty = true;
+                reflex::request_mode(mm::reflex_sdk_value(s.reflex));
+                log(AL_LOG_INFO, "menu: reflex = on (frame generation needs it)");
+            }
+            // Live where DLSS-G loads at start: its options first, so the
+            // first generated frames use them.
+            if (state.fg_requested && s.frame_generation) apply_generation_live(s);
+            if (state.fg_requested) fg::enable(s.frame_generation);
+            state.dirty = state.generation_dirty = true;
+            log(AL_LOG_INFO, std::string("menu: frame_generation = ") + frame_generation_value(s.frame_generation, s.multiplier, s.dynamic) +
+                                 (state.fg_requested ? " (applied now)" : " (from the next start)"));
+            return CMFM_OK;
+        case multiplier_row:
+            if (value->i < 0 || value->i >= static_cast<int>(state.offer.multipliers.size())) return CMFM_ERROR;
+            s.multiplier = state.offer.multipliers[static_cast<unsigned>(value->i)];
+            apply_generation(s, false);
+            return CMFM_OK;
+        case pacing_row:
+            if (value->i < 0 || value->i >= static_cast<int>(mm::pacing_count(state.offer.dynamic))) return CMFM_ERROR;
+            mm::set_pacing(s, static_cast<mm::Pacing>(value->i));
+            apply_generation(s, true);
+            return CMFM_OK;
+        case target_row: {
+            if (value->i < 0 || value->i >= static_cast<int>(state.targets.size())) return CMFM_ERROR;
+            s.dynamic_target = state.targets[static_cast<unsigned>(value->i)];
+            state.dirty = state.target_dirty = true;
+            if (state.fg_requested) apply_generation_live(s);
+            log(AL_LOG_INFO, "menu: dynamic_target = " + dynamic_target_value(s.dynamic_target) +
+                                 (state.fg_requested ? " (applied now)" : " (from the next start)"));
             return CMFM_OK;
         }
-        if (id == reflex_setting_row) {
+        case reflex_row: {
             ReflexMode mode{};
             std::string why;
             const bool loaded = reflex::frame_generation_loaded();
@@ -305,79 +388,23 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
                                  (now ? " (applied now)" : " (from the next start; frame generation runs until then)"));
             return CMFM_OK;
         }
-        if (id == frame_generation_row) {
-            s.frame_generation = value->i != 0;
-            if (s.frame_generation && s.reflex == ReflexMode::off) {
-                // Frame generation needs Reflex: on again, at once.
-                s.reflex = ReflexMode::on;
-                state.reflex_dirty = true;
-                reflex::request_mode(mm::reflex_sdk_value(s.reflex));
-                log(AL_LOG_INFO, "menu: reflex = on (frame generation needs it)");
-            }
-            // Live where DLSS-G loads at start: its options first, so the
-            // first generated frames use them.
-            live = state.fg_requested;
-            if (live) {
-                if (s.frame_generation) apply_generation_live(s);
-                fg::enable(s.frame_generation);
-            }
-        } else if (id == multiplier_row) {
-            if (value->i == mm::dynamic_choice) {
-                s.dynamic = true;
-            } else {
-                const auto m = mm::multiplier_at(value->i);
-                if (!m) return CMFM_ERROR;
-                s.multiplier = m;
-                s.dynamic = false;
-            }
-            live = state.fg_requested;
-            if (live) apply_generation_live(s);
-        } else if (id == target_row || id == auto_row) {
-            if (id == target_row) {
-                if (value->i < 0 || value->i >= static_cast<int>(state.targets.size())) return CMFM_ERROR;
-                s.dynamic_target = state.targets[static_cast<unsigned>(value->i)];
-                state.target_dirty = true;
-            } else {
-                s.generation_auto = value->i != 0;
-                state.auto_dirty = true;
-            }
-            state.dirty = true;
-            live = state.fg_requested;
-            if (live) apply_generation_live(s);
-            log(AL_LOG_INFO, (id == target_row ? "menu: dynamic_target = " + dynamic_target_value(s.dynamic_target)
-                                               : std::string("menu: frame_generation_auto = ") + (s.generation_auto ? "on" : "off")) +
-                                 (live ? " (applied now)" : " (from the next start)"));
-            return CMFM_OK;
-        } else {
-            return CMFM_ERROR;
+        default: return CMFM_ERROR;
         }
-        state.dirty = state.generation_dirty = true;
-        log(AL_LOG_INFO, "menu: frame_generation = " + frame_generation_value(s.frame_generation, s.multiplier, s.dynamic) +
-                             (live ? " (applied now)" : " (from the next start)"));
-        return CMFM_OK;
     } catch (...) {
         return CMFM_ERROR;
     }
 }
 
+// Greyed with the reason, never hidden (the player sees what exists and why
+// it cannot change now).
 std::uint32_t CMFM_CALL locked(void *, std::uint32_t id, char *why, std::uint32_t why_size) {
     try {
-        std::lock_guard lock(state.mutex);
-        const auto &s = state.settings;
-        if (id != frame_generation_row && id != multiplier_row && id != target_row && id != auto_row) return 0;
-        // Known once the game's device exists (before any Mods page opens).
+        mm::Row row{};
+        if (!model_row(id, row)) return 0;
         const auto c = card();
-        std::string missing;
-        if (!state.fg_requested || c.frame_generation == caps::Support::no)
-            missing = c.frame_generation == caps::Support::no ? caps::frame_generation_reason(c)
-                                                              : "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded.";
-        const char *reason = !missing.empty()              ? missing.c_str()
-                             : id == frame_generation_row      ? nullptr
-                             : !s.frame_generation              ? "Turn frame generation on first."
-                             : id == target_row && !s.dynamic ? "Used only by the Dynamic multiplier."
-                             : id == auto_row && s.dynamic    ? "Dynamic adjusts itself; Auto pause is for the fixed multipliers."
-                                                              : nullptr;
-        if (!reason) return 0;
+        std::lock_guard lock(state.mutex);
+        const auto reason = mm::lock_reason(row, state.settings, c, state.offer, state.fg_requested);
+        if (reason.empty()) return 0;
         copy(why, why_size, reason);
         return 1;
     } catch (...) {
@@ -402,25 +429,18 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
         v.dynamic_refused = session.dynamic_refused;
         v.presented_now = session.presented_now;
         v.single_streak = session.single_streak;
-        {
-            // The monitor is looked up at most once a second (get_text runs per row).
-            static std::atomic<unsigned> hz{};
-            static std::atomic<std::uint64_t> checked{};
-            if (const auto now = GetTickCount64(); now - checked.load() >= 1000) {
-                checked.store(now);
-                hz.store(frame_generation::display_refresh_hz());
-            }
-            v.display_hz = hz.load();
-        }
         std::string line;
         switch (id) {
-        case mod_row: line = status::mod_line(v); break;
-        case dlss_row: line = status::dlss_line(v); break;
-        case reflex_row: line = status::reflex_line(v); break;
-        case generation_row: line = status::generation_line(v); break;
-        case generated_row: line = status::generated_line(v); break;
-        case card_row: line = caps::card_line(v.caps); break;
-        case features_row: line = caps::features_line(card()); break;
+        case mod_line_row: line = status::mod_line(v); break;
+        case dlss_line_row: line = status::dlss_line(v); break;
+        case resolution_line_row: line = status::resolution_line(v); break;
+        case generation_line_row: line = status::generation_line(v); break;
+        case generated_line_row: line = status::generated_line(v); break;
+        case reflex_line_row: line = status::reflex_line(v); break;
+        case card_line_row: line = caps::card_name_line(v.caps); break;
+        case memory_line_row: line = caps::memory_line(v.caps); break;
+        case driver_line_row: line = caps::driver_line(v.caps); break;
+        case support_line_row: line = caps::generation_support_line(card()); break;
         default: line = "?";
         }
         copy(text, text_size, line);
@@ -454,20 +474,31 @@ template <std::size_t N> consteval const char *title_text(const char (&text)[N])
     static_assert(N - 1 <= 24, "CMFM: a page title is at most 24 bytes");
     return text;
 }
+// Help lines built at runtime: cut at 200 bytes (never needed: the longest
+// variant is checked below).
+std::string help_built(std::string text) {
+    if (text.size() > 200) text.resize(200);
+    return text;
+}
+constexpr std::string_view pacing_help_dynamic =
+    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when the game runs faster without it. Dynamic: the count "
+    "that reaches the target frame rate. Applies at once.";
+constexpr std::string_view pacing_help_fixed =
+    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when the game runs faster without it. Applies at once.";
+static_assert(pacing_help_dynamic.size() <= 200 && pacing_help_fixed.size() <= 200, "CMFM: a help line is at most 200 bytes");
 // CHOICE names: at most 32 bytes each.
 constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i)
         if (!names[i] || std::char_traits<char>::length(names[i]) > 32) return false;
     return true;
 }
-static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) &&
-                  choice_names_fit(mm::multiplier_names, std::size(mm::multiplier_names)) &&
+static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) && choice_names_fit(mm::pacing_names, std::size(mm::pacing_names)) &&
                   choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
               "CMFM: a choice name is at most 32 bytes");
 // CMFM refuses a whole page whose CHOICE default is not one of its choices
-// (v0.27.0 lost its Settings page so: Off made Performance the fifth choice).
+// (v0.27.0 lost its Settings page so).
 static_assert(mm::choice_of(dlss_sdk::ReconstructionMode::performance) < static_cast<int>(std::size(mm::mode_names)) &&
-                  mm::choice_of(2U) < static_cast<int>(std::size(mm::multiplier_names)) &&
+                  static_cast<unsigned>(mm::Pacing::fixed) < mm::pacing_count(false) &&
                   mm::choice_of(ReflexMode::on) < static_cast<int>(mm::reflex_modes.size()),
               "CMFM: a default is one of its choices");
 // The target names are built at start: "Display refresh" or "<n> fps" with n
@@ -485,6 +516,157 @@ cmfm_setting_t row(std::uint32_t id, cmfm_type_t type, const char *label, const 
     return s;
 }
 
+// Adds both pages once, with the choices this card offers (as known now).
+void add_now(unsigned waited_ms) noexcept {
+    if (state.added.exchange(true)) return;
+    try {
+        const auto c = card();
+        {
+            std::lock_guard lock(state.mutex);
+            state.offer = mm::offer_for(c);
+            state.names.clear();
+            state.names.reserve(state.offer.multipliers.size() + state.targets.size());
+            for (const auto m : state.offer.multipliers) state.names.push_back(mm::multiplier_name(m));
+            for (const auto t : state.targets) state.names.push_back(mm::target_name(t));
+            state.multiplier_pointers.clear();
+            state.target_pointers.clear();
+            for (std::size_t i = 0; i < state.names.size(); ++i)
+                (i < state.offer.multipliers.size() ? state.multiplier_pointers : state.target_pointers).push_back(state.names[i].c_str());
+            const auto most = state.offer.multipliers.back();
+            state.multiplier_help = help_built(
+                "Frames shown for each rendered frame" +
+                (c.max_multiplier ? "; this graphics card shows up to " + mm::multiplier_name(most) : std::string()) + ". Applies at once.");
+            state.pacing_help = std::string(state.offer.dynamic ? pacing_help_dynamic : pacing_help_fixed);
+        }
+        cmfm_setting_t settings[]{
+            row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
+            row(dlss_row, CMFM_TYPE_BOOL, label_text("DLSS"),
+                help_text("NVIDIA DLSS Super Resolution and DLAA. Off gives the game back: its own anti-aliasing and resolution, as "
+                          "without the mod. Applies at once.")),
+            row(mode_row, CMFM_TYPE_CHOICE, label_text("Mode"),
+                help_text("DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, upscaled by DLSS. "
+                          "Applies at once.")),
+            row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
+            row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
+                help_text("DLSS Frame Generation shows generated frames between the rendered ones (RTX 40 and 50 series). Needs "
+                          "DLSS on. Applies at once.")),
+            row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"), nullptr),
+            row(pacing_row, CMFM_TYPE_CHOICE, label_text("Pacing"), nullptr),
+            row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
+                help_text("The frame rate Dynamic pacing aims for: the display's refresh rate or a set rate. It never goes past it. "
+                          "Applies at once.")),
+            row(latency_section, CMFM_TYPE_SECTION, label_text("Latency"), nullptr),
+            row(reflex_row, CMFM_TYPE_CHOICE, label_text("Reflex"),
+                help_text("NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. Off "
+                          "only while frame generation is off (it needs Reflex). Applies at once.")),
+        };
+        const auto setting = [&settings](std::uint32_t id) -> cmfm_setting_t & {
+            for (auto &s : settings)
+                if (s.id == id) return s;
+            throw std::logic_error("menu row");
+        };
+        setting(dlss_row).default_value.i = 1;
+        setting(mode_row).choices = mm::mode_names;
+        setting(mode_row).choice_count = static_cast<std::uint32_t>(std::size(mm::mode_names));
+        setting(mode_row).default_value.i = mm::choice_of(dlss_sdk::ReconstructionMode::performance);
+        setting(frame_generation_row).default_value.i = 1;
+        setting(pacing_row).choices = mm::pacing_names;
+        setting(reflex_row).choices = mm::reflex_names;
+        setting(reflex_row).choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
+        setting(reflex_row).default_value.i = mm::choice_of(ReflexMode::on);
+        {
+            std::lock_guard lock(state.mutex);
+            setting(multiplier_row).help = state.multiplier_help.c_str();
+            setting(multiplier_row).choices = state.multiplier_pointers.data();
+            setting(multiplier_row).choice_count = static_cast<std::uint32_t>(state.multiplier_pointers.size());
+            setting(multiplier_row).default_value.i = mm::multiplier_index(state.offer.multipliers, 2);
+            setting(pacing_row).help = state.pacing_help.c_str();
+            setting(pacing_row).choice_count = mm::pacing_count(state.offer.dynamic);
+            setting(pacing_row).default_value.i = static_cast<int>(mm::Pacing::fixed);
+            setting(target_row).choices = state.target_pointers.data();
+            setting(target_row).choice_count = static_cast<std::uint32_t>(state.target_pointers.size());
+            setting(target_row).default_value.i = 0;
+        }
+        const cmfm_setting_t lines[]{
+            row(now_section, CMFM_TYPE_SECTION, label_text("Now"), nullptr),
+            row(mod_line_row, CMFM_TYPE_TEXT, label_text("Mod"), help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
+            row(dlss_line_row, CMFM_TYPE_TEXT, label_text("DLSS"),
+                help_text("The DLSS mode. Off: the game's own anti-aliasing and resolution."), CMFM_FLAG_LIVE),
+            row(resolution_line_row, CMFM_TYPE_TEXT, label_text("Resolution"),
+                help_text("The resolution the game renders at, and the one DLSS outputs."), CMFM_FLAG_LIVE),
+            row(generation_line_row, CMFM_TYPE_TEXT, label_text("Frame generation"),
+                help_text("Frames shown for each rendered frame now. DLSS Frame Generation generates only while the game window "
+                          "has focus."),
+                CMFM_FLAG_LIVE),
+            row(generated_line_row, CMFM_TYPE_TEXT, label_text("Generated frames"),
+                help_text("Generated frames shown since the game started."), CMFM_FLAG_LIVE),
+            row(reflex_line_row, CMFM_TYPE_TEXT, label_text("Reflex"),
+                help_text("NVIDIA Reflex: On (low latency), Boost (also keeps the clocks up) or Off."), CMFM_FLAG_LIVE),
+            row(system_section, CMFM_TYPE_SECTION, label_text("System"), nullptr),
+            row(card_line_row, CMFM_TYPE_TEXT, label_text("Graphics card"), help_text("The graphics card the game uses.")),
+            row(memory_line_row, CMFM_TYPE_TEXT, label_text("Video memory"), help_text("The graphics card's own memory.")),
+            row(driver_line_row, CMFM_TYPE_TEXT, label_text("Driver"), help_text("The NVIDIA driver version.")),
+            row(support_line_row, CMFM_TYPE_TEXT, label_text("Frame generation support"),
+                help_text("What DLSS Frame Generation can do with this graphics card, driver and Windows: the most frames per "
+                          "rendered frame, and Dynamic pacing."),
+                CMFM_FLAG_LIVE),
+        };
+
+        cmfm_page_t page{};
+        page.size = sizeof page;
+        page.plugin = "mhw_dlss";
+        page.mod = "DLSS";
+        page.version = version;
+        page.user = &state;
+        page.on_event = on_event;
+        page.get_text = get_text;
+        unsigned added = 0;
+        char why[256]{};
+        const auto add = [&](const char *title) {
+            if (state.menu->add_page(&page, why, sizeof why)) ++added;
+            else log(AL_LOG_WARNING, std::string("menu: CMFM refused the page ") + title + ": " + why);
+        };
+
+        page.title = title_text("Settings");
+        page.help = help_text("DLSS, frame generation and Reflex. Changes apply at once and are kept in mhw_dlss.ini.");
+        page.settings = settings;
+        page.setting_count = static_cast<std::uint32_t>(std::size(settings));
+        page.get = get;
+        page.set = set;
+        page.validate = validate;
+        page.locked = locked;
+        add("Settings");
+
+        page.title = title_text("Status");
+        page.help = help_text("What the mod is doing now, and what this graphics card offers.");
+        page.settings = lines;
+        page.setting_count = static_cast<std::uint32_t>(std::size(lines));
+        page.get = nullptr;
+        page.set = nullptr;
+        page.validate = nullptr;
+        page.locked = nullptr;
+        add("Status");
+
+        std::string offered;
+        for (const auto m : state.offer.multipliers) offered += (offered.empty() ? "" : "/") + mm::multiplier_name(m);
+        log(AL_LOG_INFO, "menu: " + std::to_string(added) + " of 2 pages added to CMFM after " + std::to_string(waited_ms) +
+                             " ms (card " + (c.known ? "known" : "not known yet") + "; multipliers " + offered +
+                             (state.offer.dynamic ? ", Dynamic" : ", no Dynamic") + ")");
+    } catch (...) {
+        log(AL_LOG_WARNING, "menu: the CMFM pages could not be added");
+    }
+}
+
+DWORD WINAPI page_thread(void *) {
+    const auto began = GetTickCount64();
+    // The card is read when the game creates its device, seconds before its
+    // title menu; without it (no device yet, or the worker stopped early) the
+    // pages come after 20 s with what is known.
+    if (!state.card_known.load()) WaitForSingleObject(state.ready.load(), 20000);
+    add_now(static_cast<unsigned>(GetTickCount64() - began));
+    return 0;
+}
+
 }  // namespace
 
 void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, const std::filesystem::path &folder,
@@ -499,115 +681,26 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             std::lock_guard lock(state.mutex);
             state.api = api;
             state.self = self;
+            state.menu = menu;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
             state.settings = {config.dlss_mode, config.dlss,           config.frame_generation, config.multiplier,
                               config.reflex,    config.dynamic,        config.dynamic_target,   config.generation_auto};
             state.fg_requested = fg_requested;
             state.targets = mm::target_choices(config.dynamic_target);
-            state.target_names.clear();
-            for (const auto target : state.targets) state.target_names.push_back(mm::target_name(target));
-            state.target_pointers.clear();
-            for (const auto &name : state.target_names) state.target_pointers.push_back(name.c_str());
         }
-        cmfm_setting_t settings[]{
-            row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
-            row(dlss_mode_row, CMFM_TYPE_CHOICE, label_text("DLSS mode"),
-                help_text("Off: the game's own anti-aliasing and resolution. DLAA renders at full resolution; Quality, Balanced "
-                          "and Performance at 67%, 58% and 50%, upscaled. Applies at once.")),
-            row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
-            row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
-                help_text("DLSS Frame Generation shows generated frames between the rendered ones. Needs an RTX 40 or 50 graphics "
-                          "card. Applies at once."),
-                fg_requested ? 0U : CMFM_FLAG_RESTART),
-            row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"),
-                help_text("Frames shown for each rendered frame; 3x and up need an RTX 50. Dynamic picks the count itself to reach "
-                          "the target frame rate (RTX 50). Applies at once.")),
-            row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
-                help_text("The frame rate Dynamic aims for: the display's refresh rate or a set rate. It never goes past it, so it "
-                          "adds no frames while the game runs above half of it. Applies at once.")),
-            row(auto_row, CMFM_TYPE_BOOL, label_text("Auto pause"),
-                help_text("NVIDIA's Auto mode for 2x to 6x: frame generation pauses by itself when the game would run faster "
-                          "without it. Applies at once.")),
-            row(latency_section, CMFM_TYPE_SECTION, label_text("Latency"), nullptr),
-            row(reflex_setting_row, CMFM_TYPE_CHOICE, label_text("Reflex"),
-                help_text("NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. "
-                          "Off only while frame generation is off (it needs Reflex). Applies at once.")),
-        };
-        const auto setting = [&settings](std::uint32_t id) -> cmfm_setting_t & {
-            for (auto &s : settings)
-                if (s.id == id) return s;
-            throw std::logic_error("menu row");
-        };
-        setting(dlss_mode_row).choices = mm::mode_names;
-        setting(dlss_mode_row).choice_count = static_cast<std::uint32_t>(std::size(mm::mode_names));
-        setting(dlss_mode_row).default_value.i = mm::choice_of(dlss_sdk::ReconstructionMode::performance);
-        setting(frame_generation_row).default_value.i = 1;
-        setting(multiplier_row).choices = mm::multiplier_names;
-        setting(multiplier_row).choice_count = static_cast<std::uint32_t>(std::size(mm::multiplier_names));
-        setting(multiplier_row).default_value.i = mm::choice_of(2);
-        {
-            std::lock_guard lock(state.mutex);
-            setting(target_row).choices = state.target_pointers.data();
-            setting(target_row).choice_count = static_cast<std::uint32_t>(state.target_pointers.size());
-            setting(target_row).default_value.i = 0;
-        }
-        setting(auto_row).default_value.i = 0;
-        setting(reflex_setting_row).choices = mm::reflex_names;
-        setting(reflex_setting_row).choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
-        setting(reflex_setting_row).default_value.i = mm::choice_of(ReflexMode::on);
-        const cmfm_setting_t lines[]{
-            row(mod_row, CMFM_TYPE_TEXT, label_text("Mod"), help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
-            row(dlss_row, CMFM_TYPE_TEXT, label_text("DLSS"), help_text("The DLSS mode and the render and output resolutions."), CMFM_FLAG_LIVE),
-            row(reflex_row, CMFM_TYPE_TEXT, label_text("Reflex"), help_text("NVIDIA Reflex, as chosen in Settings."), CMFM_FLAG_LIVE),
-            row(generation_row, CMFM_TYPE_TEXT, label_text("Frame generation"), help_text("Frames shown for each rendered frame right now."),
-                CMFM_FLAG_LIVE),
-            row(generated_row, CMFM_TYPE_TEXT, label_text("Generated frames"), help_text("Generated frames shown since the game started."),
-                CMFM_FLAG_LIVE),
-            row(card_row, CMFM_TYPE_TEXT, label_text("Graphics card"), help_text("The graphics card the game uses, its memory and driver.")),
-            row(features_row, CMFM_TYPE_TEXT, label_text("Supports"),
-                help_text("What this graphics card, driver and Windows offer this mod. Settings it cannot use are locked with the reason.")),
-        };
-
-        cmfm_page_t page{};
-        page.size = sizeof page;
-        page.plugin = "mhw_dlss";
-        page.mod = "DLSS";
-        page.version = version;
-        page.user = &state;
-        page.on_event = on_event;
-        page.get_text = get_text;
-        unsigned added = 0;
-        char why[256]{};
-        const auto add = [&](const char *title) {
-            if (menu->add_page(&page, why, sizeof why)) ++added;
-            else log(AL_LOG_WARNING, std::string("menu: CMFM refused the page ") + title + ": " + why);
-        };
-
-        page.title = title_text("Settings");
-        page.help = help_text("DLSS, Reflex and frame generation. The settings are kept in mhw_dlss.ini.");
-        page.settings = settings;
-        page.setting_count = static_cast<std::uint32_t>(std::size(settings));
-        page.get = get;
-        page.set = set;
-        page.validate = validate;
-        page.locked = locked;
-        add("Settings");
-
-        page.title = title_text("Status");
-        page.help = help_text("What the mod is doing right now.");
-        page.settings = lines;
-        page.setting_count = static_cast<std::uint32_t>(std::size(lines));
-        page.get = nullptr;
-        page.set = nullptr;
-        page.validate = nullptr;
-        page.locked = nullptr;
-        add("Status");
-
-        log(AL_LOG_INFO, "menu: " + std::to_string(added) + " of 2 pages added to CMFM");
+        state.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        const HANDLE thread = state.ready.load() ? CreateThread(nullptr, 0, page_thread, nullptr, 0, nullptr) : nullptr;
+        if (thread) CloseHandle(thread);
+        else add_now(0);  // no thread: at once, before the card is known
     } catch (...) {
         if (api) api->log(self, AL_LOG_WARNING, "menu: the CMFM pages could not be added");
     }
+}
+
+void card_ready() noexcept {
+    state.card_known = true;
+    if (const auto ready = state.ready.load()) SetEvent(ready);
 }
 
 }  // namespace mhw::alpha::menu

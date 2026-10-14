@@ -4,7 +4,9 @@
 #include "../src/alpha/menu_model.hpp"
 #include "../src/alpha/status.hpp"
 #include "../src/continuous_dlaa/game_options.hpp"
+#include <algorithm>
 #include <cstdio>
+#include <vector>
 
 namespace {
 int failures{};
@@ -74,9 +76,8 @@ void ini_edits() {
 
 void settings_model() {
     namespace m = mhw::alpha::menu_model;
-    check(m::choice_of(2) == 0 && m::choice_of(3) == 1 && m::choice_of(4) == 2 && m::choice_of(6) == 3, "choice indices");
-    check(m::choice_of(5) == 0 && m::choice_of(0) == 0, "unknown multipliers show 2x");
-    check(m::multiplier_at(3) == 6 && m::multiplier_at(-1) == 0 && m::multiplier_at(4) == 0, "multiplier at index");
+    namespace c = mhw::alpha::capabilities;
+    using mhw::dlss_sdk::ReconstructionMode;
     std::string why;
     {
         // The game's own DLSS rules for its graphics menu (game_options.hpp,
@@ -89,74 +90,38 @@ void settings_model() {
         check(go::anti_aliasing_off == 0 && go::resolution_scaling_high == 2 && go::anti_aliasing_values == 4 &&
                   go::resolution_scaling_values == 5, "Off, High and the value ranges");
     }
+    // Mode: no Off among the modes any more (DLSS is its own switch, v0.28.0).
+    check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3, "mode choices, best first");
+    ReconstructionMode mode{};
+    check(m::mode_at(1, mode) && mode == ReconstructionMode::quality && !m::mode_at(4, mode) && !m::mode_at(-1, mode), "mode at index");
+
+    // The multipliers follow the card.
+    check(m::multiplier_choices(0) == std::vector<unsigned>{2, 3, 4, 6}, "unknown limit: every multiplier");
+    check(m::multiplier_choices(2) == std::vector<unsigned>{2}, "RTX 40: 2x");
+    check(m::multiplier_choices(5) == std::vector<unsigned>{2, 3, 4}, "a limit of 5: up to 4x");
+    check(m::multiplier_choices(6) == std::vector<unsigned>{2, 3, 4, 6}, "RTX 50: up to 6x");
+    check(m::multiplier_choices(1) == std::vector<unsigned>{2}, "never empty");
     {
-        // What the card offers (capabilities.hpp, v0.27.5).
-        namespace c = mhw::alpha::capabilities;
-        c::Capabilities card;
-        check(c::available(card, c::Option::multiplier, 6, why) && why.empty(), "unknown limit: everything allowed");
-        card.frame_generation = c::Support::yes;
-        card.max_multiplier = 2;
-        check(c::available(card, c::Option::multiplier, 2, why) && !c::available(card, c::Option::multiplier, 3, why), "RTX 40: 2x only");
-        check(why == "This graphics card shows 2x at most; 3x and up need an RTX 50.", "RTX 40 reason");
-        card.max_multiplier = 4;
-        check(c::available(card, c::Option::multiplier, 4, why) && !c::available(card, c::Option::multiplier, 6, why), "limit 4x");
-        check(why == "This graphics card shows 4x at most.", "limit reason");
-        card.max_multiplier = 6;
-        check(c::available(card, c::Option::multiplier, 6, why), "6x");
-        why.clear();
-        check(c::available(card, c::Option::dynamic, 0, why) && why.empty(), "Dynamic: unknown");
-        card.dynamic = c::Support::no;
-        check(!c::available(card, c::Option::dynamic, 0, why) &&
-                  why == "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.", "Dynamic not supported");
-        // No frame generation: its reason for every frame generation choice.
-        c::Capabilities rtx30;
-        rtx30.known = true;
-        rtx30.card = {"NVIDIA GeForce RTX 3080", c::nvidia, 0x2206, 10240, 610, 88};
-        rtx30.dlss = rtx30.reflex = c::Support::yes;
-        rtx30.frame_generation = c::Support::no;
-        rtx30.missing = c::Missing::card;
-        check(!c::available(rtx30, c::Option::frame_generation, 0, why) &&
-                  why == "DLSS Frame Generation needs an NVIDIA GeForce RTX 40 or 50 series graphics card.", "card reason");
-        check(!c::available(rtx30, c::Option::multiplier, 2, why) && !c::available(rtx30, c::Option::dynamic, 0, why), "all FG choices");
-        check(c::available(rtx30, c::Option::dlss, 0, why) && c::available(rtx30, c::Option::reflex, 0, why), "DLSS and Reflex stay");
-        check(c::card_line(rtx30) == "NVIDIA GeForce RTX 3080, 10 GB, driver 610.88", "card line");
-        check(c::features_line(rtx30) == "DLSS, Reflex; no frame generation", "features without FG");
-        rtx30.missing = c::Missing::driver;
-        rtx30.driver_required_major = 615;
-        rtx30.driver_required_minor = 5;
-        check(c::frame_generation_reason(rtx30) == "DLSS Frame Generation needs NVIDIA driver 615.05 or newer (installed: 610.88).",
-              "driver reason");
-        rtx30.missing = c::Missing::scheduling;
-        check(c::frame_generation_reason(rtx30).find("Hardware-accelerated GPU scheduling") != std::string::npos, "scheduling reason");
-        rtx30.missing = c::Missing::plugin_off;
-        check(c::frame_generation_reason(rtx30) == "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded." &&
-                  c::features_line(rtx30) == "DLSS, Reflex", "plugin off: not a missing feature");
-        // RTX 50 with everything.
-        c::Capabilities rtx50;
-        rtx50.known = true;
-        rtx50.card = {"NVIDIA GeForce RTX 5090", c::nvidia, 0x2b85, 32607, 610, 88};
-        rtx50.dlss = rtx50.reflex = rtx50.frame_generation = rtx50.dynamic = c::Support::yes;
-        rtx50.max_multiplier = 6;
-        check(c::card_line(rtx50) == "NVIDIA GeForce RTX 5090, 32 GB, driver 610.88", "RTX 50 card line");
-        check(c::features_line(rtx50) == "DLSS, Reflex, frame generation up to 6x, Dynamic", "RTX 50 features");
-        // Not NVIDIA: DLSS refused with its reason.
-        c::Capabilities other;
-        other.known = true;
-        other.card.vendor = 0x1002;
-        other.dlss = c::Support::no;
-        check(!c::available(other, c::Option::dlss, 0, why) && why == "DLSS needs an NVIDIA GeForce RTX graphics card.", "not NVIDIA");
-        check(c::card_line(c::Capabilities{}) == "Not known yet", "unknown card");
+        const std::vector<unsigned> four{2, 3, 4};
+        check(m::multiplier_index(four, 4) == 2 && m::multiplier_index(four, 6) == 2 && m::multiplier_index(four, 2) == 0 &&
+                  m::multiplier_index(four, 0) == 0, "multiplier index: its own, else the largest below");
+        check(m::multiplier_name(6) == "6x", "multiplier name");
     }
     {
-        check(m::dynamic_choice == 4 && std::string_view(m::multiplier_names[4]) == "Dynamic" && m::multiplier_at(4) == 0,
-              "Dynamic is the last multiplier choice");
+        // Pacing: Fixed, Auto pause, Dynamic.
         m::Settings s;
-        s.multiplier = 6;
-        check(m::generation_choice(s) == 3 && m::generation_mode(s) == 0, "fixed 6x");
-        s.generation_auto = true;
-        check(m::generation_mode(s) == 1, "Auto");
-        s.dynamic = true;
-        check(m::generation_choice(s) == 4 && m::generation_mode(s) == 2, "Dynamic wins over Auto");
+        check(m::pacing(s, true) == m::Pacing::fixed && m::generation_mode(s) == 0, "fixed");
+        m::set_pacing(s, m::Pacing::auto_pause);
+        check(s.generation_auto && !s.dynamic && m::pacing(s, true) == m::Pacing::auto_pause && m::generation_mode(s) == 1, "auto pause");
+        m::set_pacing(s, m::Pacing::dynamic);
+        check(s.dynamic && s.generation_auto && m::pacing(s, true) == m::Pacing::dynamic && m::generation_mode(s) == 2,
+              "Dynamic keeps Auto pause for the way back");
+        check(m::pacing(s, false) == m::Pacing::auto_pause, "Dynamic not offered: the fixed pacing shows");
+        m::set_pacing(s, m::Pacing::fixed);
+        check(!s.dynamic && !s.generation_auto, "fixed again");
+        check(m::pacing_count(true) == 3 && m::pacing_count(false) == 2 && std::string_view(m::pacing_names[2]) == "Dynamic", "pacing choices");
+    }
+    {
         const auto plain = m::target_choices(0);
         check(plain.size() == m::targets.size() && plain.front() == 0 && m::target_index(plain, 240) == 11, "target choices");
         const auto custom = m::target_choices(138);
@@ -166,20 +131,86 @@ void settings_model() {
         check(m::target_index(plain, 138) == -1, "an unknown target has no index");
         check(m::target_name(0) == "Display refresh" && m::target_name(240) == "240 fps", "target names");
     }
-    using mhw::dlss_sdk::ReconstructionMode;
-    check(m::choice_of(ReconstructionMode::dlaa) == 1 && m::choice_of(ReconstructionMode::performance) == 4, "mode choices after Off, best first");
-    ReconstructionMode mode{};
-    bool dlss{};
-    check(m::mode_at(2, dlss, mode) && dlss && mode == ReconstructionMode::quality && !m::mode_at(5, dlss, mode) &&
-              !m::mode_at(-1, dlss, mode), "mode at index");
-    check(m::mode_at(m::off_choice, dlss, mode) && !dlss && mode == ReconstructionMode::quality, "Off keeps the mode to come back with");
+
+    // What the card offers (capabilities.hpp, v0.27.5).
+    c::Capabilities rtx50;
+    rtx50.known = true;
+    rtx50.card = {"NVIDIA GeForce RTX 5090", c::nvidia, 0x2b85, 32187, 610, 88};
+    rtx50.dlss = rtx50.reflex = rtx50.frame_generation = rtx50.dynamic = c::Support::yes;
+    rtx50.max_multiplier = 6;
+    c::Capabilities rtx40 = rtx50;
+    rtx40.card = {"NVIDIA GeForce RTX 4080", c::nvidia, 0x2704, 16376, 610, 88};
+    rtx40.max_multiplier = 2;
+    rtx40.dynamic = c::Support::no;
+    c::Capabilities rtx30 = rtx40;
+    rtx30.card = {"NVIDIA GeForce RTX 3080", c::nvidia, 0x2206, 10240, 610, 88};
+    rtx30.frame_generation = c::Support::no;
+    rtx30.missing = c::Missing::card;
+    rtx30.max_multiplier = 0;
+    c::Capabilities other;
+    other.known = true;
+    other.card = {"AMD Radeon RX 7900 XTX", 0x1002, 0x744c, 24560, 0, 0};
+    other.dlss = c::Support::no;
     {
-        m::Settings off;
+        check(c::available(rtx50, c::Option::multiplier, 6, why), "RTX 50: 6x");
+        check(!c::available(rtx40, c::Option::multiplier, 3, why) && why == "This graphics card shows 2x at most; 3x and up need an RTX 50.",
+              "RTX 40 reason");
+        check(!c::available(rtx40, c::Option::dynamic, 0, why) &&
+                  why == "Dynamic needs an RTX 50 graphics card and NVIDIA driver 595.41 or newer.", "Dynamic not supported");
+        check(!c::available(rtx30, c::Option::frame_generation, 0, why) &&
+                  why == "DLSS Frame Generation needs an NVIDIA GeForce RTX 40 or 50 series graphics card.", "card reason");
+        check(c::available(rtx30, c::Option::dlss, 0, why) && c::available(rtx30, c::Option::reflex, 0, why), "DLSS and Reflex stay");
+        check(!c::available(other, c::Option::dlss, 0, why) && why == "DLSS needs an NVIDIA GeForce RTX graphics card.", "not NVIDIA");
+        c::Capabilities unknown;
+        check(c::available(unknown, c::Option::multiplier, 6, why) && c::available(unknown, c::Option::dynamic, 0, why),
+              "unknown support allows (the mod refuses at runtime)");
+        auto old = rtx30;
+        old.missing = c::Missing::driver;
+        old.driver_required_major = 615;
+        old.driver_required_minor = 5;
+        check(c::frame_generation_reason(old) == "DLSS Frame Generation needs NVIDIA driver 615.05 or newer (installed: 610.88).",
+              "driver reason");
+    }
+    {
+        // The page's offer, built from the card when it is added.
+        const auto o50 = m::offer_for(rtx50), o40 = m::offer_for(rtx40), o30 = m::offer_for(rtx30), unknown = m::offer_for({});
+        check(o50.multipliers == std::vector<unsigned>{2, 3, 4, 6} && o50.dynamic, "RTX 50 offer");
+        check(o40.multipliers == std::vector<unsigned>{2} && !o40.dynamic, "RTX 40 offer");
+        check(o30.multipliers == std::vector<unsigned>{2, 3, 4, 6}, "no frame generation: the list stays (locked)");
+        check(unknown.multipliers.size() == 4 && unknown.dynamic, "unknown card: everything");
+    }
+    {
+        // Locks: greyed with the reason.
+        const auto lock = [](m::Row row, const m::Settings &s, const c::Capabilities &card, bool requested = true) {
+            return m::lock_reason(row, s, card, m::offer_for(card), requested);
+        };
+        m::Settings s;  // DLSS on, frame generation on, 2x, fixed
+        for (const auto row : {m::Row::dlss, m::Row::mode, m::Row::frame_generation, m::Row::multiplier, m::Row::pacing, m::Row::reflex})
+            check(lock(row, s, rtx50).empty(), "RTX 50 with everything on: nothing locked");
+        check(lock(m::Row::target, s, rtx50) == "Used only by Dynamic pacing.", "target only for Dynamic");
+        m::set_pacing(s, m::Pacing::dynamic);
+        check(lock(m::Row::target, s, rtx50).empty() && lock(m::Row::multiplier, s, rtx50) == "Dynamic pacing picks the number of frames itself.",
+              "Dynamic: target open, multiplier locked");
+        m::set_pacing(s, m::Pacing::fixed);
+        check(lock(m::Row::multiplier, s, rtx40) == "This graphics card shows 2x at most; 3x and up need an RTX 50.", "RTX 40: 2x only");
+        check(lock(m::Row::frame_generation, s, rtx30) == "DLSS Frame Generation needs an NVIDIA GeForce RTX 40 or 50 series graphics card." &&
+                  lock(m::Row::pacing, s, rtx30) == lock(m::Row::frame_generation, s, rtx30) && lock(m::Row::dlss, s, rtx30).empty(),
+              "RTX 30: every frame generation row with the card's reason; DLSS open");
+        check(lock(m::Row::frame_generation, s, rtx50, false) ==
+                  "frame_generation_plugin = off in mhw_dlss.ini keeps DLSS Frame Generation unloaded.", "plugin off");
+        // The player's DLSS Off: its mode and frame generation wait for it.
+        auto off = s;
         off.dlss = false;
-        off.dlss_mode = ReconstructionMode::dlaa;
-        check(m::dlss_choice(off) == m::off_choice && std::string(m::mode_names[m::off_choice]) == "Off", "Off shows Off");
-        off.dlss = true;
-        check(m::dlss_choice(off) == 1, "on again at the kept mode");
+        check(lock(m::Row::dlss, off, rtx50).empty() && lock(m::Row::mode, off, rtx50) == "Turn DLSS on first.", "DLSS off: mode locked");
+        check(lock(m::Row::frame_generation, off, rtx50) == "Frame generation needs DLSS; turn DLSS on first." &&
+                  lock(m::Row::multiplier, off, rtx50) == lock(m::Row::frame_generation, off, rtx50), "DLSS off: frame generation locked");
+        check(lock(m::Row::reflex, off, rtx50).empty(), "DLSS off: Reflex open");
+        auto fg_off = s;
+        fg_off.frame_generation = false;
+        check(lock(m::Row::frame_generation, fg_off, rtx50).empty() && lock(m::Row::pacing, fg_off, rtx50) == "Turn frame generation on first.",
+              "frame generation off: its options locked");
+        check(lock(m::Row::dlss, s, other) == "DLSS needs an NVIDIA GeForce RTX graphics card." &&
+                  lock(m::Row::mode, s, other) == lock(m::Row::dlss, s, other), "not NVIDIA: DLSS locked");
     }
     using mhw::alpha::ReflexMode;
     check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 && m::choice_of(ReflexMode::off) == 2, "reflex choices, on first");
@@ -196,6 +227,28 @@ void settings_model() {
           "off refused with frame generation");
     check(m::reflex_sdk_value(ReflexMode::off) == 0 && m::reflex_sdk_value(ReflexMode::on) == 1 && m::reflex_sdk_value(ReflexMode::boost) == 2,
           "sl::ReflexMode values");
+
+    // The System lines.
+    check(c::card_name_line(rtx50) == "NVIDIA GeForce RTX 5090" && c::card_name_line(c::Capabilities{}) == "Not known yet", "card name");
+    check(c::memory_line(rtx50) == "32 GB" && c::memory_line(rtx40) == "16 GB" && c::memory_line(rtx30) == "10 GB", "memory, rounded up");
+    check(c::driver_line(rtx50) == "610.88" && c::driver_line(other) == "Not known yet", "driver");
+    check(c::generation_support_line(rtx50) == "Up to 6x, Dynamic" && c::generation_support_line(rtx40) == "Up to 2x", "support, RTX 50 and 40");
+    check(c::generation_support_line(rtx30) == "No: needs an RTX 40 or 50", "support, RTX 30");
+    {
+        auto plugin = rtx50;
+        plugin.frame_generation = c::Support::no;
+        plugin.missing = c::Missing::plugin_off;
+        check(c::generation_support_line(plugin) == "Not loaded (mhw_dlss.ini)", "support, plugin off");
+        auto old = rtx30;
+        old.missing = c::Missing::driver;
+        old.driver_required_major = 615;
+        old.driver_required_minor = 5;
+        check(c::generation_support_line(old) == "No: needs driver 615.05", "support, driver");
+        auto later = rtx50;
+        later.max_multiplier = 0;
+        later.dynamic = c::Support::unknown;
+        check(c::generation_support_line(later) == "Yes", "support, limits not read yet");
+    }
 }
 
 void status_lines() {
@@ -208,28 +261,26 @@ void status_lines() {
     check(s::count_text(0) == "0" && s::count_text(999) == "999" && s::count_text(1234567) == "1,234,567", "counts");
 
     s::View v;
-    check(s::mod_line(v) == "Active" && s::dlss_line(v) == "Starting" && s::reflex_line(v) == "Starting", "start-up");
+    check(s::mod_line(v) == "Active" && s::dlss_line(v) == "Starting" && s::resolution_line(v) == "Starting" &&
+              s::reflex_line(v) == "Starting", "start-up");
     check(s::generation_line(v) == "Off" && s::generated_line(v) == "None", "frame generation off in the ini");
 
     v.dlss = s::Stage::running;
     v.reflex = s::Stage::running;
-    check(s::dlss_line(v) == "Performance", "running, sizes unknown");
+    check(s::dlss_line(v) == "Performance" && s::resolution_line(v) == "Not known yet", "running, sizes unknown");
     v.render_width = 1280, v.render_height = 720, v.scene_width = 2560, v.scene_height = 1440;
-    check(s::dlss_line(v) == "Performance, 1280x720 to 2560x1440", "running with sizes");
+    check(s::resolution_line(v) == "1280x720 to 2560x1440", "running with sizes");
     {
         auto q = v;
-        q.dlss_mode = "Quality";
-        q.render_width = 1696, q.render_height = 954;
-        check(s::dlss_line(q) == "Quality, 1696x954 to 2560x1440", "quality line");
         q.dlss_mode = "DLAA";
         q.render_width = 2560, q.render_height = 1440;
-        check(s::dlss_line(q) == "DLAA, 2560x1440", "DLAA line");
+        check(s::dlss_line(q) == "DLAA" && s::resolution_line(q) == "2560x1440", "DLAA");
     }
-    check(s::reflex_line(v) == "On (low latency)", "reflex on");
+    check(s::reflex_line(v) == "On", "reflex on");
     {
         auto r = v;
         r.reflex_mode = "Boost";
-        check(s::reflex_line(r) == "Boost (low latency, GPU clocks kept up)", "reflex boost");
+        check(s::reflex_line(r) == "Boost", "reflex boost");
         r.reflex_mode = "Off";
         check(s::reflex_line(r) == "Off" && s::mod_line(r) == "Active", "the player's Off is not a failure");
         r.reflex = s::Stage::off;
@@ -246,7 +297,7 @@ void status_lines() {
     check(s::generation_line(v) == "2x, generating" && s::generated_line(v) == "12,345", "generating 2x");
     v.requested = 6;
     v.generated = 3;
-    check(s::generation_line(v) == "4x, generating (6x is more than this graphics card allows)", "limited by the card");
+    check(s::generation_line(v) == "4x (the card's most)", "limited by the card");
     {
         auto d = v;
         d.requested = 2;
@@ -254,31 +305,25 @@ void status_lines() {
         d.generation_mode = 2;
         d.dynamic_applied = true;
         d.presented_now = 3;
-        check(s::generation_line(d) == "Dynamic (display refresh), showing 3x", "Dynamic to the display");
-        d.display_hz = 240;
-        check(s::generation_line(d) == "Dynamic (display refresh, 240 Hz), showing 3x", "Dynamic to a known display");
+        check(s::generation_line(d) == "Dynamic, showing 3x", "Dynamic");
         {
             auto one = d;
             one.presented_now = 1;
             one.single_streak = s::auto_pause_presents - 1;
-            check(s::generation_line(one) == "Dynamic (display refresh, 240 Hz), showing 1x", "Dynamic at 1x for a moment");
+            check(s::generation_line(one) == "Dynamic, showing 1x", "Dynamic at 1x for a moment");
             one.single_streak = s::auto_pause_presents;
-            check(s::generation_line(one) == "Dynamic (display refresh, 240 Hz), showing 1x: the game is already above half the target",
-                  "Dynamic held at 1x by its target");
-            check(s::generation_line(one).size() < 128, "fits CMFM_MAX_TEXT");
+            check(s::generation_line(one) == "Dynamic, 1x (target reached)", "Dynamic held at 1x by its target");
         }
-        d.target = 240;
-        check(s::generation_line(d) == "Dynamic (240 fps), showing 3x", "Dynamic to 240 fps");
         d.presented_now = 0;
-        check(s::generation_line(d) == "Dynamic (240 fps), generating", "Dynamic before a frame was counted");
+        check(s::generation_line(d) == "Dynamic, generating", "Dynamic before a frame was counted");
         d.dynamic_applied = false;
         d.dynamic_support = 1;
-        check(s::generation_line(d) == "2x, generating (Dynamic is not available here)", "Dynamic unsupported: 2x");
+        check(s::generation_line(d) == "2x (no Dynamic here)", "Dynamic unsupported: 2x");
         d.dynamic_support = 2;
         d.dynamic_refused = true;
-        check(s::generation_line(d) == "2x, generating (DLSS refused Dynamic; see the log)", "Dynamic refused");
+        check(s::generation_line(d) == "2x (Dynamic refused)", "Dynamic refused");
         d.dynamic_refused = false;
-        check(s::generation_line(d) == "2x, generating (switching to Dynamic)", "Dynamic asked for, not applied yet");
+        check(s::generation_line(d) == "2x, switching to Dynamic", "Dynamic asked for, not applied yet");
         d.generating = false;
         check(s::generation_line(d) == "Dynamic, paused", "Dynamic, not generating");
 
@@ -290,19 +335,17 @@ void status_lines() {
         a.single_streak = s::auto_pause_presents - 1;
         check(s::generation_line(a) == "2x Auto, generating", "a short run without generated frames");
         a.single_streak = s::auto_pause_presents;
-        check(s::generation_line(a) == "2x Auto, paused (the game runs faster without it)", "Auto paused by DLSS-G");
-        a.requested = 6;
-        a.single_streak = 0;
-        check(s::generation_line(a) == "2x Auto, generating (6x is more than this graphics card allows)", "Auto limited by the card");
+        check(s::generation_line(a) == "2x Auto, paused", "Auto paused by DLSS-G");
     }
 
     v.generation = s::Generation::unavailable;
     v.generation_reason = "scene_rect";
-    check(s::generation_line(v) == "Unavailable: the game's screen layout is not supported", "unavailable");
+    check(s::generation_line(v) == "Not available: the game's screen layout is not supported", "unavailable");
     check(s::mod_line(v) == "Degraded: frame generation is off", "unavailable degrades the mod");
 
     v.dlss_healthy = false;
-    check(s::dlss_line(v) == "Stopped; the game renders without DLSS" && s::mod_line(v) == "Degraded: DLSS is off", "DLSS fault");
+    check(s::dlss_line(v) == "Stopped (see the log)" && s::resolution_line(v) == "The game's own" && s::mod_line(v) == "Degraded: DLSS is off",
+          "DLSS fault");
 
     v.loader = s::Loader::degraded;
     v.loader_reason = "swap-chain hooks unavailable; DLSS and frame generation stay off";
@@ -314,7 +357,7 @@ void status_lines() {
     check(s::dlss_line(failed) == "Off: another mod changed the game's frame functions", "DLSS off with a reason");
     failed.generation = s::Generation::stopped;
     failed.generation_reason = "reflex_frames";
-    check(s::generation_line(failed) == "Off: the frame hooks stopped", "stopped frame generation");
+    check(s::generation_line(failed) == "Stopped: the frame hooks stopped", "stopped frame generation");
     check(s::generated_line(failed) == "0", "stopped still counts");
 
     // The player's DLSS Off is not a fault; frame generation pauses with it.
@@ -323,9 +366,9 @@ void status_lines() {
     chosen.reflex = s::Stage::running;
     chosen.generation = s::Generation::armed;
     chosen.requested = 2;
-    check(s::dlss_line(chosen) == "Off (the game's own anti-aliasing and resolution)" && s::mod_line(chosen) == "Active",
+    check(s::dlss_line(chosen) == "Off" && s::resolution_line(chosen) == "The game's own" && s::mod_line(chosen) == "Active",
           "the player's Off");
-    check(s::generation_line(chosen) == "Paused while DLSS is off", "frame generation paused while DLSS is off");
+    check(s::generation_line(chosen) == "Paused (DLSS is off)", "frame generation paused while DLSS is off");
     // The player's frame generation Off while DLSS-G is loaded (v0.27.0).
     s::View fg_off;
     fg_off.dlss = s::Stage::running;
