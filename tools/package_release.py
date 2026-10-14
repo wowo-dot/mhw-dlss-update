@@ -55,11 +55,11 @@ BUILT_IN = [
 ]
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
-dlss_mode = performance    ; off, dlaa, quality, balanced, performance (off: the game's own anti-aliasing and resolution)
-frame_generation = 2x      ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
+dlss_mode = off            ; off, dlaa, quality, balanced, performance (off: the game's own anti-aliasing and resolution)
+frame_generation = off     ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
 dynamic_target = display   ; dynamic only: display (its refresh rate) or a frame rate from 30 to 1000
 frame_generation_auto = off ; on: 2x to 6x pause by themselves when the game would run faster without them
-reflex = on             ; on, boost, off (off only while DLSS Frame Generation is not loaded)
+reflex = off            ; on, boost, off (off only while DLSS Frame Generation is not loaded)
 frame_generation_plugin = auto ; auto: DLSS Frame Generation loads where the GPU supports it; off: never
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
 log_dir = logs             ; one log file per launch
@@ -92,7 +92,8 @@ AsteraLoader/plugins/mhw_dlss.
 
 Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file).
 DLSS mode (dlss_mode): DLAA renders at full resolution; Quality, Balanced and
-Performance render at 67%, 58% and 50% and upscale. The default is Performance.
+Performance render at 67%, 58% and 50% and upscale. The package starts with
+DLSS, frame generation and Reflex off; turn them on in the menu or here.
 Off hands the game back: its own anti-aliasing, resolution and other options
 work as without the mod, and frame generation pauses until DLSS is back on.
 Frame generation (frame_generation): Off, a fixed multiplier (2x to 6x), or

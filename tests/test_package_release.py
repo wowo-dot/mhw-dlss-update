@@ -63,7 +63,8 @@ class PackageRelease(unittest.TestCase):
             self.assertEqual(pr.sha(folder / entry['path']), entry['sha256'])
         ini = (data / 'mhw_dlss.ini').read_text(encoding='utf-8')
         self.assertIn('runtime_dir = .', ini); self.assertIn('log_dir = logs', ini)
-        self.assertIn('dlss_mode = performance', ini)
+        for line in ('dlss_mode = off ', 'frame_generation = off ', 'reflex = off ', 'frame_generation_plugin = auto '):
+            self.assertIn(line, ini)
         readme = (data / 'README.txt').read_text(encoding='utf-8')
         self.assertIn('not affiliated with, sponsored or endorsed by NVIDIA', readme)
         self.assertIn('Uninstall: delete the AsteraLoader/plugins/mhw_dlss folder.', readme)
