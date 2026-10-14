@@ -132,13 +132,34 @@ def load(path: Path) -> list[dict]:
         rows = [r for r in csv.DictReader(f) if (r.get('Application') or '').lower() == GAME]
     if not rows:
         return []
-    # The swap chain with the most presents (the game's; overlays add others).
-    chains = Counter(r.get('SwapChainAddress', '') for r in rows)
-    chain = chains.most_common(1)[0][0]
-    rows = [r for r in rows if r.get('SwapChainAddress', '') == chain]
+    # The game's swap chains, one after another: frame generation switched live
+    # (v0.27.4) rebuilds the chain, so a launch has several. A chain that
+    # presents at the same time as a bigger one (an overlay's) is left out:
+    # chains are taken by present count while their time span overlaps no
+    # chain taken before (half a second of slack for a switch).
     for r in rows:
         r['_t'] = timestamp(r.get('CPUStartDateTime'))
-        r['_chains'] = len(chains)
+    chains = Counter(r.get('SwapChainAddress', '') for r in rows)
+    spans: dict[str, list] = {}
+    for r in rows:
+        if r['_t']:
+            span = spans.setdefault(r.get('SwapChainAddress', ''), [r['_t'], r['_t']])
+            span[0] = min(span[0], r['_t'])
+            span[1] = max(span[1], r['_t'])
+    slack = dt.timedelta(seconds=0.5)
+    taken: list[str] = []
+    for chain, _ in chains.most_common():
+        span = spans.get(chain)
+        if span is None:
+            if not taken:
+                taken.append(chain)
+            continue
+        if all(span[1] <= spans[t][0] + slack or span[0] >= spans[t][1] - slack for t in taken if t in spans):
+            taken.append(chain)
+    kept = set(taken)
+    rows = [r for r in rows if r.get('SwapChainAddress', '') in kept]
+    for r in rows:
+        r['_chains'] = len(kept)
     stamped = [r['_t'] for r in rows if r['_t']]
     if stamped:
         offset = clock_offset(path, stamped[-1])

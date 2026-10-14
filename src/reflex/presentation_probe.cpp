@@ -273,6 +273,16 @@ void sync_generation(GenerationSwitch& g){
            <<",\"hr\":"<<v.switch_last_hr<<",\"waitable_failures\":"<<v.waitable_failures<<",\"tries\":"<<g.tries
            <<",\"ms\":"<<now-g.asked_at<<",\"buffers\":"<<v.buffers<<"}\n"<<std::flush;
         mhw::alpha::status::reflex_mode(reflex_mode_name(reflex_applied.load()));
+        if(!fg_loaded&&reflex_applied.load()<=2){
+            // v0.28.1: DLSS-G paces through Reflex's options, at 6x with a frame
+            // limit that outlives its unload (perf13c: a flat 208 fps after an
+            // unload at 6x, until Reflex was set again). Reflex applies every
+            // option at each slReflexSetOptions (sl_reflex.h), so the mod's own
+            // mode, with no limit, goes back after an unload.
+            std::lock_guard lock(sdk_mutex);
+            const auto mode=static_cast<sl::ReflexMode>(reflex_applied.load());
+            mode_options("after_unload",mode,sdk.options(mode));
+        }
         if(fg_loaded&&cd::live_modes()&&!cd::dlss_off())fg::arm(true);
         g={};return;
     }
