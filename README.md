@@ -22,7 +22,8 @@ feature stays off and the game renders as it does unmodded.
 
 **Status:** v0.28.5, the first public release, after a closed beta on RTX 5090,
 5080 and 3080 Ti cards (frame generation on RTX 40 cards is untested so far).
-Download it from [Releases](https://github.com/wowo-dot/mhw-dlss-update/releases).
+Download it from [Releases](https://github.com/wowo-dot/mhw-dlss-update/releases)
+or [Nexus Mods](https://www.nexusmods.com/monsterhunterworld/mods/8857).
 
 ## Requirements
 
@@ -69,6 +70,16 @@ Where things live:
 - **Uninstall:** delete `AsteraLoader/plugins/mhw_dlss`.
 
 The package's own `README.txt` covers every option.
+
+## Planned
+
+No dates yet:
+- **AMD FSR 3.1** upscaling, so cards without DLSS (AMD, Intel, NVIDIA GTX)
+  get it too;
+- **AMD FSR 4** on Radeon RX 9000 cards;
+- **Intel XeSS**;
+- finding what causes the short DLSS pauses seen once in the closed beta
+  (four times in a two-hour DLAA and frame generation 3x session at 21:9).
 
 ## Building
 
