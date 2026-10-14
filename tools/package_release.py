@@ -82,8 +82,11 @@ Requirements
   game runs normally.
 - The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
   plugin setups already have.
-- Astera Loader, which loads this mod. Start the game through
-  AsteraLoader.exe.
+- Astera Loader, which loads this mod. Start the game the way its README
+  says: with Mod Organizer 2, through its AsteraLoader.exe entry; otherwise
+  with Steam's Play button and Steam's launch options set to
+  "<game folder>\\AsteraLoader.exe" %command%. Starting AsteraLoader.exe
+  directly does not work with Steam: Steam starts the game again without it.
 
 Install: copy the AsteraLoader folder from this archive into the game folder
 (next to MonsterHunterWorld.exe), or install the archive as a mod in Mod
