@@ -70,6 +70,8 @@ class PackageRelease(unittest.TestCase):
         self.assertIn('Uninstall: delete the AsteraLoader/plugins/mhw_dlss folder.', readme)
         self.assertIn('an Astera Loader plugin', readme)
         self.assertIn('With CMFM installed', readme)
+        self.assertIn('Astera Loader 0.2.2 or newer', readme)
+        self.assertNotIn('does not work with Steam', readme)
         self.assertNotIn('winmm', readme)
         self.assertIn('MIT License (LICENSE.txt)', readme)
         self.assertIn('MIT License', (data / 'LICENSE.txt').read_text(encoding='utf-8'))

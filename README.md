@@ -20,8 +20,9 @@ It checks every piece of game code it hooks against the tested executable by
 SHA-256. If anything doesn't match, or the card can't run a feature, that
 feature stays off and the game renders as it does unmodded.
 
-**Status:** release candidate v0.28.4, in stress testing on RTX 50, 40 and 30
-series cards. Not released yet.
+**Status:** v0.28.5, the first public release, after a closed beta on RTX 5090,
+5080 and 3080 Ti cards (frame generation on RTX 40 cards is untested so far).
+Download it from [Releases](https://github.com/wowo-dot/mhw-dlss-update/releases).
 
 ## Requirements
 
@@ -31,8 +32,9 @@ series cards. Not released yet.
   - Frame Generation needs RTX 40 or 50;
   - 3x and above need RTX 50;
   - Dynamic also needs driver 595.41 or newer.
-- Astera Loader. CMFM (Astera Loader's menu plugin) is optional; it adds
-  the settings page.
+- [Astera Loader](https://github.com/wowo-dot/AsteraLoader/releases) 0.2.2 or
+  newer. [CMFM](https://github.com/wowo-dot/CMFM/releases) 0.1.0 or newer
+  (Astera Loader's menu plugin) is optional; it adds the settings page.
 - The Microsoft Visual C++ 2015–2022 Redistributable (x64).
 
 While DLSS runs, the mod sets the game's Anti-Aliasing and Resolution Scaling
@@ -47,9 +49,15 @@ anyway.
 ## Install and use
 
 Release packages are zips laid out like the game folder:
-1. Copy their `AsteraLoader` folder next to `MonsterHunterWorld.exe`, or
+1. Install Astera Loader (and CMFM, for the menu) as their READMEs say.
+2. Copy this zip's `AsteraLoader` folder next to `MonsterHunterWorld.exe`, or
    install the zip as a Mod Organizer 2 mod.
-2. Start the game through Astera Loader.
+3. Start the game through Astera Loader: with Mod Organizer 2 through its
+   `AsteraLoader.exe` entry; otherwise, with Steam running, start
+   `AsteraLoader.exe`. For Steam's Play button to start it too, set the
+   game's launch options to `"<game folder>\AsteraLoader.exe" %command%`.
+4. DLSS, frame generation and Reflex start **off**. Turn them on under
+   **Mods > DLSS > Settings** (the entry below Options), or in the ini.
 
 Where things live:
 - **Settings:** `AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini` (each key is

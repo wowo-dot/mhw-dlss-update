@@ -82,11 +82,12 @@ Requirements
   game runs normally.
 - The Microsoft Visual C++ 2015-2022 Redistributable (x64), which most MHW
   plugin setups already have.
-- Astera Loader, which loads this mod. Start the game the way its README
-  says: with Mod Organizer 2, through its AsteraLoader.exe entry; otherwise
-  with Steam's Play button and Steam's launch options set to
-  "<game folder>\\AsteraLoader.exe" %command%. Starting AsteraLoader.exe
-  directly does not work with Steam: Steam starts the game again without it.
+- Astera Loader 0.2.2 or newer, which loads this mod
+  (https://github.com/wowo-dot/AsteraLoader/releases). Start the game the way
+  its README says: with Mod Organizer 2, through its AsteraLoader.exe entry;
+  otherwise, with Steam running, start AsteraLoader.exe (or a shortcut to
+  it). For Steam's Play button to start it too, set the game's launch
+  options in Steam to "<game folder>\\AsteraLoader.exe" %command%.
 
 Install: copy the AsteraLoader folder from this archive into the game folder
 (next to MonsterHunterWorld.exe), or install the archive as a mod in Mod
@@ -111,7 +112,8 @@ is not loaded (frame_generation_plugin = off, or a GPU without it): with it
 loaded, Reflex keeps the frame pacing smooth.
 Edits to the file apply from the next start; the menu (below) applies its
 changes at once.
-With CMFM installed (an optional Astera Loader plugin), the game's own menus
+With CMFM installed (an optional Astera Loader plugin, 0.1.0 or newer:
+https://github.com/wowo-dot/CMFM/releases), the game's own menus
 gain a Mods entry below Options. There, DLSS > Settings changes these
 settings, and DLSS > Status shows what the mod is doing.
 The menu saves its changes to mhw_dlss.ini.
