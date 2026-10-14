@@ -5,7 +5,8 @@
 
 Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as
 the game folder receives it: one Astera Loader plugin folder (Astera Loader is
-required and loads only mhw_dlss.dll from it):
+required and loads only mhw_dlss.dll from it). The zip has AsteraLoader/ at its
+top, as Astera Loader's and CMFM's do, so Mod Organizer 2 installs it as it is:
 
   AsteraLoader/plugins/mhw_dlss/mhw_dlss.dll          the mod (an Astera Loader plugin)
   AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini          default configuration
@@ -208,7 +209,7 @@ def main():
     (data / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n', encoding='utf-8')
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
         for f in sorted(x for x in folder.rglob('*') if x.is_file()):
-            z.write(f, f'{name}/{f.relative_to(folder).as_posix()}')
+            z.write(f, f.relative_to(folder).as_posix())
     print(json.dumps(dict(package=str(folder), zip=str(archive), zip_sha256=sha(archive), files=len(files) + 1, commit=commit)))
 
 
