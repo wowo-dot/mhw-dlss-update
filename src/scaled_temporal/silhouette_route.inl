@@ -266,7 +266,7 @@ bool record_indexed(ID3D12GraphicsCommandList *list,unsigned n,unsigned instance
  if(state.known&&state.value!=D3D12_RESOURCE_STATE_RENDER_TARGET)return native(5,{u(state.known),u(state.value)});
  std::array<ComPtr<ID3D12Resource>,2> textures;std::array<ComPtr<ID3D12Resource>,5> buffers;std::array<unsigned,28> screen{};std::array<unsigned,5> material{};
  const bool bound=silhouette_bindings(r,screen,material,textures);
- if(!bound||material[2]!=1||material[3]!=7680||material[4]!=std::bit_cast<unsigned>(.1F)||
+ if(!bound||!silhouette_material(material)||
     screen[4]!=std::bit_cast<unsigned>(float(width))||screen[5]!=std::bit_cast<unsigned>(float(height))||screen[6]!=std::bit_cast<unsigned>(1.F/width)||screen[7]!=std::bit_cast<unsigned>(1.F/height)||
     screen[10]!=render_w||screen[11]!=render_h||screen[12]||screen[13]||screen[14]!=std::bit_cast<unsigned>(float(render_w))||screen[15]!=std::bit_cast<unsigned>(float(render_h))||
     screen[16]!=std::bit_cast<unsigned>(1.F/float(render_w))||screen[17]!=std::bit_cast<unsigned>(1.F/float(render_h)))

@@ -112,6 +112,7 @@ struct Fixture {
   messages->ClearStoredMessages();
  }
  bool candidate{};
+ float intensity{.1F};  // fMaterialHiddenSurfaceDrawIntensity
  std::vector<float> draw(std::span<const std::byte> ps,sf::FilterGeometry g,bool full,float z,unsigned scenario,bool adapted=false,bool full_choice=true){
   hr(allocator->Reset(),"reset allocator");hr(list->Reset(allocator.Get(),nullptr),"reset list");mhw::temporal_present::observer::reset(list.Get(),++generation,nullptr);auto reflected=reflect(ps);auto vs=vertex(reflected.Get(),z);
   const auto w=g.output_width,h=g.output_height;
@@ -134,7 +135,7 @@ struct Fixture {
      else if(n=="fGlobalTransparency")at[0]=1;
      else if(n=="bMaterialCustomLighting")at[0]=std::bit_cast<float>(1U);
      else if(n=="iMaterialCustomLightingGBufferIdMask")at[0]=std::bit_cast<float>(7680U);
-     else if(n=="fMaterialHiddenSurfaceDrawIntensity")at[0]=.1F;
+     else if(n=="fMaterialHiddenSurfaceDrawIntensity")at[0]=intensity;
      else if(n.starts_with("fBaseMapFactor"))std::fill(at,at+4,1.F);
     }}}
   auto constant_buffer=buffer(device.Get(),constants.size()*4,D3D12_HEAP_TYPE_UPLOAD);upload(constant_buffer.Get(),constants.data(),constants.size()*4);
@@ -227,8 +228,10 @@ Verdict verify(Fixture &fixture,std::span<const std::byte> original,bool candida
  const auto native_one=fixture.draw(original,one,true,.1F,0),adapted_one=fixture.draw(original,one,true,.1F,0,true);
  require(native_one.size()==adapted_one.size(),"identity size");
  for(std::size_t j=0;j<native_one.size();++j){require(std::isfinite(native_one[j])&&std::isfinite(adapted_one[j])&&std::abs(native_one[j]-adapted_one[j])<.00001F,"identity shader equivalence");++v.pixel_checks;}
- // At 2x every output pixel equals the native render-size pixel it covers.
+ // At 2x every output pixel equals the native render-size pixel it covers, at
+ // the captured hidden-surface intensity and at a player's 0.02 (v0.28.6).
  unsigned lit=0,dark=0,wrong_pixels=0;
+ for(const float strength:{.1F,.02F}){fixture.intensity=strength;
  for(const float z:{.1F,.9F})for(unsigned scenario=0;scenario<2;++scenario){
   auto native=fixture.draw(original,g,false,z,scenario);auto fixed=fixture.draw(original,g,true,z,scenario,true);auto wrong=fixture.draw(original,g,true,z,scenario);
   for(unsigned py=0;py<g.render_height;++py)for(unsigned px=0;px<g.render_width;++px){const auto source=(std::size_t(py)*g.output_width+px)*4;
@@ -236,7 +239,8 @@ Verdict verify(Fixture &fixture,std::span<const std::byte> original,bool candida
     for(unsigned c=0;c<4;++c){require(std::isfinite(fixed[target+c])&&std::abs(fixed[target+c]-native[source+c])<.00002F,"2x mask/depth preservation");++v.pixel_checks;}
     if(fixed[target+3]>.01F)++lit;else ++dark;if(std::abs(wrong[target+3]-fixed[target+3])>.01F)++wrong_pixels;
    }}
- }
+ }}
+ fixture.intensity=.1F;
  // The scenarios must exercise the shader: visible and hidden pixels, and an
  // enlarged viewport without adaptation must differ (position dependence).
  require(lit>100&&dark>100&&wrong_pixels>100,"oracle and wrong-coordinate negative control");++v.negative_checks;

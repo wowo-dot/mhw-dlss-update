@@ -572,3 +572,20 @@ The prior broad run's two raw state-review discrepancies and recovered
 dependency/DOF interruptions remain queued in
 [its result](dlss-broad-run-result.md); this focused observation does not close
 them or weaken their review checks.
+
+## Hidden-surface intensity other than 0.1 (v0.28.6, 2026-10-15)
+
+A player (Fatalis fight, Balanced, RTX 3060 Ti) saw the render-size ghost
+again. Her log: 7,981,825 late draws, **0 corrected**, 6,412,550 rejected for
+reason 6 (the constant check). Every value matched our expectations except
+`fMaterialHiddenSurfaceDrawIntensity`: 0.02 (`0x3CA3D70A`) where all our
+captures had 0.1. The admission required 0.1 exactly.
+
+The intensity only scales the colour and opacity that the game's own pixel
+shader computes. The replay runs the same vertex and pixel shaders with the
+same bound material buffer, so it draws whatever value the game set. The
+admission (`silhouette_material.hpp`) now accepts any finite, non-negative
+intensity; custom lighting 1 and mask 7680 are still required. The fixture
+compares native and corrected output at both 0.1 and 0.02. Why her game had
+0.02 is not known yet (a game state, an option or a mod).
+

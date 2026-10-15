@@ -7,6 +7,7 @@
 #include "recording_states.hpp"
 #include "silhouette_shader.hpp"
 #include "silhouette_draw.hpp"
+#include "silhouette_material.hpp"
 #include "watch_filter.hpp"
 #include "full_post.hpp"
 #include "full_post_inputs.hpp"
