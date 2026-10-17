@@ -207,12 +207,18 @@ bool install(const Config &config,std::ostream &log){
 void decline_game_dlss() noexcept{decline_requested=true;}
 unsigned game_dlss() noexcept{return game_dlss_state.load();}
 bool done() noexcept{return finished.load();}
+// v0.28.6: why a removal failed (closed beta tifa-2: hook_disabled false on one
+// PC only, with SharpPluginLoader installed).
+std::array<int,4> disable_results{};
 bool disable() noexcept{
     stopping=true;
-    if(installed){if(MH_DisableHook(cfg.target)!=MH_OK)return false;installed=false;}
-    if(game_dlss_hooked){if(MH_DisableHook(game_dlss_target)!=MH_OK)return false;game_dlss_hooked=false;}
+    if(installed){const auto s=MH_DisableHook(cfg.target);disable_results[0]=s;disable_results[1]=s==MH_OK?0:static_cast<int>(GetLastError());
+        if(s!=MH_OK)return false;installed=false;}
+    if(game_dlss_hooked){const auto s=MH_DisableHook(game_dlss_target);disable_results[2]=s;disable_results[3]=s==MH_OK?0:static_cast<int>(GetLastError());
+        if(s!=MH_OK)return false;game_dlss_hooked=false;}
     return true; // keep the trampolines allocated; a suspended entry may still forward
 }
+std::array<int,4> disable_result() noexcept{return disable_results;}
 bool settled() noexcept{return pending.load()==0;}
 bool supported() noexcept{return allowed.load();}
 unsigned calls() noexcept{return count.load();}

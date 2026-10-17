@@ -1,5 +1,6 @@
 #pragma once
 #include <d3d12.h>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
@@ -23,6 +24,9 @@ struct Config {
 bool install(const Config &,std::ostream &);
 bool done() noexcept;
 bool disable() noexcept;
+// MinHook's status and GetLastError() for each startup hook's removal (the
+// native init, then the game's DLSS builder); 0 = removed or never made (v0.28.6).
+std::array<int,4> disable_result() noexcept;
 bool settled() noexcept;
 bool supported() noexcept;
 unsigned calls() noexcept;

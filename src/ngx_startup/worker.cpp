@@ -92,7 +92,8 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
         if(disabled&&startup::settled()&&startup::done())
             while(!(graphics=startup::write_graphics_snapshot())&&GetTickCount64()-display_wait<120000)Sleep(100);
         log<<"{\"event\":\"stopped\",\"transaction_complete\":"<<startup::done()<<",\"capabilities_supported\":"<<startup::supported()
-           <<",\"calls\":"<<startup::calls()<<",\"hook_disabled\":"<<disabled<<",\"settled\":"<<startup::settled()
+           <<",\"calls\":"<<startup::calls()<<",\"hook_disabled\":"<<disabled<<",\"disable_result\":["<<startup::disable_result()[0]<<','<<startup::disable_result()[1]
+           <<','<<startup::disable_result()[2]<<','<<startup::disable_result()[3]<<"],\"settled\":"<<startup::settled()
            <<",\"swapchain_observed\":"<<graphics<<",\"game_dlss\":"<<startup::game_dlss()
            <<",\"dll_pinned\":true,\"trampoline_retained\":true,\"sdk_shutdown_deferred\":true,\"sdk_evaluation_verified\":false}\n"<<std::flush;
         // If a callback is still active, the stream must outlive this worker.
