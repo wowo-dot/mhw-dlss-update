@@ -32,7 +32,7 @@ the shipped configuration.
 
 | Area | Files | Job |
 |---|---|---|
-| Plugin entry, worker | `reflex/presentation_probe.cpp` (1,909) | AL exports, the worker thread, device attach, live control (Reflex, DLSS mode and aspect, FG switch), most of the main log |
+| Plugin entry, worker | `plugin/` (0.29.0; `reflex/presentation_probe.cpp`, 1,909 lines, up to 0.28.6) | `plugin.hpp` (the shared state), `plugin.cpp` (AL exports, start, phases), `device.cpp` (device attach, shutdown), `worker.cpp` (the worker's stages and the session loop), `reflex_control.cpp`, `generation.cpp` (the FG switch), `dlss_control.cpp` (mode and aspect changes), `log_events.cpp` (most of the main log) |
 | Presentation | `reflex/presentation.cpp` (1,250), `identity_chain.hpp`, `present_result.hpp` | DXGI/D3D12 routing through Streamline's proxies, the identity chain the game holds, the live FG chain switch |
 | Reflex | `reflex/live_frames.cpp` (419), `frame_boundaries_entry.asm`, `streamline.cpp`, `frame_session.cpp`, `driver_status.cpp` | Frame boundary hooks (simulation, render submit, present), Streamline loading (pinned SHA-256 and signature), PCL markers |
 | AL glue | `astera/astera_hooks.cpp` | al.d3d12 chains, al.hooks wrappers, internal-call scopes |
@@ -357,3 +357,11 @@ Behaviour stays the same; the log fields stay.
   swap-chain hook; the GetBuffer hook also uses it for the crash log's
   buffer map), and the DLSS frame's one-shot and capture modes (the DLL
   always builds it continuous, caller-retained, without captures).
+- Step 4:
+  - the plugin entry (`reflex/presentation_probe.cpp`, eight jobs on one
+    set of file-local globals) is `src/plugin/`: the shared state in
+    `plugin.hpp`, one file per job, and the 430-line worker a sequence of
+    named stages. Checked: every code line of the old file is in the new
+    ones apart from the declarations, the stage glue and `gate()` (dead
+    since the creation hooks went: 109 gates), and the 48 log events and
+    their fields are written as before.

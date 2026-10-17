@@ -119,8 +119,12 @@ add_library(mhw_dlss_alpha SHARED
     src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
     src/scaled_temporal/stream_route.cpp src/scaled_temporal/stream_entry.asm
     src/render_resolution/runtime.cpp src/render_resolution/resolution_entry.asm
-    # Reflex, presentation and the DLL's entry.
-    src/reflex/presentation_probe.cpp src/reflex/live_frames.cpp
+    # The plugin: Astera Loader's entry, the game's device, the worker and
+    # its session (src/plugin/plugin.hpp).
+    src/plugin/plugin.cpp src/plugin/device.cpp src/plugin/worker.cpp src/plugin/reflex_control.cpp
+    src/plugin/generation.cpp src/plugin/dlss_control.cpp src/plugin/log_events.cpp
+    # Reflex frames and the presentation's temporal side.
+    src/reflex/live_frames.cpp
     src/reflex/frame_boundaries_entry.asm src/reflex/temporal_coexistence.cpp
     # Frame generation.
     src/frame_generation/game_session.cpp src/frame_generation/hudless_pass.cpp

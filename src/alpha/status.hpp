@@ -83,7 +83,7 @@ inline std::string reason_text(std::string_view raw) {
         {"reflex_frames", "the frame hooks stopped"},
         {"presentation", "presentation stopped"},
         {"scene_rect", "the game's screen layout is not supported"},
-        // v0.28.6: frame generation's own reasons (presentation_probe.cpp).
+        // v0.28.6: frame generation's own reasons (src/plugin).
         {"presentation fault", "a presentation error turned it off for this session"},
         {"exclusive fullscreen", "not available in exclusive fullscreen; use borderless or windowed"},
         {"latency waitable", "the game's frame pacing is not as expected"},
