@@ -10,15 +10,18 @@ namespace mhw::alpha {
 // mhw_dlss.ini next to the DLL (alpha). Lines are "key = value"; '#' or ';'
 // starts a comment; keys and values are case-insensitive; unknown keys and bad
 // values are reported as warnings and keep the default. Relative folders are
-// relative to the DLL's folder.
+// relative to the DLL's folder. The defaults are the shipped ini's (v0.29.0):
+// DLSS, frame generation and Reflex off; the mode (Performance) and the
+// multiplier (2x) are what turning them on starts with.
 //
-//   dlss_mode = performance ; off, dlaa, quality, balanced, performance
-//   frame_generation = 2x   ; off, 2x, 3x, 4x, 6x, dynamic (the menu turns it on and off live)
+//   dlss_mode = off         ; off, dlaa, quality, balanced, performance
+//   frame_generation = off  ; off, 2x, 3x, 4x, 6x, dynamic (the menu turns it on and off live)
 //   frame_generation_plugin = auto ; auto: DLSS-G loads where the card supports
 //                           ; it; off: never (no frame generation, Reflex Off possible)
 //   dynamic_target = display ; display (its refresh rate) or 30 to 1000 (frames per second)
 //   frame_generation_auto = off ; on: DLSS-G pauses a fixed multiplier when it would slow the game
-//   reflex = on             ; on, boost, off (off only with frame_generation = off)
+//   reflex = off            ; on, boost, off (off only with frame_generation = off;
+//                           ; unset, it follows frame generation)
 //   runtime_dir = .         ; Streamline and NVIDIA DLSS DLLs
 //   log_dir = logs          ; log files of each launch
 //   profile = off           ; on: the CPU stack sampler for performance work
@@ -50,15 +53,15 @@ namespace mhw::alpha {
 enum class ReflexMode : unsigned { off, on, boost };
 inline constexpr unsigned min_dynamic_target = 30, max_dynamic_target = 1000;
 struct Config {
-    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
-    bool dlss = true;            // dlss_mode = off: false (dlss_mode keeps its default)
-    bool frame_generation = true;
+    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;  // the mode DLSS turns on with
+    bool dlss{};                 // dlss_mode = off (the default): false; dlss_mode keeps its default
+    bool frame_generation{};
     unsigned multiplier = 2;     // the fixed multiplier (kept while dynamic or off)
     bool dynamic{};              // frame_generation = dynamic
     unsigned dynamic_target{};   // frames per second; 0: the display's refresh rate
     bool generation_auto{};      // frame_generation_auto = on
     bool generation_plugin = true;  // frame_generation_plugin = auto (off: DLSS-G never loads)
-    ReflexMode reflex = ReflexMode::on;
+    ReflexMode reflex = ReflexMode::off;  // On when frame generation is on and reflex is unset
     bool profile{};              // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
     bool hook_timing{};          // hook_timing = on (diagnostic; not in the shipped ini)
@@ -145,6 +148,7 @@ inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode
 inline Config parse_config(std::string_view text, const std::filesystem::path &dll_folder) {
     Config c;
     std::string runtime = ".", logs = "logs";
+    bool reflex_set{};  // the file says reflex = ...
     unsigned line_number = 0;
     while (!text.empty()) {
         const auto end = text.find('\n');
@@ -197,7 +201,8 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
             if (value == "on" || value == "off") c.profile = value == "on";
             else c.warnings.push_back(where + "profile must be on or off");
         } else if (key == "reflex") {
-            if (!parse_reflex(value, c.reflex)) c.warnings.push_back(where + "reflex must be on, boost or off");
+            if (parse_reflex(value, c.reflex)) reflex_set = true;
+            else c.warnings.push_back(where + "reflex must be on, boost or off");
         } else if (key == "runtime_dir" || key == "log_dir") {
             // Folder names keep their case; only surrounding spaces and quotes go.
             std::string folder(raw);
@@ -216,8 +221,10 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         c.perf_ab = false;
         c.warnings.push_back("perf_ab needs frame_generation_plugin = off; off");
     }
+    // Frame generation needs Reflex: only a written "reflex = off" is worth a
+    // warning; the default (off) simply follows frame generation.
     if (c.reflex == ReflexMode::off && c.frame_generation) {
-        c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
+        if (reflex_set) c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
         c.reflex = ReflexMode::on;
     }
     const auto resolve = [&](const std::string &folder) {

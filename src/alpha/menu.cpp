@@ -565,21 +565,24 @@ void add_now(unsigned waited_ms) noexcept {
                 if (s.id == id) return s;
             throw std::logic_error("menu row");
         };
-        setting(dlss_row).default_value.i = 1;
+        // CMFM's "Reset to defaults": the shipped ini's values (Config's
+        // defaults): DLSS, frame generation and Reflex off.
+        const Config defaults{};
+        setting(dlss_row).default_value.i = defaults.dlss ? 1 : 0;
         setting(mode_row).choices = mm::mode_names;
         setting(mode_row).choice_count = static_cast<std::uint32_t>(std::size(mm::mode_names));
-        setting(mode_row).default_value.i = mm::choice_of(dlss_sdk::ReconstructionMode::performance);
-        setting(frame_generation_row).default_value.i = 1;
+        setting(mode_row).default_value.i = mm::choice_of(defaults.dlss_mode);
+        setting(frame_generation_row).default_value.i = defaults.frame_generation ? 1 : 0;
         setting(pacing_row).choices = mm::pacing_names;
         setting(reflex_row).choices = mm::reflex_names;
         setting(reflex_row).choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
-        setting(reflex_row).default_value.i = mm::choice_of(ReflexMode::on);
+        setting(reflex_row).default_value.i = mm::choice_of(defaults.reflex);
         {
             std::lock_guard lock(state.mutex);
             setting(multiplier_row).help = state.multiplier_help.c_str();
             setting(multiplier_row).choices = state.multiplier_pointers.data();
             setting(multiplier_row).choice_count = static_cast<std::uint32_t>(state.multiplier_pointers.size());
-            setting(multiplier_row).default_value.i = mm::multiplier_index(state.offer.multipliers, 2);
+            setting(multiplier_row).default_value.i = mm::multiplier_index(state.offer.multipliers, defaults.multiplier);
             setting(pacing_row).help = state.pacing_help.c_str();
             setting(pacing_row).choice_count = mm::pacing_count(state.offer.dynamic);
             setting(pacing_row).default_value.i = static_cast<int>(mm::Pacing::fixed);
