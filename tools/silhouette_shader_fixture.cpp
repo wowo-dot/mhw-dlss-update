@@ -4,7 +4,7 @@
 #include "../src/scaled_temporal/silhouette_shader.hpp"
 #include "../src/scaled_temporal/silhouette_draw.hpp"
 #include "../src/temporal_present/observer.hpp"
-#include <MinHook.h>
+#include "../tests/fake_astera.hpp"
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -90,11 +90,13 @@ struct Fixture {
   ComPtr<ID3D12Debug1> validation;hr(debug.As(&validation),"GPU validation");validation->SetEnableGPUBasedValidation(TRUE);
   ComPtr<IDXGIFactory4> factory;ComPtr<IDXGIAdapter1> warp;hr(CreateDXGIFactory1(IID_PPV_ARGS(&factory)),"factory");hr(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)),"WARP");
   hr(D3D12CreateDevice(warp.Get(),D3D_FEATURE_LEVEL_11_0,IID_PPV_ARGS(&device)),"device");hr(device.As(&messages),"info queue");
-  require(MH_Initialize()==MH_OK,"observer hook initialization");std::string why;
-  const auto resolver=[](std::uintptr_t object,unsigned slot,std::uintptr_t &target)noexcept {target=(*reinterpret_cast<std::uintptr_t **>(object))[slot];return target!=0;};
-  require(mhw::temporal_present::observer::install(device.Get(),resolver,why,true,nullptr,true,true),why.c_str());mhw::temporal_present::observer::begin();
   D3D12_COMMAND_QUEUE_DESC q{};hr(device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue)),"queue");hr(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)),"allocator");
   hr(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)),"list");hr(list->Close(),"initial close");hr(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)),"fence");
+  // The loader installs the observer's registered detours; the observer checks them.
+  mhw::test::fake_astera::start();std::vector<mhw::astera::Hook> hooks;mhw::temporal_present::observer::astera_hooks(hooks);
+  require(mhw::test::fake_astera::install_methods(hooks,{.command_list=list.Get()}),"loader installs the observer's detours");std::string why;
+  const auto resolver=[](std::uintptr_t object,unsigned slot,std::uintptr_t &target)noexcept {target=(*reinterpret_cast<std::uintptr_t **>(object))[slot];return target!=0;};
+  require(mhw::temporal_present::observer::install(device.Get(),resolver,why,true,nullptr,true,true),why.c_str());mhw::temporal_present::observer::begin();
   std::array<D3D12_DESCRIPTOR_RANGE,2> ranges{{{D3D12_DESCRIPTOR_RANGE_TYPE_CBV,16,0,0,0},{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,32,0,0,0}}};
   std::array<D3D12_ROOT_PARAMETER,2> parameters{};for(unsigned i=0;i<2;++i){parameters[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;parameters[i].DescriptorTable={1,&ranges[i]};parameters[i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;}
   std::array<D3D12_STATIC_SAMPLER_DESC,16> samplers{};for(unsigned i=0;i<samplers.size();++i){auto &s=samplers[i];s.Filter=i==2?D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT:D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -102,7 +104,7 @@ struct Fixture {
   D3D12_ROOT_SIGNATURE_DESC rd{};rd.NumParameters=2;rd.pParameters=parameters.data();rd.NumStaticSamplers=static_cast<UINT>(samplers.size());rd.pStaticSamplers=samplers.data();rd.Flags=D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
   ComPtr<ID3DBlob> b,e;hr(D3D12SerializeRootSignature(&rd,D3D_ROOT_SIGNATURE_VERSION_1,&b,&e),"serialize root");hr(device->CreateRootSignature(0,b->GetBufferPointer(),b->GetBufferSize(),IID_PPV_ARGS(&root)),"root");
  }
- ~Fixture(){mhw::temporal_present::observer::finish();MH_Uninitialize();}
+ ~Fixture(){mhw::temporal_present::observer::finish();}
  void finish(){hr(list->Close(),"close");ID3D12CommandList *ls[]{list.Get()};queue->ExecuteCommandLists(1,ls);hr(queue->Signal(fence.Get(),++sequence),"signal");
   HANDLE event=CreateEventW(nullptr,FALSE,FALSE,nullptr);require(event!=nullptr,"fence event");const auto result=fence->SetEventOnCompletion(sequence,event);
   if(FAILED(result)){CloseHandle(event);hr(result,"fence completion");}const auto wait=WaitForSingleObject(event,30000);CloseHandle(event);require(wait==WAIT_OBJECT_0,"GPU completion");

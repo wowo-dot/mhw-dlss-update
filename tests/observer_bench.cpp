@@ -9,7 +9,7 @@
 #include "../src/temporal_present/observer.hpp"
 #include "../src/perf/hook_timing.hpp"
 #include "../src/perf/toggles.hpp"
-#include <MinHook.h>
+#include "fake_astera.hpp"
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
@@ -82,11 +82,15 @@ int main(int argc, char **argv) {
         native[n] = 1e9;
         for (unsigned k = 0; k < 3; ++k) native[n] = std::min(native[n], threaded(recorders, n, groups));
     }
-    require(MH_Initialize() == MH_OK, "hook init");
+    // The loader installs the observer's registered detours; the observer
+    // checks them, with every hook the DLL installs.
+    mhw::test::fake_astera::start();
+    std::vector<mhw::astera::Hook> hooks; obs::astera_hooks(hooks);
+    require(mhw::test::fake_astera::install_methods(hooks, {.command_list = recorders[0].list.Get()}), "loader installs the observer's detours");
     std::string reason;
     const auto resolver = [](std::uintptr_t p, unsigned slot, std::uintptr_t &target) noexcept { target = (*reinterpret_cast<std::uintptr_t **>(p))[slot]; return target != 0; };
     mhw::perf::toggles.store(mhw::perf::all_toggles);
-    require(obs::install(device.Get(), resolver, reason, true), reason.c_str());
+    require(obs::install(device.Get(), resolver, reason, true, nullptr, true, true), reason.c_str());
     obs::begin();
     // Adjacent observer entries, one per list, from their Reset generations.
     for (unsigned t = 0; t < max_threads; ++t) { restart(recorders[t]); obs::reset(recorders[t].list.Get(), t + 1, nullptr); }

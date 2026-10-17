@@ -2,7 +2,7 @@
 #include "../src/temporal_present/output.hpp"
 #include "../src/temporal_present/bindings.hpp"
 #include "../src/temporal_present/observer.hpp"
-#include <MinHook.h>
+#include "../tests/fake_astera.hpp"
 #include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
@@ -166,8 +166,12 @@ float4 ps(float4 p:SV_Position):SV_Target { return float4(src.SampleLevel(samp,p
     pd.DepthStencilState.DepthEnable=FALSE;pd.DepthStencilState.StencilEnable=FALSE;pd.SampleMask=UINT_MAX;
     pd.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;pd.NumRenderTargets=1;pd.RTVFormats[0]=gd.Format;pd.SampleDesc.Count=1;
     hr(device->CreateGraphicsPipelineState(&pd,IID_PPV_ARGS(&graphic_pipeline)),"native graphics pipeline");
-    hr(MH_Initialize()==MH_OK?S_OK:E_FAIL,"state hook initialization");std::string hook_reason;
-    require(tp::observer::install(device.Get(),fixture_method,hook_reason),hook_reason.c_str());
+    // The loader installs the observer's registered detours; the observer
+    // checks them, with every hook the DLL installs.
+    mhw::test::fake_astera::start();std::vector<mhw::astera::Hook> hooks;tp::observer::astera_hooks(hooks);
+    require(mhw::test::fake_astera::install_methods(hooks,{.command_list=list.Get()}),"loader installs the observer's detours");
+    std::string hook_reason;
+    require(tp::observer::install(device.Get(),fixture_method,hook_reason,true,nullptr,true,true),hook_reason.c_str());
     tp::observer::begin();tp::observer::reset(list.Get(),1,nullptr);
     ID3D12DescriptorHeap *heaps[]{heap.Get(),sampler.Get()};list->SetDescriptorHeaps(2,heaps);
     list->SetComputeRootSignature(root.Get());list->SetGraphicsRootSignature(root.Get());list->SetPipelineState(pipeline.Get());
@@ -182,8 +186,9 @@ float4 ps(float4 p:SV_Position):SV_Target { return float4(src.SampleLevel(samp,p
     const std::uintptr_t ids[]{reinterpret_cast<std::uintptr_t>(heap.Get()),reinterpret_cast<std::uintptr_t>(sampler.Get())};state.descriptor_heaps(ids);
     for(bool g:{false,true}){state.constants(g,0,0,constants);state.descriptor(g,1,tp::ArgumentKind::table,heap->GetGPUDescriptorHandleForHeapStart().ptr);state.descriptor(g,2,tp::ArgumentKind::table,sampler->GetGPUDescriptorHandleForHeapStart().ptr);}
     state.constants(false,0,2,std::span(&replacement,1));
-    require(tp::observer::capture(0,1,list.Get(),reinterpret_cast<std::uintptr_t>(root.Get()),reinterpret_cast<std::uintptr_t>(pipeline.Get())),"observed native state");
-    tp::Bindings observed;require(tp::observer::sample(0,observed),"state sample");
+    tp::Bindings observed;
+    require(tp::observer::current(list.Get(),observed)&&observed.compute.signature==reinterpret_cast<std::uintptr_t>(root.Get())&&
+        observed.pipeline==reinterpret_cast<std::uintptr_t>(pipeline.Get()),"observed native state");
     require(observed.compute.arguments[0].mask==state.compute.arguments[0].mask&&observed.compute.arguments[0].values==state.compute.arguments[0].values&&observed.graphics.signature==state.graphics.signature,"actual API hook values");
     require(tp::observer::finish(),"state observer shutdown");tp::RestoreBindings restore(list.Get(),observed);
     auto prepared=spatial?std::make_unique<tp::Output>(device.Get(),tp::SpatialSource{sw,sh,aw,ah},w,h):std::make_unique<tp::Output>(device.Get(),w,h);

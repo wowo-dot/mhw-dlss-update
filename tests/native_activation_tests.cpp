@@ -1,7 +1,8 @@
 // Exercise production ASM and activation against owned native-shaped objects.
 #include "../src/continuous_dlaa/activation.cpp"
-#include <MinHook.h>
+#include "fake_astera.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
 #include <cstdlib>
 #include <cstring>
@@ -128,11 +129,17 @@ int main(){
     jump(image.p+0x24c9240,reinterpret_cast<void *>(native_register));
     aa::originals[0]=reinterpret_cast<void *>(native_frame);aa::originals[1]=reinterpret_cast<void *>(native_taa);aa::originals[7]=reinterpret_cast<void *>(native_queue);
     for(unsigned i=2;i<5;++i)aa::originals[i]=reinterpret_cast<void *>(native_jitter);
-    check(MH_Initialize()==MH_OK,"MinHook init");
-    check(MH_CreateHook(reinterpret_cast<void *>(activation_table_site),reinterpret_cast<void *>(mhw_aa_table_entry),&mhw_aa_table_original)==MH_OK,"table hook");
-    check(MH_CreateHook(reinterpret_cast<void *>(activation_sharpen_site),reinterpret_cast<void *>(mhw_aa_sharpen_entry),&mhw_aa_sharpen_original)==MH_OK,"sharpen hook");
+    // The two comparison sites as activation's own hooks, in the loader's
+    // al.hooks chain as in the game; their patterns are the fixture's bytes.
+    mhw::test::fake_astera::start();
     mhw_aa_table_resume=reinterpret_cast<void *>(activation_table_resume);mhw_aa_sharpen_resume=reinterpret_cast<void *>(activation_sharpen_resume);
-    check(MH_EnableHook(MH_ALL_HOOKS)==MH_OK,"enable hooks");
+    const auto head=[](void (*site)()){std::string s;char b[4];
+        for(unsigned i=0;i<8;++i){std::snprintf(b,sizeof b,"%02X ",reinterpret_cast<const unsigned char *>(site)[i]);s+=b;}s.pop_back();return s;};
+    static const auto table_head=head(activation_table_site),sharpen_head=head(activation_sharpen_site);
+    aa::hooks[5].target=reinterpret_cast<void *>(activation_table_site);aa::hooks[5].pattern=table_head.c_str();
+    aa::hooks[6].target=reinterpret_cast<void *>(activation_sharpen_site);aa::hooks[6].pattern=sharpen_head.c_str();
+    check(mhw::astera::hook_owned(aa::hooks[5],reinterpret_cast<void *>(mhw_aa_table_entry),&mhw_aa_table_original)&&
+          mhw::astera::hook_owned(aa::hooks[6],reinterpret_cast<void *>(mhw_aa_sharpen_entry),&mhw_aa_sharpen_original),"comparison site hooks");
     for(choice=0;choice<4;++choice){
         const auto bytes=static_cast<std::uint16_t>((choice&1)|((choice>>1)<<8));put(table+0xe9e4,bytes);put(unit+0x14,0x10U|((choice&1)<<1));
         put(ctx+0x1d0,choice&1?other_view:std::uintptr_t{});aa::requested=true;run();
@@ -181,30 +188,24 @@ int main(){
     aa::fault=0;aa::requested=true;action=6;exception_frame(5);auto taa_exception=receipt();
     aa::fault=0;aa::requested=true;action=10;exception_frame(7);auto queue_exception=receipt();
     aa::fault=0;aa::requested=true;action=9;run();check(aa::fault==5,"reentrant Execute latches fault");auto reentrant=receipt();
-    // The fixture's leaf hooks as activation's own (OwnedHook, MinHook without AL).
-    const auto own_leaves=[&]{
-        aa::hooks[5].target=reinterpret_cast<void *>(activation_table_site);aa::hooks[6].target=reinterpret_cast<void *>(activation_sharpen_site);
-        for(unsigned i:{5U,6U}){aa::hooks[i].minhook=true;aa::hooks[i].live=true;}
-    };
-    aa::stop();own_leaves();
+    aa::stop();
     // A callback can re-enter after a drain check and before removal.
     // It forwards after stop; no owned camera scope remains.
     aa::pending=1;
     check(aa::unhook(),"forwarding callback does not block stopped hook removal");
     check(!aa::hooks[5].live&&!aa::hooks[6].live,"stopped activation hooks taken out");aa::pending=0;
-    check(MH_EnableHook(reinterpret_cast<void *>(activation_table_site))==MH_OK&&MH_EnableHook(reinterpret_cast<void *>(activation_sharpen_site))==MH_OK,"reenable fixture hooks");
-    own_leaves();
+    for(unsigned i:{5U,6U}){check(mhw::astera::set_game_hook_enabled(aa::hooks[i].handle,true),"fixture hooks back in the chain");aa::hooks[i].live=true;}
     InterlockedExchange64(&mhw_aa_context,static_cast<LONG64>(ctx));
     check(!aa::unhook(),"owned camera scope must finish before removal");
     check(aa::hooks[5].live&&aa::hooks[6].live,"hooks stay in while a camera scope is owned");
     InterlockedExchange64(&mhw_aa_context,0);
     aa::requested=true;check(!aa::unhook(),"live activation cannot be removed");aa::stop();
     // One hook that cannot come out must not keep the others in, nor look out itself.
-    aa::hooks[0].target=reinterpret_cast<void *>(image.p+0x100);aa::hooks[0].minhook=true;aa::hooks[0].live=true;
+    aa::hooks[0].target=reinterpret_cast<void *>(image.p+0x100);aa::hooks[0].handle=1000;aa::hooks[0].live=true;  // never issued
     check(!aa::unhook(),"partial removal failure reported");
     check(aa::hooks[0].live&&!aa::hooks[5].live&&!aa::hooks[6].live,"per-hook removal accounting");
-    aa::hooks[0].live=false;
-    check(MH_DisableHook(MH_ALL_HOOKS)==MH_OK&&MH_Uninitialize()==MH_OK,"fixture hooks removed");
+    aa::hooks[0].live=false;aa::hooks[0].handle=0;
+    check(mhw::test::fake_astera::active_game_hooks()==0,"fixture hooks removed");
     check(completions==expected_completions,"queue completion counts include nested, stop and exception cases");
     for(const auto &item:{std::pair{"healthy",healthy},std::pair{"latched",latched},std::pair{"exception",frame_exception},std::pair{"taa-exception",taa_exception},std::pair{"queue-exception",queue_exception},std::pair{"reentrant",reentrant}})
         std::cout<<"{\"case\":\""<<item.first<<"\",\"activation\":"<<item.second<<"}\n";

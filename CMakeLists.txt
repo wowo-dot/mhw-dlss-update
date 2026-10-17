@@ -200,7 +200,7 @@ if(BUILD_TESTING)
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.
     mhw_test(continuous_runtime_tests SOURCES tests/continuous_runtime_tests.cpp src/continuous_dlaa/activation.cpp
-        src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp ${temporal_binding_sources} ${binding_common}
+        src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp tests/fake_astera.cpp ${temporal_binding_sources} ${binding_common}
         INCLUDES ${binding_includes} DEFINES MHW_TEMPORAL_FIXTURE
         LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve NO_TEST)
     foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate
@@ -223,7 +223,7 @@ if(BUILD_TESTING)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
 
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
-    mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm
+    mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm tests/fake_astera.cpp
         src/continuous_dlaa/activation_entry.asm ${binding_common}
         INCLUDES ${binding_includes} LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid
         TEST native_activation_contract)
@@ -257,7 +257,7 @@ if(BUILD_TESTING)
         LIBS mhw_scaled_effects mhw_temporal_present d3d12 dxgi dxguid d3dcompiler TEST full_post_inputs_gpu)
     mhw_test(silhouette_material_tests SOURCES tests/silhouette_material_tests.cpp TEST silhouette_material)
     # The silhouette shaders on WARP or a GPU (run by hand).
-    mhw_test(silhouette_shader_fixture SOURCES tools/silhouette_shader_fixture.cpp
+    mhw_test(silhouette_shader_fixture SOURCES tools/silhouette_shader_fixture.cpp tests/fake_astera.cpp
         LIBS mhw_scaled_effects mhw_temporal_state minhook d3d12 dxgi dxguid d3dcompiler NO_TEST)
 
     # Binding restore, the observer and the spatial recovery pass.
@@ -265,13 +265,14 @@ if(BUILD_TESTING)
         TEST temporal_present_bindings)
     mhw_test(restore_bindings_gpu_tests SOURCES tests/restore_bindings_gpu_tests.cpp
         LIBS mhw_temporal_present d3d12 dxgi dxguid d3dcompiler TEST restore_bindings_gpu)
-    mhw_test(observer_slots_tests SOURCES tests/observer_slots_tests.cpp INCLUDES "${minhook_SOURCE_DIR}/include"
-        LIBS mhw_temporal_state d3d12 dxgi dxguid TEST observer_list_slots)
+    mhw_test(observer_slots_tests SOURCES tests/observer_slots_tests.cpp tests/fake_astera.cpp
+        LIBS mhw_temporal_state minhook d3d12 dxgi dxguid TEST observer_list_slots)
     # The observer's per-call cost on WARP (run by hand).
-    mhw_test(observer_bench SOURCES tests/observer_bench.cpp INCLUDES "${minhook_SOURCE_DIR}/include"
-        LIBS mhw_temporal_state d3d12 dxgi dxguid NO_TEST)
+    mhw_test(observer_bench SOURCES tests/observer_bench.cpp tests/fake_astera.cpp
+        LIBS mhw_temporal_state minhook d3d12 dxgi dxguid NO_TEST)
     target_compile_options(observer_bench PRIVATE /O2)
-    mhw_test(mhw_temporal_present_fixture SOURCES tools/temporal_present_fixture.cpp LIBS mhw_temporal_state mhw_temporal_present NO_TEST)
+    mhw_test(mhw_temporal_present_fixture SOURCES tools/temporal_present_fixture.cpp tests/fake_astera.cpp
+        LIBS mhw_temporal_state mhw_temporal_present minhook NO_TEST)
     add_test(NAME temporal_present_warp COMMAND mhw_temporal_present_fixture --warp)
     add_test(NAME temporal_spatial_warp COMMAND mhw_temporal_present_fixture --spatial)
     add_test(NAME temporal_spatial_fractional_warp COMMAND mhw_temporal_present_fixture --spatial-fractional)

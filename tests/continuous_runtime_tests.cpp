@@ -2,6 +2,7 @@
 // memory; no process inspection, game code, or SDK initialization is used.
 #include "../src/continuous_dlaa/runtime.cpp"
 #include "runtime_neighbours.hpp"
+#include "fake_astera.hpp"
 #include <iostream>
 #include <cstdlib>
 #include <sstream>
@@ -255,23 +256,21 @@ void shutdown_fixture(){
     std::memcpy(reinterpret_cast<void *>(code.p),original.data(),original.size());DWORD old{};
     check(VirtualProtect(reinterpret_cast<void *>(code.p),4096,PAGE_EXECUTE_READ,&old)!=0,"owned shutdown stub");
     check(FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void *>(code.p),4096)!=0,"flush shutdown stub");
-    check(MH_Initialize()==MH_OK,"shutdown MinHook");void *trampoline{};
-    check(MH_CreateHook(reinterpret_cast<void *>(code.p),reinterpret_cast<void *>(shutdown_detour),&trampoline)==MH_OK&&
-          MH_EnableHook(reinterpret_cast<void *>(code.p))==MH_OK,"install owned shutdown hook");
+    // The runtime's own game hooks, in the loader's al.hooks chain as in the game.
+    mhw::test::fake_astera::start();
+    auto &owned=cd::game_hooks[0];owned.name="test:Shutdown";owned.pattern="B8 2A 00 00 00 C3 90 90";owned.target=reinterpret_cast<void *>(code.p);
+    void *next{};check(mhw::astera::hook_owned(owned,reinterpret_cast<void *>(shutdown_detour),&next),"install owned shutdown hook");
+    cd::targets[0]=code.p;cd::enabled[0]=true;
     check(reinterpret_cast<unsigned(*)()>(code.p)()==99,"owned detour active");
-    // The runtime's own game hooks (OwnedHook; MinHook without AL).
-    const auto own=[](unsigned i,std::uintptr_t target){
-        cd::targets[i]=target;cd::enabled[i]=true;auto &h=cd::game_hooks[i];
-        h.target=reinterpret_cast<void *>(target);h.minhook=true;h.live=true;
-    };
-    own(0,code.p);
     const bool partial=mode=="shutdown-partial";
-    if(partial)own(1,code.p+32); // Deliberately unregistered target.
+    if(partial){  // A handle the loader never issued: removing it fails.
+        auto &h=cd::game_hooks[1];h.target=reinterpret_cast<void *>(code.p+32);h.handle=1000;h.live=true;
+        cd::targets[1]=code.p+32;cd::enabled[1]=true;
+    }
     cd::accepting=true;cd::finish();
     check(!cd::enabled[0]&&cd::enabled[1]==partial&&cd::fault==(partial?25U:0U),"shutdown records only successful removals");
     check(std::memcmp(reinterpret_cast<void *>(code.p),original.data(),original.size())==0&&
           reinterpret_cast<unsigned(*)()>(code.p)()==42,"native bytes and behavior restored");
-    check(MH_Uninitialize()==MH_OK,"shutdown fixture cleanup");
     std::cout<<"Shutdown removal accounting and actual hook restoration passed: "<<mode<<'\n';
 }
 int main(int argc,char **argv){
