@@ -221,7 +221,7 @@ bool install(const Config &config,std::ostream &log){
         // The wrapper's builder, constructor and release, and the allocator's
         // free (clean image): otherwise the game's DLSS 1 stays as it is.
         const auto base=reinterpret_cast<std::uintptr_t>(cfg.target)-entry_rva;
-        const bool code=verify_entry(base,game_dlss_rva,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",game_dlss_head)&&
+        const bool code=verify_entry(base,0x23842a0,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",game_dlss_head)&&
             projection_binding::verify_code(base,0x2383760,54,"1ff21702d0d9ef19421ba8132849d21a53e75be539b8574a1a26686f124c8eeb")&&
             projection_binding::verify_code(base,0x23837a0,130,"066bbfc555bcbeb999b5e7b0688877cc9ec2d07f9155a2c6af94ce98d71c9b30")&&
             projection_binding::verify_code(base,0x2175260,50,"d678c8b941af2d1e2bcd5e4a5926d070ac5e983003ee2b51f85b2f53388b72ce");

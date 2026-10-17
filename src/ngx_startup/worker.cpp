@@ -32,10 +32,10 @@ void wait_for_code(std::uintptr_t base,std::ostream &log){
     const auto began=GetTickCount64();unsigned polls{},first_mask{};
     while(true){
         unsigned mask{};
-        if(startup::verify_entry(base,startup::entry_rva,64,"bae1e1ebc8439c799b1ab900fe0802e1845f6480160c796b074a32e4b9947e8c",startup::entry_head))mask|=1;
+        if(startup::verify_entry(base,0x273f230,64,"bae1e1ebc8439c799b1ab900fe0802e1845f6480160c796b074a32e4b9947e8c",startup::entry_head))mask|=1;
         if(pb::verify_code(base,0x273f270,413,"e74b34a3d4d93abe149584291f6aeb91e6d7ab066bbfca81277ec1b76adeed7d"))mask|=2;
         if(pb::verify_code(base,0x273f40d,23,"8951f13564e74f1eb66250638c6af29c5df54571475b81c3e0a8f2e52e195ba4"))mask|=4;
-        if(startup::verify_entry(base,startup::game_dlss_rva,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",startup::game_dlss_head))mask|=8;
+        if(startup::verify_entry(base,0x23842a0,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",startup::game_dlss_head))mask|=8;
         if(!polls)first_mask=mask;++polls;
         const auto now=GetTickCount64();const auto slot_state=slots(base);const auto admission=startup::admit(mask,slot_state,now-began);
         if(admission!=startup::Admission::wait){
