@@ -1,6 +1,6 @@
 // Exercise the actual continuous CPU callbacks against owned mock renderer
 // memory; no process inspection, game code, or SDK initialization is used.
-#include "../src/continuous_dlaa/runtime.cpp"
+#include "../src/continuous_dlaa/runtime_state.hpp"
 #include "runtime_neighbours.hpp"
 #include "fake_astera.hpp"
 #include <iostream>
@@ -10,7 +10,7 @@
 #include <dxgi1_4.h>
 #include <d3d12sdklayers.h>
 namespace tb=mhw::temporal_bindings;
-namespace cd=mhw::continuous_dlaa;
+namespace cd {using namespace mhw::continuous_dlaa;using namespace mhw::continuous_dlaa::detail;}
 std::string mode;
 void check(bool v,const char *s){if(!v){std::cerr<<s<<'\n';std::exit(1);}}
 template<class T>void put(std::uintptr_t p,T v){std::memcpy(reinterpret_cast<void *>(p),&v,sizeof(v));}

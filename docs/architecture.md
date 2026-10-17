@@ -36,7 +36,7 @@ the shipped configuration.
 | Presentation | `reflex/presentation.cpp` (1,250), `identity_chain.hpp`, `present_result.hpp` | DXGI/D3D12 routing through Streamline's proxies, the identity chain the game holds, the live FG chain switch |
 | Reflex | `reflex/live_frames.cpp` (419), `frame_boundaries_entry.asm`, `streamline.cpp`, `frame_session.cpp`, `driver_status.cpp` | Frame boundary hooks (simulation, render submit, present), Streamline loading (pinned SHA-256 and signature), PCL markers |
 | AL glue | `astera/astera_hooks.cpp` | al.d3d12 chains, al.hooks wrappers, internal-call scopes |
-| DLSS runtime | `continuous_dlaa/runtime.cpp` (1,654), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | Requests at the game's TAA, depth and projection, the Dispatch replacement that evaluates DLSS, list and fence tracking, live mode rebuild |
+| DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.29.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
 | Game options | `continuous_dlaa/game_options.cpp` | The game's own DLSS rules: AA Off, resolution scaling High, locked menu rows |
 | Render resolution | `render_resolution/runtime.cpp` (432) | Sets the game's render scale on its render thread; detects aspect switches |
 | Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + six `.inl`, `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
@@ -365,3 +365,13 @@ Behaviour stays the same; the log fields stay.
     ones apart from the declarations, the stage glue and `gate()` (dead
     since the creation hooks went: 109 gates), and the 48 log events and
     their fields are written as before.
+  - the presentation layer's ownership diagnostic is gone: every routed
+    swap-chain call built an `OwnershipCall` record for a recorder only
+    the research probes switched on; `route()` no longer takes one.
+  - the DLSS runtime (`continuous_dlaa/runtime.cpp`, 1,442 lines after
+    step 3) is eight files by job on `runtime_state.hpp`, its state as
+    `inline` globals in `mhw::continuous_dlaa::detail`; the runtime test
+    builds the same files instead of including the source. Checked as for
+    the plugin: every code and comment line moved apart from the `inline`
+    prefixes, declarations and namespace lines (`DEPTH_NOTE` became the
+    function it called); the log fields are unchanged.

@@ -108,9 +108,13 @@ target_link_libraries(mhw_fg_reflex_presentation PUBLIC mhw_streamline_reflex d3
 # mhw_dlss.dll in the release package (tools/package_release.py), an Astera
 # Loader plugin: DLSS/DLAA, frame generation and Reflex, configured by
 # mhw_dlss.ini and the optional CMFM pages (docs/architecture.md).
+# The DLSS runtime (continuous_dlaa/runtime_state.hpp lists the parts).
+set(continuous_runtime_sources src/continuous_dlaa/runtime.cpp src/continuous_dlaa/runtime_projection.cpp
+    src/continuous_dlaa/runtime_requests.cpp src/continuous_dlaa/runtime_lists.cpp src/continuous_dlaa/runtime_resolve.cpp
+    src/continuous_dlaa/runtime_native.cpp src/continuous_dlaa/runtime_modes.cpp src/continuous_dlaa/runtime_log.cpp)
 add_library(mhw_dlss_alpha SHARED
     # Continuous DLSS on the game's TAA pass.
-    src/continuous_dlaa/runtime.cpp
+    ${continuous_runtime_sources}
     src/continuous_dlaa/activation.cpp src/continuous_dlaa/activation_entry.asm
     src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
     src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm
@@ -191,7 +195,7 @@ if(BUILD_TESTING)
 
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.
-    mhw_test(continuous_runtime_tests SOURCES tests/continuous_runtime_tests.cpp src/continuous_dlaa/activation.cpp
+    mhw_test(continuous_runtime_tests SOURCES tests/continuous_runtime_tests.cpp ${continuous_runtime_sources} src/continuous_dlaa/activation.cpp
         src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp tests/fake_astera.cpp ${temporal_binding_sources} ${binding_common}
         INCLUDES ${binding_includes} DEFINES MHW_TEMPORAL_FIXTURE
         LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve NO_TEST)
