@@ -3,8 +3,10 @@
 The map behind the 0.29.0 cleanup: what `mhw_dlss.dll` (CMake target
 `mhw_dlss_alpha`) is made of, how it starts, what runs per frame, every hook,
 how it fails, and which log output players send us. Line numbers refer to
-`ddb7ab9`. Research targets compile some of the same files with other
-switches; this page describes only the shipped configuration.
+`ddb7ab9`. That was before the research targets were retired (tag
+`research-final`, `docs/research/history/retired-targets.md`); some tests
+still compile shipped files with other switches. This page describes only
+the shipped configuration.
 
 ## 1. What ships
 

@@ -103,15 +103,14 @@ cmake --build build --config Release --target mhw_dlss_alpha
 ```
 
 The mod is `build/bin/Release/mhw_dlss_alpha.dll`, renamed `mhw_dlss.dll` in
-the package. Leave out `--target` to build every research probe and test as
-well.
+the package. Leave out `--target` to build the tests as well.
 
-**Tests:** run `ctest --test-dir build -C Release -j 32` (669 tests). They come
-in two tiers:
+**Tests:** run `ctest --test-dir build -C Release -j 32` (85 tests, about ten
+seconds: the C++ tests and one for the Python tools). They come in two tiers:
 - `quick`: everything under about a second. While iterating, run
   `ctest -L quick` plus the changed area's own tests (`ctest -R <name>`).
-- `heavy`: hardware D3D12 and WARP pipeline fixtures. Each one reserves four
-  processor slots, so a parallel run doesn't push them past their timeouts.
+- `heavy`: WARP pipeline fixtures. Each one reserves four processor slots, so
+  a parallel run doesn't push them past their timeouts.
 
 Run the whole suite before handing out a build.
 
@@ -127,28 +126,30 @@ everything compiled into the DLL.
 
 ## Repository layout
 
-- **`src/`**: the mod and the research probes it grew from. The
-  `mhw_dlss_alpha` target in `CMakeLists.txt` lists every source file the mod
-  compiles. The main parts:
+- **`src/`**: the mod. The `mhw_dlss_alpha` target in `CMakeLists.txt` lists
+  every source file it compiles; [`docs/architecture.md`](docs/architecture.md)
+  maps how they fit together. The main parts:
   - `continuous_dlaa/`, `temporal_bindings/`, `scaled_temporal/`,
     `render_resolution/`: DLSS on the game's TAA pass and the render
     resolution;
   - `reflex/` (Streamline, Reflex, presentation and the plugin's entry point)
     and `frame_generation/`;
   - `alpha/`: the ini, the CMFM pages and the status lines.
+- **`tests/`**: unit tests, WARP fixtures and the Python tools' tests.
+- **`tools/`**: what reads players' logs and builds releases. That's
+  `fg_game.py` (run status and summaries), `profile_report.py`, `perf/`
+  (PresentMon capture and summary), `package_release.py` and `rdc/`
+  (RenderDoc scripts).
 
-  Every other target is a research probe, fixture or test from the
-  investigation; they still build and run.
-- **`tests/`**: unit tests, GPU fixtures and tool tests.
-- **`tools/`**: arming and review scripts for the probes, `fg_game.py` (game
-  test setup and status), `perf/` (PresentMon capture and summary) and
-  `package_release.py`.
+  The research probes, fixtures and tools the mod grew out of were retired on
+  2026-10-17. The tag `research-final` still builds every one of them; see
+  [`docs/research/history/retired-targets.md`](docs/research/history/retired-targets.md).
 - **`docs/research/`**: dated notes on what the game does and what each
   version changed. Confirmed results are kept apart from hypotheses.
   - [`history/readme-changelog.md`](docs/research/history/readme-changelog.md)
     is the former README: the research log from the first probe to in-game
     DLAA.
-- **`docs/runtime/`**: the plan for each runtime probe.
+- **`docs/runtime/`**: the plan for each runtime probe (research history).
 - **`third_party/`**: small vendored files with their licenses (see
   [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
 - **`local/`** (ignored): private game databases, dumps, captures and SDKs.
