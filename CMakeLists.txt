@@ -79,7 +79,8 @@ target_link_libraries(mhw_scaled_effects PUBLIC mhw_scaled_filter_shader d3d12 d
 add_library(mhw_dlss_inline STATIC src/dlss_sdk/inline.cpp)
 mhw_library(mhw_dlss_inline)
 target_include_directories(mhw_dlss_inline SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
-target_link_libraries(mhw_dlss_inline PUBLIC mhw_temporal_present mhw_dlss_sdk_live mhw_astera_hooks)
+target_compile_definitions(mhw_dlss_inline PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(mhw_dlss_inline PUBLIC mhw_temporal_present mhw_astera_hooks "${MHW_NGX_LIBRARY}" d3d12 dxgi dxguid)
 add_library(mhw_scaled_resolve STATIC src/scaled_temporal/resolve.cpp)
 mhw_library(mhw_scaled_resolve)
 target_link_libraries(mhw_scaled_resolve PUBLIC mhw_dlss_inline)
@@ -92,8 +93,7 @@ target_compile_features(mhw_ngx_startup PUBLIC cxx_std_20)
 target_include_directories(mhw_ngx_startup PRIVATE src/bridge_probe)
 target_include_directories(mhw_ngx_startup SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_compile_definitions(mhw_ngx_startup PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid
-    "${MHW_NGX_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib")
+target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid "${MHW_NGX_LIBRARY}")
 
 # Presentation through Streamline: the identity chain, the live FG switch.
 add_library(mhw_fg_reflex_presentation STATIC src/reflex/presentation.cpp)

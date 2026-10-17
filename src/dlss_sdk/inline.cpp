@@ -6,6 +6,7 @@
 #include <nvsdk_ngx_helpers.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+#include <cmath>
 #include <iomanip>
 #include <stdexcept>
 
@@ -35,7 +36,7 @@ struct InlineFrame::Impl {
     unsigned width{},height{},create_result{},evaluate_result{},release_result{},destroy_result{};
     Geometry geometry;Extent optimal{},minimum{},maximum{};unsigned optimal_result{},quality{};float sharpness{};
     bool creation_completed{},attempted{},issued{},restored{},copied{},released{};
-    bool reset{true};float frame_ms{diagnostic_frame_ms};
+    bool reset{true};float frame_ms{};
     std::uintptr_t native_identity{},list_identity{};
     RecordAttempt last;
     std::uint64_t evaluations{},resets{};

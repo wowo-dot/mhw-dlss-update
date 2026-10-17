@@ -1,7 +1,10 @@
 #pragma once
-#include "live.hpp"
+#include "initialization.hpp"
+#include "history.hpp"
 #include "geometry.hpp"
 #include "../temporal_present/bindings.hpp"
+#include <array>
+#include <iosfwd>
 #include <memory>
 
 namespace mhw::dlss_sdk {

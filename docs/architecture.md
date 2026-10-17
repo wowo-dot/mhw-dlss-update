@@ -386,4 +386,7 @@ Behaviour stays the same; the log fields stay.
   - The linker oracle (step 3) cannot see a static-library object nothing
     references, since the linker never loads it. Comparing each library's
     objects with the DLL's map file finds two: `continuous_dlaa/resolve.cpp`
-    and `dlss_sdk/live.cpp` (the bounded evaluation).
+    and `dlss_sdk/live.cpp` (the research's bounded three- or nine-frame
+    evaluation). Both are gone; the DLSS frame links the NGX library
+    itself, `live.hpp` is `initialization.hpp` (the borrowed NGX
+    initialization) and `history.hpp` keeps `HistoryFrame`.

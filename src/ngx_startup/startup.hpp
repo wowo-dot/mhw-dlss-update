@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
-#include "../dlss_sdk/live.hpp"
+#include "../dlss_sdk/initialization.hpp"
 
 namespace mhw::ngx_startup {
 inline constexpr unsigned entry_rva=0x273f230, caller_rva=0x23842dc;

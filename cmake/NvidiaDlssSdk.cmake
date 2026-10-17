@@ -18,12 +18,5 @@ mhw_check_ngx_file(include/nvsdk_ngx_helpers.h c46628f150c6edee245758c878fc0af2b
 mhw_check_ngx_file(include/nvsdk_ngx_params.h 51a1f94116cf82f95c63a2c197371ed22e08bddb09918d36cc6e2ac712753c80)
 mhw_check_ngx_file(lib/Windows_x86_64/x64/nvsdk_ngx_d.lib 31e82b4ec3242ec6e5b42c73e1f5f5e260338a6ee213bd64444f6c2fa364aa84)
 
-# The SDK's NGX library, and the NGX initialization the DLSS runtime borrows
-# from NGX start-up (src/dlss_sdk/live.hpp).
-add_library(mhw_dlss_sdk_live STATIC src/dlss_sdk/live.cpp)
-target_compile_features(mhw_dlss_sdk_live PUBLIC cxx_std_20)
-target_compile_definitions(mhw_dlss_sdk_live PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
-target_include_directories(mhw_dlss_sdk_live SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
-target_link_libraries(mhw_dlss_sdk_live PUBLIC "${MHW_NGX_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib" d3d12 dxgi dxguid bcrypt)
-target_compile_options(mhw_dlss_sdk_live PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /external:W0 /guard:cf)
-set_target_properties(mhw_dlss_sdk_live PROPERTIES MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+# The SDK's NGX library: NGX start-up and the DLSS frame link it.
+set(MHW_NGX_LIBRARY "${MHW_NGX_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib")
