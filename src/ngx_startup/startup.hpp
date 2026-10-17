@@ -20,7 +20,6 @@ struct Config {
     std::uintptr_t caller{},client_slots{};
     std::filesystem::path runtime,data;
     std::uintptr_t backend_slot{}; // production renderer slot; zero only in the isolated fixture
-    bool hook_pool_reserved{}; // only the same DLL's successful startup reservation
     // Frame-generation builds: Streamline's own NGX initialization may load the
     // provider first. Accepted only from this exact runtime path and hash.
     bool shared_provider{};
@@ -31,23 +30,19 @@ bool install(const Config &,std::ostream &);
 bool done() noexcept;
 bool disable() noexcept;
 // Each startup hook's removal (the native init, then the game's DLSS builder;
-// both are tried); 0,0 = removed or never made (v0.28.6). With MinHook: its
-// status and GetLastError(). With al.hooks: 1 and the hook's AL state when
-// set_enabled failed.
+// both are tried); 0,0 = removed or never made (v0.28.6), 1 and the hook's AL
+// state when set_enabled failed. (Up to v0.28.6, with MinHook: its status and
+// GetLastError().)
 std::array<int,4> disable_result() noexcept;
-// A startup hook target's code gate: under AL, whose chain may already own the
-// entry, with the original head (`head`, entry_head or game_dlss_head) and the
-// live rest; otherwise all of it live.
+// A startup hook target's code gate. AL's chain may already own the entry, so
+// the original head (`head`, entry_head or game_dlss_head) with the live rest.
 bool verify_entry(std::uintptr_t base,unsigned rva,unsigned bytes,const char *sha,const char *head) noexcept;
-// Which service holds the startup hooks: "al" (Astera Loader's al.hooks, when
-// the plugin handed it over) or "minhook" (research builds without AL).
-const char *hook_service() noexcept;
 bool settled() noexcept;
 bool supported() noexcept;
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
-bool run(HMODULE,const char *version,bool hook_pool_reserved=false,bool shared_provider=false) noexcept;
+bool run(HMODULE,const char *version,bool shared_provider=false) noexcept;
 // Alpha: the game's own DLSS 1 is declined (docs/research/game-dlss1.md):
 // right after the game's NGX init, which this transaction observes, the game
 // builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,

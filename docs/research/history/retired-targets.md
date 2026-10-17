@@ -129,4 +129,5 @@ compiled in but never run by the mod, each with its own commit:
 - the projection recorder's capture machinery and its buffers;
 - the research `#if` branches, resolved to their shipped values, with the
   FG scene probe (`scene_probe.inl`, `scene_trace.hpp`) they guarded;
-- next: the MinHook paths for running without Astera Loader.
+- the MinHook paths for running without Astera Loader: MinHook is now only
+  in the tests, behind a stand-in loader (`tests/fake_astera.cpp`).

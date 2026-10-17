@@ -66,7 +66,6 @@ namespace { mhw::frame_generation::game::Mode fg_mode{}; unsigned fg_target{}; }
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include <MinHook.h>
 #include <intrin.h>
 #include <atomic>
 #include <array>
@@ -79,16 +78,8 @@ namespace { mhw::frame_generation::game::Mode fg_mode{}; unsigned fg_target{}; }
 
 namespace {
 namespace pb = mhw::projection_binding;
-using FactoryFn = HRESULT(WINAPI*)(UINT, REFIID, void**);
-using DeviceFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
 HMODULE module{};
-FactoryFn factory_original{}; DeviceFn device_original{};
-std::array<void*, 2> targets{};
-// Own one process-lived loader reference per native API module. Hooks and
-// forwarding trampolines may outlive the worker; do not unload their targets.
-std::array<HMODULE, 2> creation_modules{};
-std::array<std::array<std::uint64_t, 4>, 2> original_heads{};
-std::array<bool, 2> created{}, enabled{};
+// AL's DEVICE_CREATED callbacks in flight (Call); the worker drains them.
 std::atomic<unsigned> active{};
 std::atomic<bool> accepting{}, completed{};
 std::uintptr_t image{};
@@ -126,7 +117,7 @@ constexpr auto capture_mode = sl::ReflexMode::eLowLatency;
 std::atomic<unsigned> reflex_requested{static_cast<unsigned>(capture_mode)}, reflex_applied{3};
 constexpr unsigned capture_seconds = 600;
 bool initialized{}, device_checked{}, success{};
-unsigned owner{}, qualified_factories{}, qualified_devices{};
+unsigned owner{}, qualified_devices{};
 std::string failure;
 // AL (alpha): al_plugin_init starts the worker and waits for this event,
 // set once the worker accepts the game's device or failed before that. Init
@@ -500,29 +491,9 @@ void failed(const std::exception& error) noexcept {
     } catch (...) { accepting.store(false); }
     completed.store(true);
 }
-HRESULT WINAPI factory_hook(UINT flags, REFIID iid, void** result) {
-    Call call; const auto error = GetLastError();
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    if (accepting.load() && (caller == image + 0x23a15fd || caller == image + 0x23a49c6)) {
-        std::lock_guard lock(sdk_mutex);
-        if (accepting.load()) {
-            try {
-                const auto rva = static_cast<unsigned>(caller - image);
-                require(gate(rva), "native-factory-code-gate");
-                ++qualified_factories;
-                // Observation only. Missing an earlier factory callback must
-                // not prevent attaching the qualified main native device.
-            } catch (const std::exception& e) { failed(e); }
-        }
-    }
-    SetLastError(error);
-    return factory_original(flags, iid, result);
-}
-// The game's main device exists: Streamline, Reflex and presentation. `out`
-// is the game's output pointer from the D3D12CreateDevice detour (it locates
-// the renderer that receives the device); null under AL, whose
-// DEVICE_CREATED phase comes from the game's own import call.
-void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created_device, void** out, unsigned caller_rva) {
+// The game's main device exists (AL's DEVICE_CREATED, from the game's own
+// import call): Streamline, Reflex and presentation.
+void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created_device) {
     require(!initialized && !device_checked && !qualified_devices, "duplicate-startup-device");
     ++qualified_devices;
     require(created_device != nullptr, "native-device-creation");
@@ -549,7 +520,7 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
                                                              : mhw::reflex::StreamlineFeatures::reflex_only);
     initialized = true;
     log << "{\"event\":\"sdk_initialized\",\"before_factory\":false,\"after_native_device_creation\":true,"
-           "\"before_native_queues_and_swapchain\":true,\"caller_rva\":" << caller_rva
+           "\"before_native_queues_and_swapchain\":true,\"caller_rva\":0"  // the D3D12CreateDevice detour's caller up to v0.28.6
         << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
         << ",\"sleep\":false,\"markers\":false}\n" << std::flush;
     auto luid = device_pin->GetAdapterLuid();
@@ -648,7 +619,7 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     // v0.28.0: the menu's choices follow the card.
     mhw::alpha::menu::card_ready();
     device_checked = true;
-    log << "{\"event\":\"device_checked\",\"caller_rva\":" << caller_rva << ",\"loader\":" << (out == nullptr)
+    log << "{\"event\":\"device_checked\",\"caller_rva\":0,\"loader\":true"
         << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())
         << ",\"luid_low\":" << luid.LowPart << ",\"luid_high\":" << luid.HighPart
         << ",\"feature_level\":" << static_cast<unsigned>(level)
@@ -656,28 +627,11 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
         << ",\"mode\":0,\"rendering_modified\":false,\"sleep_calls\":0,\"markers\":0}\n" << std::flush;
     require(state.lowLatencyAvailable, "Reflex-unavailable");
     auto factory_pin = mhw::reflex::adapter_factory(adapter);
-    std::uintptr_t backend{}, published{};
-    if (out) {
-    // This hash-qualified call writes its device to [rdi+0x18].
-    // The constructor's renderer global is not published until
-    // RVA 0x23a72d3, after queues and the swap chain already exist.
-    const auto device_output = reinterpret_cast<std::uintptr_t>(out);
-    require(device_output >= 0x18, "startup-native-device-output");
-    backend = device_output - 0x18;
-    std::uintptr_t factory{}, selected_adapter{}, stored_device{};
-    require(pb::read(backend, factory) && factory && pb::read(backend + 0x10, selected_adapter) &&
-        selected_adapter == reinterpret_cast<std::uintptr_t>(adapter) &&
-        pb::read(backend + 0x18, stored_device) && stored_device == reinterpret_cast<std::uintptr_t>(*out),
-        "startup-native-output-owner");
-    Microsoft::WRL::ComPtr<IDXGIFactory2> owner_factory;
-    require(SUCCEEDED(reinterpret_cast<IUnknown*>(factory)->QueryInterface(IID_PPV_ARGS(&owner_factory))) &&
-        owner_factory.Get() == factory_pin.Get(), "startup-native-factory-identity");
-    require(pb::read(image + 0x51c7050, published), "startup-native-publication-slot");
-    }
-    log << "{\"event\":\"factory_context\",\"source\":\"" << (out ? "native-adapter-parent" : "loader-adapter-parent")
-        << "\",\"output_owner_matches\":" << (out != nullptr) << ","
-           "\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get()) << ",\"backend\":" << backend
-        << ",\"global_backend_published\":" << (out && published == backend) << "}\n" << std::flush;
+    // The factory is the adapter's parent. (Up to v0.28.6 the D3D12CreateDevice
+    // detour also matched it against the renderer receiving the device.)
+    log << "{\"event\":\"factory_context\",\"source\":\"loader-adapter-parent\",\"output_owner_matches\":false,"
+           "\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get()) << ",\"backend\":0"
+        << ",\"global_backend_published\":false}\n" << std::flush;
     presentation = new mhw::reflex::Presentation(sdk);
     // Streamline owns pacing, generated presentation and the host-visible buffers.
     presentation->install(device_pin.Get(), factory_pin.Get(), fg_loaded ? mhw::reflex::PresentationContract::sdk_paced
@@ -691,46 +645,13 @@ void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created
     log << "{\"event\":\"presentation_installed\",\"factory\":" << reinterpret_cast<std::uintptr_t>(factory_pin.Get())
         << ",\"device_native\":true,\"returned_interfaces_native\":true,\"creation_routes\":4,\"mode\":0}\n" << std::flush;
 }
-HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID iid, void** out) {
-    Call call;
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    const auto result = device_original(adapter, level, iid, out);
-    const auto error = GetLastError();
-    if (accepting.load() && caller == image + 0x23a4e2e) {
-        std::lock_guard lock(sdk_mutex);
-        if (accepting.load()) {
-            try {
-                require(gate(0x23a4e2e), "native-device-code-gate");
-                require(SUCCEEDED(result) && out && *out, "native-device-creation");
-                attach_device(adapter, level, static_cast<IUnknown*>(*out), out, 0x23a4e2e);
-            } catch (const std::exception& e) { failed(e); }
-        }
-    }
-    SetLastError(error); return result;
-}
-bool clean_hooks() noexcept {
-    accepting.store(false); bool ok = true;
-    for (unsigned i = 0; i < targets.size(); ++i)
-        if (enabled[i]) {
-            const auto status = MH_DisableHook(targets[i]);
-            if (status == MH_OK || status == MH_ERROR_DISABLED) enabled[i] = false; else ok = false;
-        }
+// No device is attached after this: admission ends and a DEVICE_CREATED
+// callback already inside finishes. False if one is still running.
+bool stop_device_attach() noexcept {
+    accepting.store(false);
     const auto began = GetTickCount64();
     while (active.load() && GetTickCount64() - began < 30000) Sleep(10);
-    if (active.load()) return false;
-    for (unsigned i = 0; i < targets.size(); ++i) if (created[i]) {
-        std::array<std::uint64_t, 4> current{}; bool read = true;
-        for (unsigned n = 0; n < current.size(); ++n)
-            read = pb::read(reinterpret_cast<std::uintptr_t>(targets[i]) + n*8ULL, current[n]) && read;
-        const bool restored = read && current == original_heads[i];
-        ok = ok && restored;
-        try { log << "{\"event\":\"hook_restoration\",\"kind\":" << i << ",\"target\":" << reinterpret_cast<std::uintptr_t>(targets[i])
-            << ",\"restored\":" << restored << ",\"original_head_sha256\":" << quoted(pb::bytes_sha256(original_heads[i].data(), 32))
-            << "}\n" << std::flush; } catch (...) { ok = false; }
-    }
-    // Keep the DLL/trampolines pinned for originals already fetched by callers.
-    // Do not remove hooks, uninitialize MinHook or unload the interposer here.
-    return ok;
+    return !active.load();
 }
 bool query_swap(std::uintptr_t address, IDXGISwapChain** owned, DXGI_SWAP_CHAIN_DESC* desc) noexcept {
     __try {
@@ -762,24 +683,6 @@ bool describe_swap() {
         Sleep(50);
     }
     return false;
-}
-void load_creation_api(unsigned kind, const wchar_t* name, const char* symbol) {
-    const bool was_loaded = GetModuleHandleW(name) != nullptr;
-    wchar_t system[32768]{}, actual[32768]{};
-    const auto length = GetSystemDirectoryW(system, static_cast<UINT>(std::size(system)));
-    require(length && length < std::size(system), "system-directory");
-    const auto path = std::filesystem::path(system) / name;
-    creation_modules[kind] = LoadLibraryExW(path.c_str(), nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    require(creation_modules[kind] != nullptr, "load-native-creation-module");
-    const auto count = GetModuleFileNameW(creation_modules[kind], actual, static_cast<DWORD>(std::size(actual)));
-    require(count && count < std::size(actual) && std::filesystem::equivalent(path, actual), "native-module-path");
-    targets[kind] = reinterpret_cast<void*>(GetProcAddress(creation_modules[kind], symbol));
-    require(targets[kind] && pb::executable(reinterpret_cast<std::uintptr_t>(targets[kind]),
-        reinterpret_cast<std::uintptr_t>(creation_modules[kind])), "native-creation-export");
-    log << "{\"event\":\"api_module\",\"kind\":" << kind << ",\"was_loaded\":" << was_loaded
-        << ",\"loaded_from_system32\":true,\"module\":" << reinterpret_cast<std::uintptr_t>(creation_modules[kind])
-        << ",\"target\":" << reinterpret_cast<std::uintptr_t>(targets[kind]) << "}\n" << std::flush;
 }
 // Swap-chain view the host received through the routed calls (diagnostic).
 int fg_buffers_json(char* out, int size) noexcept {
@@ -1015,42 +918,10 @@ DWORD WINAPI worker(void*) noexcept {
         // Refuse a late load; public API hooks are installed before first use.
         std::uintptr_t backend{}; require(pb::read(image + 0x51c7050, backend), "backend-slot");
         if (backend) { std::uintptr_t device{}; require(pb::read(backend + 0x18, device) && !device, "main-device-already-created"); }
-        // The native constructor loads both modules dynamically. They are not
-        // static imports of this probe, so GetModuleHandle alone races startup.
-        // Resolve exact system modules before installing either creation hook.
-        // Under AL the device arrives through DEVICE_CREATED instead.
-        if (!mhw::astera::active()) {
-            load_creation_api(0, L"dxgi.dll", "CreateDXGIFactory2");
-            load_creation_api(1, L"d3d12.dll", "D3D12CreateDevice");
-        }
-        const bool pool_ready=mhw::reflex::LiveFrames::reserve(image,reason);
-        const auto& pool=pb::pool_state();
-        log << "{\"event\":\"frame_pool\",\"ready\":" << pool_ready << ",\"attempted\":" << pool.attempted
-            << ",\"policy_available\":" << pool.policy_available << ",\"policy_flags\":" << pool.policy_flags
-            << ",\"status\":" << pool.status << ",\"win32\":" << pool.win32 << ",\"origin\":" << pool.origin
-            << ",\"slot\":" << pool.slot << ",\"page\":" << pool.page << ",\"reason\":" << quoted(reason) << "}\n" << std::flush;
-        require(pool_ready,reason.c_str());
-        require(MH_Initialize() == MH_ERROR_ALREADY_INITIALIZED, "hook-initialize-after-reservation");
-        for (unsigned i = 0; i < targets.size() && !mhw::astera::active(); ++i) {
-            for (unsigned n = 0; n < original_heads[i].size(); ++n)
-                require(pb::read(reinterpret_cast<std::uintptr_t>(targets[i]) + n*8ULL, original_heads[i][n]), "original-api-head");
-            void* original{};
-            require(MH_CreateHook(targets[i], i == 0 ? reinterpret_cast<void*>(&factory_hook) : reinterpret_cast<void*>(&device_hook), &original) == MH_OK, "creation-hook");
-            created[i] = true;
-            if (i == 0) factory_original = reinterpret_cast<FactoryFn>(original); else device_original = reinterpret_cast<DeviceFn>(original);
-        }
-        for (unsigned i = 0; i < targets.size() && !mhw::astera::active(); ++i) require(MH_QueueEnableHook(targets[i]) == MH_OK, "queue-creation-hook");
-        log << "{\"event\":\"prepared\",\"loader\":" << mhw::astera::active() << ",\"queued_api_hooks\":" << (mhw::astera::active() ? 0 : 2)
-            << ",\"sdk_initialized\":false,\"original_heads_rva\":"
-            << reinterpret_cast<std::uintptr_t>(&original_heads) - reinterpret_cast<std::uintptr_t>(module)
-            << ",\"targets\":[" << reinterpret_cast<std::uintptr_t>(targets[0]) << ','
-            << reinterpret_cast<std::uintptr_t>(targets[1]) << "]}\n" << std::flush;
+        // The device arrives through AL's DEVICE_CREATED (on_phase).
+        log << "{\"event\":\"prepared\",\"loader\":true,\"sdk_initialized\":false}\n" << std::flush;
         accepting.store(true);
-        if (mhw::astera::active()) signal_startup();
-        else {
-            enabled.fill(true); // cleanup also covers a partially applied batch
-            require(MH_ApplyQueued() == MH_OK, "enable-creation-hooks");
-        }
+        signal_startup();
         // Native API callbacks run on the game thread while this worker admits
         // the later NGX initializer. One early pool, one worker, two SDK owners.
         mhw::reflex::temporal::prepare(module,output,image,runtime);
@@ -1060,8 +931,8 @@ DWORD WINAPI worker(void*) noexcept {
           log << "{\"event\":\"ready\",\"early_api_hooks\":2,\"startup_completed\":" << completed.load() << "}\n" << std::flush; }
         const auto began = GetTickCount64();
         while (!completed.load() && GetTickCount64() - began < 180000) Sleep(20);
-        const bool hooks_clean = clean_hooks();
-        const bool swap_observed = success && hooks_clean && describe_swap() && !swapchain_chains_missing.load();
+        const bool attach_stopped = stop_device_attach();
+        const bool swap_observed = success && attach_stopped && describe_swap() && !swapchain_chains_missing.load();
         if (!swap_observed) mhw::alpha::status::worker_failed(failure.empty() ? std::string_view("presentation") : std::string_view(failure));
         if (swap_observed) {
             require(driver_mode("startup_off",false),"driver-startup-Off");
@@ -1362,7 +1233,7 @@ DWORD WINAPI worker(void*) noexcept {
                 << ",\"sdk_retained\":true,\"presentation_routed\":" << presentation->snapshot().routing << ",\"fg_off_requested\":true}\n" << std::flush; } catch (...) {}
             return 3;
         }
-        const bool clean = clean_hooks();
+        const bool clean = stop_device_attach();
         std::lock_guard lock(sdk_mutex);
         const bool sdk_clean=close_sdk(); // cleanup emits records before this JSON object
         try { log << "{\"event\":\"worker_failed\",\"reason\":" << quoted(e.what()) << ",\"hooks_restored\":" << clean
@@ -1416,7 +1287,7 @@ void AL_CALL on_phase(al_plugin_t*, al_phase_t phase, const void* data) {
                     if (accepting.load()) {
                         try {
                             attach_device(static_cast<IUnknown*>(d->adapter), static_cast<D3D_FEATURE_LEVEL>(d->minimum_feature_level),
-                                static_cast<IUnknown*>(d->device), nullptr, 0);
+                                static_cast<IUnknown*>(d->device));
                         } catch (const std::exception& e) { failed(e); }
                     }
                 }
@@ -1440,6 +1311,9 @@ al_result_t start(const al_api_t* api, const al_init_t* init) {
     const auto refuse = [&](const std::string& why) { loader_status(AL_STATUS_DISABLED, why); loader_log(AL_LOG_ERROR, why); return AL_ERROR; };
     loader_d3d12 = static_cast<const al_d3d12_t*>(api->get_interface(init->self, AL_D3D12_INTERFACE, AL_D3D12_VERSION));
     if (!loader_d3d12 || loader_d3d12->size < sizeof(al_d3d12_t)) return refuse("this Astera Loader has no al.d3d12 1.0");
+    // Every game-function hook of the mod is in AL's al.hooks chains.
+    const auto* game_hooks = static_cast<const al_hooks_t*>(api->get_interface(init->self, AL_HOOKS_INTERFACE, AL_HOOKS_VERSION));
+    if (!game_hooks || game_hooks->size < sizeof(al_hooks_t)) return refuse("this Astera Loader has no al.hooks 1.0");
     const auto* game = static_cast<const al_game_t*>(api->get_interface(init->self, AL_GAME_INTERFACE, AL_GAME_VERSION));
     if (game && game->size >= sizeof(al_game_t)) {
         if (game->graphics == AL_GRAPHICS_DX11) return refuse("the game is set to DirectX 11; this mod needs DirectX 12");
@@ -1447,12 +1321,7 @@ al_result_t start(const al_api_t* api, const al_init_t* init) {
     }
     if (loader_d3d12->claim_presentation(init->self) != AL_OK) return refuse("another plugin holds the presentation role (see the log)");
     mhw::astera::activate(loader_begin, loader_end, init->self);
-    // Game functions other plugins share (the live frame hooks). Without
-    // al.hooks the worker's frame stage fails closed: no Reflex or frame
-    // generation, as with any other missing frame gate.
-    const auto* game_hooks = static_cast<const al_hooks_t*>(api->get_interface(init->self, AL_HOOKS_INTERFACE, AL_HOOKS_VERSION));
-    if (game_hooks && game_hooks->size >= sizeof(al_hooks_t)) mhw::astera::provide_game_hooks(game_hooks, init->self);
-    else loader_log(AL_LOG_WARNING, "this Astera Loader has no al.hooks 1.0; Reflex and frame generation stay off");
+    mhw::astera::provide_game_hooks(game_hooks, init->self);
     std::vector<mhw::astera::Hook> hooks;
     mhw::reflex::presentation_astera_hooks(hooks);
     mhw::temporal_present::observer::astera_hooks(hooks);

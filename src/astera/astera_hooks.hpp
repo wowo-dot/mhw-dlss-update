@@ -6,10 +6,10 @@
 // detour is registered at PRE_MAIN with the storage where AL writes the
 // continuation (the next plugin's detour or the original method), and AL owns
 // the one patch per method. Owners keep their detour bodies; the stored
-// continuation replaces the MinHook trampoline. A gate in front of each
-// registered detour passes calls straight on while its owner is not installed,
-// as an absent hook did. Without AL (research builds), active() is false and
-// every owner keeps its MinHook path.
+// continuation replaces a trampoline. A gate in front of each registered
+// detour passes calls straight on while its owner is not installed, as an
+// absent hook would. The DLL starts only under AL (al_plugin_init), with both
+// interfaces; tests use a stand-in loader (tests/fake_astera.hpp).
 //
 // al.hooks: game functions other plugins may hook too (Main:Update) join AL's
 // one chain per function instead of a patch of the mod's own.
@@ -30,11 +30,11 @@ void activate(void (*begin)(void *),void (*end)(void *),void *context) noexcept;
 bool active() noexcept;
 void begin_internal() noexcept;
 void end_internal() noexcept;
-// Inside an Internal scope on this thread, with or without AL: the mod's own
-// MinHook detours pass such calls on, as AL's chain does.
+// Inside an Internal scope on this thread: the mod's own detours pass such
+// calls on, as AL's chain does.
 bool internal_call() noexcept;
 // Calls the SDK proxies make into DXGI/D3D12 (creation, upgrade) reach the
-// original methods once, past every plugin's detour. No-op without AL.
+// original methods once, past every plugin's detour.
 struct Internal {
     Internal() noexcept {begin_internal();}
     ~Internal() {end_internal();}
@@ -73,21 +73,21 @@ std::uint32_t game_hook(const GameHook &hook) noexcept;
 // straight to the first detour, and each later one is called by the one
 // before. The mod's own game hooks use this order (v0.29.0).
 inline constexpr std::int32_t first_in_chain=-1000000;
-// One of the mod's own game-function hooks: through al.hooks when the plugin
-// handed it over (the shipped DLL), else MinHook (research builds; MinHook
-// initialized by the caller). hook_owned() creates and enables it at once, so
-// `next` must be the very pointer the detour continues with: it is written
-// before the detour can run, and stays valid after unhook_owned().
+// One of the mod's own game-function hooks, in its al.hooks chain.
+// hook_owned() registers it, live at once, so `next` must be the very pointer
+// the detour continues with: it is written before the detour can run, and
+// stays valid after unhook_owned(). False without al.hooks or when AL
+// refuses it (AL's plugin log says why).
 struct OwnedHook {
     const char *name{};     // for AL's log, e.g. "mhw_dlss Render:Update"
     const char *pattern{};  // the target's first 16 original bytes (al.hooks checks them)
     void *target{};
-    std::uint32_t handle{}; // al.hooks; 0 with MinHook or when refused
-    bool minhook{},live{};
+    std::uint32_t handle{}; // 0 until registered, and when refused
+    bool live{};
 };
 bool hook_owned(OwnedHook &hook,void *detour,void **next) noexcept;
-// Takes it out of the game's path again (AL: set_enabled; MinHook: disabled,
-// trampoline kept). True when it is out, or was never in.
+// Takes it out of its chain again (set_enabled). True when it is out, or was
+// never in.
 bool unhook_owned(OwnedHook &hook) noexcept;
 // Takes the detour out of its chain or puts it back; calls already inside it
 // finish normally. False for an unknown handle or without al.hooks.

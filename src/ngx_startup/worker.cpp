@@ -1,7 +1,6 @@
 #include "startup.hpp"
 #include "readiness.hpp"
 #include "../projection_binding/memory.hpp"
-#include "../hooking/thread_snapshot.hpp"
 #include <windows.h>
 #include <cwchar>
 #include <filesystem>
@@ -12,12 +11,11 @@
 namespace {
 namespace fs=std::filesystem;namespace pb=mhw::projection_binding;namespace startup=mhw::ngx_startup;
 void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
-// Each startup hook's removal (startup.hpp) and MinHook's thread lists: taken
-// with Windows PSS, or with Toolhelp where PSS failed (v0.28.6).
+// Each startup hook's removal (startup.hpp). Up to v0.28.6 also MinHook's
+// thread lists ("thread_lists") and hook_service "minhook" without AL.
 std::ostream &removal(std::ostream &log){
-    const auto r=startup::disable_result();const auto threads=al::hooks::thread_snapshot_counts();
-    return log<<"\"disable_result\":["<<r[0]<<','<<r[1]<<','<<r[2]<<','<<r[3]<<"],\"thread_lists\":["<<threads.attempts<<','<<threads.succeeded
-              <<"],\"hook_service\":\""<<startup::hook_service()<<'"';
+    const auto r=startup::disable_result();
+    return log<<"\"disable_result\":["<<r[0]<<','<<r[1]<<','<<r[2]<<','<<r[3]<<"],\"hook_service\":\"al\"";
 }
 fs::path preset_output,preset_runtime;  // use_paths() (alpha); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
@@ -61,7 +59,7 @@ fs::path read_path(const fs::path &file){
 void mhw::ngx_startup::use_paths(const fs::path &output,const fs::path &runtime) noexcept {
     try{preset_output=output;preset_runtime=runtime;}catch(...){preset_output.clear();preset_runtime.clear();}
 }
-bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_reserved,bool shared_provider) noexcept {
+bool mhw::ngx_startup::run(HMODULE module,const char *version,bool shared_provider) noexcept {
     HMODULE pinned{};
     if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCWSTR>(&run),&pinned))return false;
     std::ofstream log;
@@ -92,7 +90,7 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
            <<"\",\"graphics_api\":\"D3D12\",\"swapchain_observed\":false,\"gpu_commands\":0,\"feature_creations\":0,\"hooks\":1}\n"<<std::flush;
         require(reinterpret_cast<std::uintptr_t>(GetProcAddress(GetModuleHandleW(nullptr),"NVSDK_NGX_D3D12_Init"))==base+startup::entry_rva,"client-export");
         wait_for_code(base,log);
-        startup::install({reinterpret_cast<void *>(base+startup::entry_rva),base+startup::caller_rva,base+0x51d8808,runtime,folder/(name+".sdk-data"),base+0x51c7050,hook_pool_reserved,shared_provider},log);
+        startup::install({reinterpret_cast<void *>(base+startup::entry_rva),base+startup::caller_rva,base+0x51d8808,runtime,folder/(name+".sdk-data"),base+0x51c7050,shared_provider},log);
         const auto began=GetTickCount64();while(!startup::done()&&GetTickCount64()-began<600000)Sleep(50);
         const bool disabled=startup::disable();const auto end=GetTickCount64();
         while(!startup::settled()&&GetTickCount64()-end<30000)Sleep(10);

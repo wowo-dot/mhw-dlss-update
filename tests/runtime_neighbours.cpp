@@ -8,7 +8,7 @@
 namespace nb=mhw::test::neighbours;
 
 namespace mhw::render_resolution {
-bool install(std::uintptr_t,float,std::string &reason,bool,bool){reason="render resolution test double";return false;}
+bool install(std::uintptr_t,float,std::string &reason,bool){reason="render resolution test double";return false;}
 bool ready(std::uintptr_t,float,std::string &reason){reason="render resolution test double";return false;}
 void observe_viewports(ID3D12GraphicsCommandList *,unsigned,const D3D12_VIEWPORT *,std::uintptr_t) noexcept {}
 bool active_ready() noexcept {return nb::resolution_active;}

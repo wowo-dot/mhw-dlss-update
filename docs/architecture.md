@@ -20,8 +20,8 @@ the shipped configuration.
   - none of them has an `MHW_` define (`mhw_fg_reflex_presentation` had
     `MHW_FG_SCENE_PROBE`; its presentation buffers, which the crash log
     writes, are now unconditional);
-  - the NVIDIA DLSS SDK's `nvsdk_ngx_d.lib`, MinHook and DxilHash are linked
-    in too.
+  - the NVIDIA DLSS SDK's `nvsdk_ngx_d.lib` and DxilHash are linked in too
+    (and MinHook, up to 0.28.6).
 - **Size at v0.28.6** (section 9 has the cleanup's progress):
   - about 27,000 lines of our own code (21,900 in the DLL's files and their
     headers, 5,200 in the libraries), out of 56,000 in `src/`;
@@ -62,12 +62,13 @@ the shipped configuration.
    - checks the exe hash and refuses DirectX 11;
    - claims the presentation role and registers every al.d3d12 detour at order
      0;
-   - hands over al.hooks;
+   - requires al.hooks and hands it over (0.29.0: refuses without it, as
+     without al.d3d12);
    - starts the worker and waits up to 30 s for it to accept;
    - adds the CMFM pages.
 2. **Worker, before the device exists:**
    - reads the ini, opens the log, installs the crash log;
-   - reserves the MinHook trampoline pool;
+   - (up to 0.28.6: reserved a MinHook trampoline pool);
    - accepts.
 3. **Game render-setup thread, at DEVICE_CREATED** (`attach_device`, 562-757):
    - gathers the card's capabilities;
@@ -145,11 +146,12 @@ instructions, and on 2026-10-17 the clean database showed r11 dead after both:
 every path reaches a call or a return before r11 is read. So every hook below
 can go to al.hooks.
 
-**Game functions (MinHook unless noted):**
+**Game functions** (al.hooks chains since 0.29.0; MinHook up to 0.28.6, except
+the frame boundaries):
 
 | Target | What | Module | Stub | Site |
 |---|---|---|---|---|
-| 0x1af2b60 Main:Update, 0x229a080 Render:Publish, 0x23a7f50 Render:Submit | Reflex frame boundaries | live_frames | frame_boundaries_entry | start, **al.hooks already** |
+| 0x1af2b60 Main:Update, 0x229a080 Render:Publish, 0x23a7f50 Render:Submit | Reflex frame boundaries | live_frames | frame_boundaries_entry | start |
 | 0x273f230 NVSDK_NGX_D3D12_Init, 0x23842a0 the game's DLSS 1 builder | NGX startup, DLSS 1 decline | ngx_startup | none | start |
 | 0x23c9980 TAA packet producer, 0x259cc20 Dispatch executor, 0x23cd170 depth copy producer, 0x259df30 copy executor, 0x228f3b0 viewport projection | DLSS requests, depth, jitter | continuous_dlaa runtime | temporal/depth_route/jitter_entry | start |
 | 0x228e770 sCamera::draw, 0x2392150 TAA2 Execute, 0x23931e0 / 0x2596090 / 0x25979b0 AA jitter units, 0x24f1fc0 post queue | Frame ownership, TAA2 forced, jitter units skipped | activation | activation_entry | start |
@@ -235,6 +237,10 @@ event's `schema`.
   `render_resolution::finish`.
 - An install that fails after queueing MinHook enables leaves them in
   MinHook's global queue; game_options and render_resolution stay enabled.
+  (Gone with MinHook in 0.29.0; under AL each hook is live as registered.)
+- Under AL, `presentation_hook_restoration` reports `restored:false` and the
+  hash of an all-zero head for every presentation method: AL owns those
+  patches, so nothing restores or records them.
 
 **Fluff:**
 - About 12 MB of research buffers, and the capture machinery of
@@ -324,4 +330,30 @@ Behaviour stays the same; the log fields stay.
   - `continuous_runtime_tests` used to compile `runtime.cpp` without the
     switches, so it tested the unscaled path, which no longer ships. It now
     runs the shipped path, with test doubles for the modules the runtime
-    calls (`tests/runtime_neighbours.cpp`).
+    calls (`tests/runtime_neighbours.cpp`);
+  - dead functions out, found with a link without inlining and
+    `/VERBOSE:REF` (unreferenced external functions) and clang-tidy's
+    unused-code diagnostics (internal ones): the code after `return 0`,
+    `boot_monitor`, `path_setting`, `observed_zero`, `yielded_now`, the
+    filter-shader builder, the scene probe, and the recorder's API and
+    capture records (the silhouette scope's per-thread `pb::Draw` became a
+    four-field `DrawSite`);
+  - MinHook out of the DLL. Every game-function hook is in an al.hooks
+    chain, every DXGI/D3D12 detour in an al.d3d12 chain; start-up refuses
+    an Astera Loader without al.hooks. Gone with it: the trampoline pool
+    (one RWX page near the game's code, reserved even under AL), the pre-AL
+    creation hooks, the viewport hook path, the observer's partial hook
+    sets and its research `capture`/`sample`/`write`, and the thread
+    snapshot adapter (AL carries that fix). Log changes: `frame_pool`,
+    `reservation`, `api_module` and `hook_restoration` are gone, `prepared`
+    keeps `loader` and `sdk_initialized`, the NGX removal drops
+    `thread_lists`; `hook_service` is always `"al"`. No log tool reads the
+    dropped events for shipped logs (`reflex_frames.py` and
+    `review_reflex_presentation.py` check them only in old research logs).
+    Tests hook through a stand-in loader on MinHook
+    (`tests/fake_astera.cpp`), so they run the shipped path.
+- Deferred to step 4, where their files are split anyway: the presentation
+  layer's `OwnershipCall` record (threaded through `route()` and every
+  swap-chain hook; the GetBuffer hook also uses it for the crash log's
+  buffer map), and the DLSS frame's one-shot and capture modes (the DLL
+  always builds it continuous, caller-retained, without captures).

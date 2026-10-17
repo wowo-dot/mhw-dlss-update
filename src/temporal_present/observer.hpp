@@ -1,12 +1,11 @@
 #pragma once
 #include "bindings.hpp"
 #include "../astera/astera_hooks.hpp"
-#include <iosfwd>
 #include <string>
 #include <vector>
 
 namespace mhw::temporal_present::observer {
-inline constexpr unsigned hook_count=18, list_limit=128, sample_limit=9;
+inline constexpr unsigned hook_count=18, list_limit=128;
 struct RasterBindings {
     std::uint64_t generation{};
     D3D12_VERTEX_BUFFER_VIEW vertex_buffer{};
@@ -25,11 +24,12 @@ struct RasterBindings {
 struct Predicate {std::uintptr_t buffer{};std::uint64_t offset{};D3D12_PREDICATION_OP operation{};bool known{};};
 using Resolver=bool(*)(std::uintptr_t,unsigned,std::uintptr_t &) noexcept;
 using ViewportListener=void(*)(ID3D12GraphicsCommandList *,unsigned,const D3D12_VIEWPORT *,std::uintptr_t) noexcept;
-// Listener sees admitted, successful native viewport calls; it never forwards the API.
-// It must live until this observer is disabled and all callbacks are drained.
-// Hook installation/removal affects only this observer's targets; it never
-// applies MinHook operations queued by another owner.
-bool install(ID3D12Device *,Resolver,std::string &,bool raster=false,ViewportListener=nullptr,bool predicate=false,bool indexed=false);
+// AL installed the detours astera_hooks() registered (the full set: bindings,
+// raster, predicate, indexed); install() checks them against the resolved
+// methods and starts them. The listener sees admitted, successful native
+// viewport calls; it never forwards the API. It must live until this observer
+// is disabled and all callbacks are drained.
+bool install(ID3D12Device *,Resolver,std::string &,ViewportListener=nullptr);
 void begin() noexcept;
 // The owner supplies only successful, validated DIRECT-list Reset generations,
 // and pins every admitted command list until it calls forget() for it.
@@ -38,8 +38,6 @@ void reset(ID3D12GraphicsCommandList *,std::uint64_t,ID3D12PipelineState *) noex
 // thread can record with it again. Its slot is freed before the owner drops
 // the pin, so a new list at the same address starts clean.
 void forget(ID3D12GraphicsCommandList *) noexcept;
-bool capture(unsigned,std::uint64_t,ID3D12GraphicsCommandList *,std::uintptr_t expected_root,std::uintptr_t expected_pipeline) noexcept;
-bool sample(unsigned,Bindings &) noexcept;
 bool matches_current(ID3D12GraphicsCommandList *,const Bindings &) noexcept;
 bool current(ID3D12GraphicsCommandList *,Bindings &) noexcept;
 // Diagnostic copy including an incomplete binding set. Never authorizes work;
@@ -53,8 +51,6 @@ bool settled() noexcept;
 bool healthy() noexcept;
 bool hooks_disabled() noexcept;
 bool finish() noexcept;
-// AL: all observer detours (the full raster/predicate/indexed set) with the
-// storage AL fills; install() then only checks them and starts them.
+// All observer detours with the storage AL fills, registered at PRE_MAIN.
 void astera_hooks(std::vector<astera::Hook>&);
-void write(std::ostream &);
 }

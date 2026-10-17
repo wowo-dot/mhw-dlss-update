@@ -11,10 +11,9 @@ struct InputStamp {
     float active_scale{},content_scale{};
     bool operator==(const InputStamp &)const=default;
 };
-// shared_viewport means another owner forwards successful RSSetViewports calls
-// to observe_viewports; this controller must not create or disable that hook.
+// The observer forwards successful RSSetViewports calls to observe_viewports.
 // yielded_start: installed yielded (the player's DLSS Off at start, yield()).
-bool install(std::uintptr_t image,float scale,std::string &reason,bool shared_viewport=false,bool yielded_start=false);
+bool install(std::uintptr_t image,float scale,std::string &reason,bool yielded_start=false);
 // install()'s qualification without hooks or retained state: the renderer is
 // discovered, the plan is valid, the sizing code matches and the native sizing
 // snapshot is admitted. Early in startup this fails and can be retried.

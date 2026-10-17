@@ -34,25 +34,6 @@ endfunction()
 
 # --- Dependencies -------------------------------------------------------------
 
-# MinHook v1.3.4, commit c3fcafdc10146beb5919319d0683e44e3c30d537, vendored as in
-# Astera Loader (third_party/minhook, BSD-2): hook.c has its one adapter
-# (AL_MINHOOK_PROCESS_THREADS), which lists the process's own threads with
-# Windows PSS (src/hooking/thread_snapshot.cpp) before the unchanged Toolhelp
-# path. On one player's PC the system-wide Toolhelp snapshot failed, so the
-# startup hook could not be removed and the mod never armed (v0.28.6, tifa-4).
-set(minhook_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/minhook")
-add_library(mhw_thread_snapshot STATIC src/hooking/thread_snapshot.cpp src/hooking/thread_snapshot.hpp)
-target_compile_features(mhw_thread_snapshot PRIVATE cxx_std_20)
-target_compile_definitions(mhw_thread_snapshot PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(mhw_thread_snapshot PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
-add_library(minhook STATIC
-    third_party/minhook/src/buffer.c third_party/minhook/src/hook.c
-    third_party/minhook/src/trampoline.c third_party/minhook/src/hde/hde64.c)
-target_include_directories(minhook PUBLIC third_party/minhook/include PRIVATE third_party/minhook/src third_party/minhook/src/hde)
-target_compile_definitions(minhook PRIVATE AL_MINHOOK_PROCESS_THREADS)
-target_link_libraries(minhook PRIVATE mhw_thread_snapshot)
-set_target_properties(minhook PROPERTIES PREFIX "" RELEASE_POSTFIX ".x64" DEBUG_POSTFIX ".x64d" RELWITHDEBINFO_POSTFIX ".x64" MINSIZEREL_POSTFIX ".x64")
-
 # The two public NVIDIA SDKs, local and pinned by SHA-256 (README, "Building").
 include(cmake/NvidiaDlssSdk.cmake)
 include(cmake/NvidiaStreamline.cmake)
@@ -64,7 +45,6 @@ include(cmake/DxbcHash.cmake)
 add_library(mhw_astera_hooks STATIC src/astera/astera_hooks.cpp)
 mhw_library(mhw_astera_hooks)
 target_compile_features(mhw_astera_hooks PUBLIC cxx_std_20)
-target_link_libraries(mhw_astera_hooks PUBLIC minhook)  # OwnedHook's fallback without AL
 
 # Binding restore, the spatial recovery pass and unfiltered copies.
 add_library(mhw_temporal_present STATIC src/temporal_present/output.cpp src/temporal_present/bindings.cpp src/temporal_present/unfiltered.cpp)
@@ -77,7 +57,7 @@ target_link_libraries(mhw_temporal_present PUBLIC d3d12 dxgi dxguid d3dcompiler)
 add_library(mhw_temporal_state STATIC src/temporal_present/observer.cpp)
 mhw_library(mhw_temporal_state)
 target_compile_features(mhw_temporal_state PUBLIC cxx_std_20)
-target_link_libraries(mhw_temporal_state PUBLIC mhw_temporal_present minhook mhw_astera_hooks)
+target_link_libraries(mhw_temporal_state PUBLIC mhw_temporal_present mhw_astera_hooks)
 
 # Shader adapters for the full-size post chain: geometry checks, silhouettes,
 # the screen-position rewriter.
@@ -115,13 +95,13 @@ target_compile_features(mhw_ngx_startup PUBLIC cxx_std_20)
 target_include_directories(mhw_ngx_startup PRIVATE src/bridge_probe)
 target_include_directories(mhw_ngx_startup SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_compile_definitions(mhw_ngx_startup PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_ngx_startup PUBLIC minhook mhw_thread_snapshot mhw_astera_hooks bcrypt d3d12 dxgi dxguid
+target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid
     "${MHW_NGX_SDK_ROOT}/lib/Windows_x86_64/x64/nvsdk_ngx_d.lib")
 
 # Presentation through Streamline: the identity chain, the live FG switch.
 add_library(mhw_fg_reflex_presentation STATIC src/reflex/presentation.cpp)
 mhw_library(mhw_fg_reflex_presentation)
-target_link_libraries(mhw_fg_reflex_presentation PUBLIC mhw_streamline_reflex minhook d3d12 dxgi dxguid mhw_astera_hooks)
+target_link_libraries(mhw_fg_reflex_presentation PUBLIC mhw_streamline_reflex d3d12 dxgi dxguid mhw_astera_hooks)
 
 # --- The shipped mod ------------------------------------------------------------
 
@@ -135,7 +115,7 @@ add_library(mhw_dlss_alpha SHARED
     src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
     src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm
     src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
-    src/projection_binding/trampoline_pool.cpp src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
+    src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
     src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
     src/scaled_temporal/stream_route.cpp src/scaled_temporal/stream_entry.asm
     src/render_resolution/runtime.cpp src/render_resolution/resolution_entry.asm
@@ -150,10 +130,9 @@ add_library(mhw_dlss_alpha SHARED
     src/alpha/status.cpp src/alpha/menu.cpp src/continuous_dlaa/game_options.cpp)
 mhw_cxx(mhw_dlss_alpha)
 target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
-target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
-    "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
+target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe)
 target_compile_definitions(mhw_dlss_alpha PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_dlss_alpha PRIVATE minhook bcrypt d3d12 dxgi dxguid
+target_link_libraries(mhw_dlss_alpha PRIVATE bcrypt d3d12 dxgi dxguid
     mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
 # The map file names this DLL's functions in crash stacks and stack-sampler
 # profiles (tools/profile_report.py; keep it with each handed-out build).
@@ -185,10 +164,19 @@ function(mhw_test executable)
 endfunction()
 
 if(BUILD_TESTING)
+    # MinHook v1.3.4 (third_party/minhook, BSD-2, commit
+    # c3fcafdc10146beb5919319d0683e44e3c30d537, vendored as in Astera Loader)
+    # for the tests' stand-in loader (tests/fake_astera.cpp). The shipped DLL
+    # links no hooking library: Astera Loader holds every hook.
+    add_library(minhook STATIC
+        third_party/minhook/src/buffer.c third_party/minhook/src/hook.c
+        third_party/minhook/src/trampoline.c third_party/minhook/src/hde/hde64.c)
+    target_include_directories(minhook PUBLIC third_party/minhook/include PRIVATE third_party/minhook/src third_party/minhook/src/hde)
+
     # The game-hook code under test compiles with these, as in the shipped DLL.
-    set(binding_includes src/projection_binding src/bridge_probe "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
+    set(binding_includes src/projection_binding src/bridge_probe)
     set(binding_common src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
-        src/projection_binding/trampoline_pool.cpp src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
+        src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
         src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp)
     set(temporal_binding_sources src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
         src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm)
@@ -228,7 +216,7 @@ if(BUILD_TESTING)
         INCLUDES ${binding_includes} LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid
         TEST native_activation_contract)
     mhw_test(render_resolution_tests SOURCES tests/render_resolution_tests.cpp src/render_resolution/resolution_entry.asm ${binding_common}
-        INCLUDES ${binding_includes} LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid TEST render_resolution_contract)
+        INCLUDES ${binding_includes} LIBS mhw_astera_hooks bcrypt d3d12 dxgi dxguid TEST render_resolution_contract)
 
     # Game inputs: TAA bindings, depth routes and schedules, projection snapshots.
     mhw_test(temporal_inputs_tests SOURCES tests/temporal_inputs_tests.cpp tests/temporal_fixture.asm
@@ -301,12 +289,10 @@ if(BUILD_TESTING)
     mhw_test(mhw_reflex_sdk_fixture SOURCES tools/reflex_sdk_fixture.cpp LIBS mhw_streamline_reflex d3d12 dxgi dxguid user32 NO_TEST)
     mhw_test(mhw_reflex_startup_fixture SOURCES tools/reflex_startup_fixture.cpp LIBS mhw_streamline_reflex d3d12 dxgi dxguid NO_TEST)
 
-    # Diagnostics: perf toggles, hook timing, the stack sampler, MinHook's
-    # thread adapter.
+    # Diagnostics: perf toggles, hook timing, the stack sampler.
     mhw_test(perf_tests SOURCES tests/perf_tests.cpp src/bridge_probe/bounded_scalar_read.cpp src/projection_binding/identity.cpp
         INCLUDES src/projection_binding src/bridge_probe LIBS bcrypt)
     mhw_test(sampler_tests SOURCES tests/sampler_tests.cpp src/perf/sampler.cpp)
-    mhw_test(minhook_threads_tests SOURCES tests/minhook_threads_tests.cpp LIBS minhook mhw_thread_snapshot TEST minhook_threads)
 
     # The log and release tools' Python tests (tests/test_*.py): fg_game,
     # reflex_frames, package_release, presentmon_summary.

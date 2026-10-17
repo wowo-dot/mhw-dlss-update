@@ -29,7 +29,7 @@ int main(){
     check(mhw::test::fake_astera::install_methods(hooks,{.command_list=vtable.Get()}),"loader installs the observer's detours");
     std::string reason;
     const auto resolver=[](std::uintptr_t p,unsigned slot,std::uintptr_t &target)noexcept{target=(*reinterpret_cast<std::uintptr_t **>(p))[slot];return target!=0;};
-    check(obs::install(device.Get(),resolver,reason,true,nullptr,true,true),reason.c_str());obs::begin();
+    check(obs::install(device.Get(),resolver,reason),reason.c_str());obs::begin();
     std::vector<ComPtr<ID3D12GraphicsCommandList>> lists;
     for(unsigned i=0;i<obs::list_limit;++i){lists.push_back(create());obs::reset(lists.back().Get(),i+1,nullptr);}
     mhw::temporal_present::Bindings s;

@@ -56,14 +56,10 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
         runtime=std::filesystem::path(wide(folder));
     }
     require(runtime.is_absolute()&&std::filesystem::is_directory(runtime),"NGX-runtime-directory");
-    // The Reflex worker reserved the shared MinHook pool before enabling any
-    // API hook. All temporal native targets fit in that pool's reach interval.
-    require(pb::pool_state().attempted&&pb::pool_state().slot,"shared-hook-pool");
-    events<<"{\"event\":\"reservation\",\"ready\":true,\"slot\":"<<pb::pool_state().slot<<",\"hooks_installed\":false}\n"<<std::flush;
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
     mhw::ngx_startup::use_paths(directory,runtime);  // mhw_dlss.ini, no research sidecars
     mhw::ngx_startup::decline_game_dlss();            // its own DLSS 1: never with this mod
-    require(mhw::ngx_startup::run(module,temporal_version,true,true),"coexistence-NGX-startup");
+    require(mhw::ngx_startup::run(module,temporal_version,true),"coexistence-NGX-startup");
     events<<"{\"event\":\"ready\",\"hooks_installed\":false}\n"<<std::flush;prepared=true;
 }
 bool ready(std::string& reason){

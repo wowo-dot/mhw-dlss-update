@@ -171,7 +171,7 @@ float4 ps(float4 p:SV_Position):SV_Target { return float4(src.SampleLevel(samp,p
     mhw::test::fake_astera::start();std::vector<mhw::astera::Hook> hooks;tp::observer::astera_hooks(hooks);
     require(mhw::test::fake_astera::install_methods(hooks,{.command_list=list.Get()}),"loader installs the observer's detours");
     std::string hook_reason;
-    require(tp::observer::install(device.Get(),fixture_method,hook_reason,true,nullptr,true,true),hook_reason.c_str());
+    require(tp::observer::install(device.Get(),fixture_method,hook_reason),hook_reason.c_str());
     tp::observer::begin();tp::observer::reset(list.Get(),1,nullptr);
     ID3D12DescriptorHeap *heaps[]{heap.Get(),sampler.Get()};list->SetDescriptorHeaps(2,heaps);
     list->SetComputeRootSignature(root.Get());list->SetGraphicsRootSignature(root.Get());list->SetPipelineState(pipeline.Get());

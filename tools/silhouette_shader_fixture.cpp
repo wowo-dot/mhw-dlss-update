@@ -96,7 +96,7 @@ struct Fixture {
   mhw::test::fake_astera::start();std::vector<mhw::astera::Hook> hooks;mhw::temporal_present::observer::astera_hooks(hooks);
   require(mhw::test::fake_astera::install_methods(hooks,{.command_list=list.Get()}),"loader installs the observer's detours");std::string why;
   const auto resolver=[](std::uintptr_t object,unsigned slot,std::uintptr_t &target)noexcept {target=(*reinterpret_cast<std::uintptr_t **>(object))[slot];return target!=0;};
-  require(mhw::temporal_present::observer::install(device.Get(),resolver,why,true,nullptr,true,true),why.c_str());mhw::temporal_present::observer::begin();
+  require(mhw::temporal_present::observer::install(device.Get(),resolver,why),why.c_str());mhw::temporal_present::observer::begin();
   std::array<D3D12_DESCRIPTOR_RANGE,2> ranges{{{D3D12_DESCRIPTOR_RANGE_TYPE_CBV,16,0,0,0},{D3D12_DESCRIPTOR_RANGE_TYPE_SRV,32,0,0,0}}};
   std::array<D3D12_ROOT_PARAMETER,2> parameters{};for(unsigned i=0;i<2;++i){parameters[i].ParameterType=D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;parameters[i].DescriptorTable={1,&ranges[i]};parameters[i].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;}
   std::array<D3D12_STATIC_SAMPLER_DESC,16> samplers{};for(unsigned i=0;i<samplers.size();++i){auto &s=samplers[i];s.Filter=i==2?D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT:D3D12_FILTER_MIN_MAG_MIP_POINT;

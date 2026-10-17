@@ -6,7 +6,6 @@
 #include "presentation_ownership.hpp"
 #include "identity_chain.hpp"
 #include "../astera/astera_hooks.hpp"
-#include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <mutex>
@@ -146,7 +145,6 @@ struct Presentation::State {
     std::uintptr_t creation_queue{};
     unsigned device_nodes{};
     std::array<PresentationHook, hook_capacity> heads{};
-    std::array<void*, hook_capacity> original{};
     LifecycleListener listener;
     std::atomic<bool> listener_ready{};  // Published after listener is complete.
     // Lifecycle ring: its own lock, never held across a driver or SDK call.
@@ -255,27 +253,20 @@ struct Presentation::State {
         catch (const std::exception& e) { fault(site, E_FAIL, e.what()); }
         catch (...) { fault(site, E_UNEXPECTED, "non-standard exception"); }
     }
-    void add(unsigned index, IUnknown* object, unsigned slot, void* detour) {
+    // Records the method AL's chain detours (index: as in astera_hooks).
+    void add(unsigned index, IUnknown* object, unsigned slot) {
         auto** table = *reinterpret_cast<void***>(object);
         auto* target = table[slot]; require(image_function(target), "presentation-native-code");
         auto& head = heads[index];
         if (head.created) { require(head.target == reinterpret_cast<std::uintptr_t>(target), "presentation-vtable-changed"); return; }
         for (const auto& prior : heads) require(prior.target != reinterpret_cast<std::uintptr_t>(target), "presentation-aliased-method");
         head.target = reinterpret_cast<std::uintptr_t>(target);
-        // Under AL the method is patched by AL, whose chain already holds
-        // this detour; nothing is patched or compared here.
-        if (!astera::active()) {
-            std::memcpy(head.original.data(), target, sizeof(head.original));
-            require(MH_CreateHook(target, detour, &original[index]) == MH_OK, "presentation-create-hook");
-        }
+        // AL patches the method; its chain already holds this detour, so
+        // nothing is patched or compared here.
         head.created = true;
     }
     void enable() {
-        for (auto& head : heads) if (head.created && !head.enabled) {
-            require(astera::active() || MH_QueueEnableHook(reinterpret_cast<void*>(head.target)) == MH_OK, "presentation-queue-hook");
-            head.enabled = true; // also cover partial application on failure
-        }
-        require(astera::active() || MH_ApplyQueued() == MH_OK, "presentation-enable-hooks");
+        for (auto& head : heads) if (head.created) head.enabled = true;
     }
     ID3D12CommandQueue* proxy_queue(IUnknown* value) const noexcept {
         for (const auto& q : queues) if (q.native && value == q.native) return q.proxy.Get();
@@ -307,28 +298,28 @@ struct Presentation::State {
         creation_queue = reinterpret_cast<std::uintptr_t>(queue);
         paced_host_swap.store(reinterpret_cast<std::uintptr_t>(swap.Get()));
         paced_host_thread.store(GetCurrentThreadId());
-        add(4, swap.Get(), 8, reinterpret_cast<void*>(&present_hook));
-        add(5, swap.Get(), 9, reinterpret_cast<void*>(&buffer_hook));
-        add(6, swap.Get(), 10, reinterpret_cast<void*>(&full_hook));
-        add(7, swap.Get(), 12, reinterpret_cast<void*>(&desc_hook));
-        add(8, swap.Get(), 13, reinterpret_cast<void*>(&resize_hook));
-        add(9, swap.Get(), 22, reinterpret_cast<void*>(&present1_hook));
-        add(10, swap.Get(), 36, reinterpret_cast<void*>(&index_hook));
-        add(11, swap.Get(), 39, reinterpret_cast<void*>(&resize1_hook));
-        add(12, swap.Get(), 14, reinterpret_cast<void*>(&target_hook));
-        add(13, swap.Get(), 11, reinterpret_cast<void*>(&get_full_hook));
-        add(14, swap.Get(), 15, reinterpret_cast<void*>(&output_hook));
-        add(15, swap.Get(), 16, reinterpret_cast<void*>(&stats_hook));
-        add(16, swap.Get(), 17, reinterpret_cast<void*>(&count_hook));
-        add(17, swap.Get(), 18, reinterpret_cast<void*>(&desc1_hook));
-        add(18, swap.Get(), 19, reinterpret_cast<void*>(&full_desc_hook));
-        add(19, swap.Get(), 20, reinterpret_cast<void*>(&hwnd_get_hook));
-        add(20, swap.Get(), 31, reinterpret_cast<void*>(&set_latency_hook));
-        add(21, swap.Get(), 32, reinterpret_cast<void*>(&get_latency_hook));
-        add(22, swap.Get(), 33, reinterpret_cast<void*>(&waitable_hook));
-        add(23, swap.Get(), 37, reinterpret_cast<void*>(&color_check_hook));
-        add(24, swap.Get(), 38, reinterpret_cast<void*>(&color_set_hook));
-        add(25, swap.Get(), 40, reinterpret_cast<void*>(&hdr_hook));
+        add(4, swap.Get(), 8);
+        add(5, swap.Get(), 9);
+        add(6, swap.Get(), 10);
+        add(7, swap.Get(), 12);
+        add(8, swap.Get(), 13);
+        add(9, swap.Get(), 22);
+        add(10, swap.Get(), 36);
+        add(11, swap.Get(), 39);
+        add(12, swap.Get(), 14);
+        add(13, swap.Get(), 11);
+        add(14, swap.Get(), 15);
+        add(15, swap.Get(), 16);
+        add(16, swap.Get(), 17);
+        add(17, swap.Get(), 18);
+        add(18, swap.Get(), 19);
+        add(19, swap.Get(), 20);
+        add(20, swap.Get(), 31);
+        add(21, swap.Get(), 32);
+        add(22, swap.Get(), 33);
+        add(23, swap.Get(), 37);
+        add(24, swap.Get(), 38);
+        add(25, swap.Get(), 40);
         enable(); describe(); ++stats.swapchains;
         stats.native_swapchain = reinterpret_cast<std::uintptr_t>(swap.Get());
         stats.proxy_swapchain = reinterpret_cast<std::uintptr_t>(proxy_swap.Get());
@@ -541,8 +532,10 @@ struct Call {
     explicit Call(Presentation::State& value) : s(value) { s.active.fetch_add(1); }
     ~Call() { s.active.fetch_sub(1); }
 };
-template<class Fn> Fn original(Presentation::State& s, unsigned index) {
-    return reinterpret_cast<Fn>(astera::active() ? chain_next[index] : s.original[index]);
+// The method each routed call continues with: the next detour in AL's chain
+// or the original.
+template<class Fn> Fn original(unsigned index) {
+    return reinterpret_cast<Fn>(chain_next[index]);
 }
 // Host lifecycle call: the listener (outside the route mutex), timing, result
 // and the chain description afterwards. The SDK's own recursion passes through.
@@ -595,7 +588,7 @@ HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUE
         iid == __uuidof(ID3D12CommandQueue)) {
         if (queue_admission(true, s.chain_made.load(std::memory_order_acquire), true) == QueueAdmission::late) {
             s.late_queue(caller);
-            return original<QueueFn>(s, 0)(self, desc, iid, out);
+            return original<QueueFn>(0)(self, desc, iid, out);
         }
         std::lock_guard lock(s.mutex);
         auto slot = s.queues.begin(); while (slot != s.queues.end() && slot->proxy) ++slot;
@@ -625,7 +618,7 @@ HRESULT STDMETHODCALLTYPE queue_hook(ID3D12Device* self, const D3D12_COMMAND_QUE
         }
         }
     }
-    return original<QueueFn>(s, 0)(self, desc, iid, out);
+    return original<QueueFn>(0)(self, desc, iid, out);
 }
 // A routed creation that throws leaves no routed chain: retired, the fault
 // logged, routing off, and the game's creation native.
@@ -649,7 +642,7 @@ HRESULT swap_routed(IDXGIFactory* self, IUnknown* queue, DXGI_SWAP_CHAIN_DESC* d
             catch (...) { s.retire_swap(); s.fault_exception(FaultSite::create); s.accepting.store(false); }
         }
     }
-    return original<SwapFn>(s, 1)(self, queue, desc, out);
+    return original<SwapFn>(1)(self, queue, desc, out);
 }
 HRESULT hwnd_routed(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
     const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* full, IDXGIOutput* restrict, IDXGISwapChain1** out, std::uintptr_t caller) {
@@ -672,7 +665,7 @@ HRESULT hwnd_routed(IDXGIFactory2* self, IUnknown* queue, HWND hwnd, const DXGI_
             catch (...) { s.retire_swap(); s.fault_exception(FaultSite::create); s.accepting.store(false); }
         }
     }
-    return original<HwndFn>(s, 2)(self, queue, hwnd, desc, full, restrict, out);
+    return original<HwndFn>(2)(self, queue, hwnd, desc, full, restrict, out);
 }
 HRESULT core_routed(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
     IDXGIOutput* restrict, IDXGISwapChain1** out, std::uintptr_t caller) {
@@ -694,7 +687,7 @@ HRESULT core_routed(IDXGIFactory2* self, IUnknown* queue, IUnknown* window, cons
             catch (...) { s.retire_swap(); s.fault_exception(FaultSite::create); s.accepting.store(false); }
         }
     }
-    return original<CoreFn>(s, 3)(self, queue, window, desc, restrict, out);
+    return original<CoreFn>(3)(self, queue, window, desc, restrict, out);
 }
 using Args = std::array<std::uint64_t, 6>;
 Args creation_args(const DXGI_SWAP_CHAIN_DESC1* d, unsigned windowed) {
@@ -786,7 +779,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
         if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
         const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
         if (decision.fault) s.fault(FaultSite::present, hr, "present");
-        if (decision.forward_native) record_present(target, original<PresentFn>(s, 4)(target, interval, flags));
+        if (decision.forward_native) record_present(target, original<PresentFn>(4)(target, interval, flags));
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? s.paced(decision.result, hr) : capture.value.result;
@@ -798,7 +791,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
         // SL's after-hook may overwrite an occlusion/status HRESULT. Preserve
         // the actual native result and never present twice after an SDK error.
         return result;
-    }, [&](auto& s) { return record_present(self, original<PresentFn>(s, 4)(self, interval, flags)); },
+    }, [&](auto&) { return record_present(self, original<PresentFn>(4)(self, interval, flags)); },
     [&](auto& s) { return dropped_present(s, self, flags); });  // no real chain
 }
 HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID iid, void** out) {
@@ -806,14 +799,14 @@ HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID i
         const auto hr=s.proxy_swap->GetBuffer(index,iid,out);v.returned=SUCCEEDED(hr)&&out?reinterpret_cast<std::uintptr_t>(*out):0;
         if(v.returned&&iid==__uuidof(ID3D12Resource))s.scene([&](auto& map){map.buffer(reinterpret_cast<std::uintptr_t>(self),index,v.returned);});
         return hr;},
-        [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); },
-        [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); });  // the identity chain's own buffers
+        [&](auto&) { return original<BufferFn>(5)(self, index, iid, out); },
+        [&](auto&) { return original<BufferFn>(5)(self, index, iid, out); });  // the identity chain's own buffers
 }
 HRESULT STDMETHODCALLTYPE full_hook(IDXGISwapChain* self, BOOL full, IDXGIOutput* target) {
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     return lifecycle_call(6, self, Args{static_cast<unsigned>(full), reinterpret_cast<std::uintptr_t>(target)}, [&] {
         return route(self,{6,0,0,0,0,0,caller,0,0,{static_cast<unsigned>(full),reinterpret_cast<std::uintptr_t>(target)}}, [&](auto& s,auto&) { return s.proxy_swap->SetFullscreenState(full, target); },
-            [&](auto& s) { return original<FullFn>(s, 6)(self, full, target); }, [&](auto&) { return S_OK; });
+            [&](auto&) { return original<FullFn>(6)(self, full, target); }, [&](auto&) { return S_OK; });
     }, [&] { return static_cast<IUnknown*>(self); });
 }
 HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* desc) {
@@ -822,7 +815,7 @@ HRESULT STDMETHODCALLTYPE desc_hook(IDXGISwapChain* self, DXGI_SWAP_CHAIN_DESC* 
         if(SUCCEEDED(hr)&&desc)v.args={desc->BufferDesc.Width,desc->BufferDesc.Height,static_cast<unsigned>(desc->BufferDesc.Format),
             desc->BufferCount,desc->Flags,static_cast<unsigned>(desc->Windowed)};
         return hr;},
-        [&](auto& s) { return original<DescFn>(s, 7)(self, desc); }, [&](auto& s) { return original<DescFn>(s, 7)(self, desc); });
+        [&](auto&) { return original<DescFn>(7)(self, desc); }, [&](auto&) { return original<DescFn>(7)(self, desc); });
 }
 HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags) {
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
@@ -838,7 +831,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
         if (SUCCEEDED(hr) && s.is_identity(self)) s.follow_identity();
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
         return hr;
-    }, [&](auto& s) { return original<ResizeFn>(s, 8)(self, count, w, h, format, flags); },
+    }, [&](auto&) { return original<ResizeFn>(8)(self, count, w, h, format, flags); },
     [&](auto& s) { s.switch_request.store(0); return s.unroutable_resize(true, count, w, h, format, flags); });
     }, [&] { return static_cast<IUnknown*>(self); });
 }
@@ -855,7 +848,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
         if (flags & DXGI_PRESENT_TEST) ++s.stats.test_presents; else ++s.stats.presents;
         const auto decision = presentation_result(s.contract, capture.value.calls, hr, capture.value.result);
         if (decision.fault) s.fault(FaultSite::present1, hr, "present1");
-        if (decision.forward_native) record_present(target, original<Present1Fn>(s, 9)(target, interval, flags, params));
+        if (decision.forward_native) record_present(target, original<Present1Fn>(9)(target, interval, flags, params));
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? s.paced(decision.result, hr) : capture.value.result;
@@ -865,7 +858,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
         if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
         SetLastError(error);
         return result;
-    }, [&](auto& s) { return record_present(self, original<Present1Fn>(s, 9)(self, interval, flags, params)); },
+    }, [&](auto&) { return record_present(self, original<Present1Fn>(9)(self, interval, flags, params)); },
     [&](auto& s) { return dropped_present(s, self, flags); });
 }
 UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
@@ -873,7 +866,7 @@ UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
         const auto index = s.proxy_swap->GetCurrentBackBufferIndex();
         s.scene([&](auto& map) { map.game_index(reinterpret_cast<std::uintptr_t>(self), index); });
         return index; },
-        [&](auto& s) { return original<IndexFn>(s, 10)(self); }, [&](auto& s) { return original<IndexFn>(s, 10)(self); });
+        [&](auto&) { return original<IndexFn>(10)(self); }, [&](auto&) { return original<IndexFn>(10)(self); });
 }
 HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w, UINT h, DXGI_FORMAT format, UINT flags,
     const UINT* masks, IUnknown* const* queues) {
@@ -900,7 +893,7 @@ HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w
         if (SUCCEEDED(hr) && s.is_identity(self)) s.follow_identity();
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
         return hr;
-    }, [&](auto& s) { return original<Resize1Fn>(s, 11)(self, count, w, h, format, flags, masks, queues); },
+    }, [&](auto&) { return original<Resize1Fn>(11)(self, count, w, h, format, flags, masks, queues); },
     [&](auto& s) { s.switch_request.store(0); return s.unroutable_resize(true, count, w, h, format, flags); });
     }, [&] { return static_cast<IUnknown*>(self); });
 }
@@ -935,33 +928,33 @@ HRESULT STDMETHODCALLTYPE target_hook(IDXGISwapChain* self, const DXGI_MODE_DESC
                                   mode->RefreshRate.Denominator, static_cast<unsigned>(mode->Scaling)} : Args{};
     return lifecycle_call(12, self, args, [&] {
         return identity_call<HRESULT>(self, [&](auto& r) { return r.proxy_swap->ResizeTarget(mode); },
-            [&] { return original<TargetFn>(*dispatch.load(), 12)(self, mode); }, [&](auto&) { return S_OK; }); },
+            [&] { return original<TargetFn>(12)(self, mode); }, [&](auto&) { return S_OK; }); },
         [&] { return static_cast<IUnknown*>(self); });
 }
 HRESULT STDMETHODCALLTYPE get_full_hook(IDXGISwapChain* self, BOOL* full, IDXGIOutput** target) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetFullscreenState(full, target); },
-        [&] { return original<GetFullFn>(*dispatch.load(), 13)(self, full, target); },
+        [&] { return original<GetFullFn>(13)(self, full, target); },
         [&](auto&) { if (full) *full = FALSE; if (target) *target = nullptr; return S_OK; });
 }
 HRESULT STDMETHODCALLTYPE output_hook(IDXGISwapChain* self, IDXGIOutput** output) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetContainingOutput(output); },
-        [&] { return original<OutputFn>(*dispatch.load(), 14)(self, output); });
+        [&] { return original<OutputFn>(14)(self, output); });
 }
 HRESULT STDMETHODCALLTYPE stats_hook(IDXGISwapChain* self, DXGI_FRAME_STATISTICS* stats) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetFrameStatistics(stats); },
-        [&] { return original<StatsFn>(*dispatch.load(), 15)(self, stats); });
+        [&] { return original<StatsFn>(15)(self, stats); });
 }
 HRESULT STDMETHODCALLTYPE count_hook(IDXGISwapChain* self, UINT* count) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetLastPresentCount(count); },
-        [&] { return original<CountFn>(*dispatch.load(), 16)(self, count); });
+        [&] { return original<CountFn>(16)(self, count); });
 }
 HRESULT STDMETHODCALLTYPE desc1_hook(IDXGISwapChain1* self, DXGI_SWAP_CHAIN_DESC1* desc) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetDesc1(desc); },
-        [&] { return original<Desc1Fn>(*dispatch.load(), 17)(self, desc); });
+        [&] { return original<Desc1Fn>(17)(self, desc); });
 }
 HRESULT STDMETHODCALLTYPE full_desc_hook(IDXGISwapChain1* self, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetFullscreenDesc(desc); },
-        [&] { return original<FullDescFn>(*dispatch.load(), 18)(self, desc); },
+        [&] { return original<FullDescFn>(18)(self, desc); },
         [&](auto& s) {
             if (!desc) return DXGI_ERROR_INVALID_CALL;
             if (s.creation.has_full) *desc = s.creation.full; else { *desc = {}; desc->Windowed = TRUE; }
@@ -969,7 +962,7 @@ HRESULT STDMETHODCALLTYPE full_desc_hook(IDXGISwapChain1* self, DXGI_SWAP_CHAIN_
 }
 HRESULT STDMETHODCALLTYPE hwnd_get_hook(IDXGISwapChain1* self, HWND* hwnd) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetHwnd(hwnd); },
-        [&] { return original<HwndGetFn>(*dispatch.load(), 19)(self, hwnd); },
+        [&] { return original<HwndGetFn>(19)(self, hwnd); },
         [&](auto& s) { if (!hwnd) return DXGI_ERROR_INVALID_CALL; *hwnd = s.creation.hwnd; return S_OK; });
 }
 HRESULT STDMETHODCALLTYPE set_latency_hook(IDXGISwapChain2* self, UINT latency) {
@@ -977,12 +970,12 @@ HRESULT STDMETHODCALLTYPE set_latency_hook(IDXGISwapChain2* self, UINT latency) 
         const auto hr = s.proxy_swap->SetMaximumFrameLatency(latency);
         if (SUCCEEDED(hr)) { s.applied.latency = true; s.applied.latency_value = latency; }
         return hr; },
-        [&] { return original<SetLatencyFn>(*dispatch.load(), 20)(self, latency); },
+        [&] { return original<SetLatencyFn>(20)(self, latency); },
         [&](auto& s) { s.applied.latency = true; s.applied.latency_value = latency; return S_OK; });
 }
 HRESULT STDMETHODCALLTYPE get_latency_hook(IDXGISwapChain2* self, UINT* latency) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->GetMaximumFrameLatency(latency); },
-        [&] { return original<GetLatencyFn>(*dispatch.load(), 21)(self, latency); },
+        [&] { return original<GetLatencyFn>(21)(self, latency); },
         [&](auto& s) { if (!latency) return DXGI_ERROR_INVALID_CALL; *latency = s.applied.latency ? s.applied.latency_value : 1; return S_OK; });
 }
 HANDLE STDMETHODCALLTYPE waitable_hook(IDXGISwapChain2* self) {
@@ -992,18 +985,18 @@ HANDLE STDMETHODCALLTYPE waitable_hook(IDXGISwapChain2* self) {
         const auto handle = s.proxy_swap->GetFrameLatencyWaitableObject();
         if (handle && !s.game_waitable) s.game_waitable = handle;
         return handle; },
-        [&] { return original<WaitableFn>(*dispatch.load(), 22)(self); });
+        [&] { return original<WaitableFn>(22)(self); });
 }
 HRESULT STDMETHODCALLTYPE color_check_hook(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE space, UINT* support) {
     return identity_call<HRESULT>(self, [&](auto& s) { return s.proxy_swap->CheckColorSpaceSupport(space, support); },
-        [&] { return original<ColorCheckFn>(*dispatch.load(), 23)(self, space, support); });
+        [&] { return original<ColorCheckFn>(23)(self, space, support); });
 }
 HRESULT STDMETHODCALLTYPE color_set_hook(IDXGISwapChain3* self, DXGI_COLOR_SPACE_TYPE space) {
     return identity_call<HRESULT>(self, [&](auto& s) {
         const auto hr = s.proxy_swap->SetColorSpace1(space);
         if (SUCCEEDED(hr)) { s.applied.color = true; s.applied.color_value = space; }
         return hr; },
-        [&] { return original<ColorSetFn>(*dispatch.load(), 24)(self, space); },
+        [&] { return original<ColorSetFn>(24)(self, space); },
         [&](auto& s) { s.applied.color = true; s.applied.color_value = space; return S_OK; });  // for a later real chain
 }
 HRESULT STDMETHODCALLTYPE hdr_hook(IDXGISwapChain4* self, DXGI_HDR_METADATA_TYPE type, UINT size, void* data) {
@@ -1017,7 +1010,7 @@ HRESULT STDMETHODCALLTYPE hdr_hook(IDXGISwapChain4* self, DXGI_HDR_METADATA_TYPE
             s.applied.hdr_data.assign(bytes, bytes + size);
         }
         return hr; },
-        [&] { return original<HdrFn>(*dispatch.load(), 25)(self, type, size, data); },
+        [&] { return original<HdrFn>(25)(self, type, size, data); },
         [&](auto& s) {
             if (size <= 4096 && (data || !size)) {
                 s.applied.hdr = true; s.applied.hdr_type = type;
@@ -1027,9 +1020,9 @@ HRESULT STDMETHODCALLTYPE hdr_hook(IDXGISwapChain4* self, DXGI_HDR_METADATA_TYPE
             return S_OK; });
 }
 }
-// AL: each detour behind a gate that continues with AL's stored next
-// method until this presentation exists (DEVICE_CREATED). Detours then follow
-// their own accepting/route rules, as with MinHook.
+// Each detour behind a gate that continues with AL's stored next method
+// until this presentation exists (DEVICE_CREATED). Detours then follow their
+// own accepting/route rules.
 namespace {
 template<auto Detour, unsigned Index> struct Chained;
 template<class R, class... A, R(STDMETHODCALLTYPE* Detour)(A...), unsigned Index> struct Chained<Detour, Index> {
@@ -1092,17 +1085,12 @@ void Presentation::install(ID3D12Device* device, IDXGIFactory2* factory, Present
     api(upgrade_owned(s.proxy_factory, [&](void** out) { return s.sdk.upgrade(out); }), "presentation-upgrade-factory");
     require(native<ID3D12Device>(s.sdk, s.proxy_device.Get()).Get() == device, "presentation-device-identity");
     require(native<IDXGIFactory2>(s.sdk, s.proxy_factory.Get()).Get() == factory, "presentation-factory-identity");
-    if (astera::active()) {
-        // AL installs the device and factory chains before DEVICE_CREATED.
-        for (unsigned i = 0; i < 4; ++i) require(chain_next[i] != nullptr, "presentation-al-device-factory-chains");
-    } else {
-        const auto initialized = MH_Initialize();
-        require(initialized == MH_OK || initialized == MH_ERROR_ALREADY_INITIALIZED, "presentation-hook-initialize");
-    }
-    s.add(0, device, 8, reinterpret_cast<void*>(&queue_hook));
-    s.add(1, factory, 10, reinterpret_cast<void*>(&swap_hook));
-    s.add(2, factory, 15, reinterpret_cast<void*>(&hwnd_hook));
-    s.add(3, factory, 16, reinterpret_cast<void*>(&core_hook));
+    // AL installs the device and factory chains before DEVICE_CREATED.
+    for (unsigned i = 0; i < 4; ++i) require(chain_next[i] != nullptr, "presentation-al-device-factory-chains");
+    s.add(0, device, 8);
+    s.add(1, factory, 10);
+    s.add(2, factory, 15);
+    s.add(3, factory, 16);
     s.stats.native_device = reinterpret_cast<std::uintptr_t>(device);
     s.accepting.store(true); s.enable();
 }
@@ -1169,27 +1157,19 @@ void Presentation::write_ownership(std::ostream& out) const {
 bool Presentation::stop() noexcept {
     auto& s = *state_; bool ok = true;
     // First synchronize with dynamic hook installation in a creation callback.
-    // Under AL the chains stay and identity calls keep going to Streamline's
-    // proxy, which the caller would then shut down under them: refused while
-    // the identity chain exists (v0.28.6; the caller keeps SDK and pins).
+    // AL's chains stay and identity calls keep going to Streamline's proxy,
+    // which the caller would then shut down under them: refused while the
+    // identity chain exists (v0.28.6; the caller keeps SDK and pins).
     { std::lock_guard lock(s.mutex);
-      if (astera::active() && s.identity_key.load()) return false;
+      if (s.identity_key.load()) return false;
       s.accepting.store(false); }
-    // No route mutex while MinHook suspends threads or callbacks drain.
-    // Under AL the chains stay: with accepting off every detour forwards.
-    for (auto& head : s.heads) if (head.enabled) {
-        const auto status = astera::active() ? MH_OK : MH_DisableHook(reinterpret_cast<void*>(head.target));
-        if (status == MH_OK || status == MH_ERROR_DISABLED) head.enabled = false; else ok = false;
-    }
+    // The chains stay: with accepting off every detour forwards. No route
+    // mutex while callbacks drain.
+    for (auto& head : s.heads) head.enabled = false;
     const auto began = GetTickCount64();
     while (s.active.load() && GetTickCount64() - began < 30000) Sleep(1);
     if (s.active.load()) return false;
     std::lock_guard lock(s.mutex);
-    if (astera::active()) { s.stopped = ok; return ok; }
-    for (auto& head : s.heads) if (head.created) {
-        head.restored = std::memcmp(reinterpret_cast<void*>(head.target), head.original.data(), sizeof(head.original)) == 0;
-        ok = head.restored && ok;
-    }
     s.stopped = ok; return ok;
 }
 bool Presentation::release_after_shutdown() noexcept {

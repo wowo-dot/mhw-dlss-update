@@ -16,7 +16,6 @@
 #include "../temporal_bindings/copy_execution.hpp"
 #include "../perf/toggles.hpp"
 #include "../perf/hook_timing.hpp"
-#include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <algorithm>
@@ -657,11 +656,8 @@ bool prepare(const tb::Config &c,unsigned w,unsigned h,unsigned rw,unsigned rh,s
     FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||
     !pb::system_method(reinterpret_cast<std::uintptr_t>(list.Get()),16,targets[2])){reason="stream method discovery";return false;}
  const std::array<void *,9> detours{nullptr,nullptr,reinterpret_cast<void *>(copy_hook),reinterpret_cast<void *>(scaled_stream_final_entry),reinterpret_cast<void *>(scaled_copy_execution_entry),reinterpret_cast<void *>(scaled_indexed_execution_entry),nullptr,reinterpret_cast<void *>(scaled_full_tone_map_entry),reinterpret_cast<void *>(scaled_full_project_entry)};
- if(astera::active()){if(!originals[api_hook]){reason="stream AL chain";return false;}enabled[api_hook]=true;}
- // Research builds without AL: CopyTextureRegion through MinHook, applied with the runtime's hooks.
- else if(MH_CreateHook(reinterpret_cast<void *>(targets[api_hook]),detours[api_hook],&originals[api_hook])!=MH_OK||
-    MH_QueueEnableHook(reinterpret_cast<void *>(targets[api_hook]))!=MH_OK){reason="stream hook preparation";return false;}
- else enabled[api_hook]=true;
+ if(!originals[api_hook]){reason="stream AL chain";return false;}
+ enabled[api_hook]=true;
  for(const auto &spec:hook_specs){
   auto &hook=owned[spec.slot];hook.name=spec.name;hook.pattern=spec.pattern;hook.target=reinterpret_cast<void *>(targets[spec.slot]);
   if(!astera::hook_owned(hook,detours[spec.slot],&originals[spec.slot])){reason="stream hook preparation";return false;}
@@ -875,7 +871,6 @@ bool resize(unsigned rw,unsigned rh,unsigned w,unsigned h,std::string &reason) n
 }
 bool unhook() noexcept{
  bool ok=true;for(const auto &spec:hook_specs)ok=astera::unhook_owned(owned[spec.slot])&&ok;
- if(enabled[api_hook]&&!astera::active())ok=MH_QueueDisableHook(reinterpret_cast<void *>(targets[api_hook]))==MH_OK&&ok;
  return ok;
 }
 void chains_live(bool yes) noexcept{chain_live.store(yes,std::memory_order_release);}

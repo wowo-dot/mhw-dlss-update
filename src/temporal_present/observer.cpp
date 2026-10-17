@@ -3,11 +3,9 @@
 #include "../perf/hook_timing.hpp"
 #include "../perf/in_flight.hpp"
 #include "../astera/astera_hooks.hpp"
-#include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <cstring>
-#include <ostream>
 #include <intrin.h>
 
 namespace mhw::temporal_present::observer {
@@ -18,17 +16,15 @@ constexpr std::array<unsigned,max_hooks> methods{11,25,27,28,29,30,31,32,33,34,3
 // entries[i] until the owner reports the list released (forget()); the slot is
 // then free for another list, and `epoch` invalidates threads' cached lookups.
 struct Entry {SRWLOCK lock=SRWLOCK_INIT;Bindings state;RasterBindings raster;Predicate predicate;};
-struct Sample {bool captured{};std::uint64_t frame{};std::uintptr_t list{},expected_root{},expected_pipeline{};Bindings state;};
 std::array<Entry,list_limit> entries;
 std::array<std::atomic<ID3D12GraphicsCommandList *>,list_limit> lists{};
-std::array<Sample,sample_limit> samples;
 std::array<std::uintptr_t,max_hooks> targets;
 std::array<void *,max_hooks> originals;
-std::array<bool,max_hooks> created,enabled;
-// AL: the detours run from install to finish (as the MinHook patches did);
+std::array<bool,max_hooks> enabled;
+// The detours run from install to finish;
 // otherwise each call continues straight to AL's stored next method.
 std::atomic<bool> chain_live{};
-std::atomic<unsigned> entry_count{};unsigned installed_hooks=hook_count;
+std::atomic<unsigned> entry_count{};
 std::atomic<std::uint64_t> epoch{},forgotten{};
 // Callbacks in flight, without a locked instruction a call (perf/in_flight.hpp).
 perf::InFlightCount pending;
@@ -188,13 +184,6 @@ void WINAPI outputs_call(ID3D12GraphicsCommandList *list,UINT count,const D3D12_
     __try{perf::hook_timing::forward_begin(timing);reinterpret_cast<void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,const D3D12_CPU_DESCRIPTOR_HANDLE *,BOOL,const D3D12_CPU_DESCRIPTOR_HANDLE *)>(originals[22])(list,count,values,contiguous,depth);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{after(22,list,admitted,returned,count,reinterpret_cast<std::uintptr_t>(values),reinterpret_cast<std::uintptr_t>(depth),static_cast<unsigned>(contiguous));perf::hook_timing::end(timing);}
 }
-void root_json(std::ostream &o,const RootBindings &r){
-    o<<"{\"signature\":"<<r.signature<<",\"arguments\":[";bool comma=false;
-    for(unsigned i=0;i<r.arguments.size();++i){const auto &a=r.arguments[i];if(a.kind==ArgumentKind::unset)continue;
-        if(comma)o<<',';comma=true;o<<"{\"index\":"<<i<<",\"kind\":"<<static_cast<unsigned>(a.kind)<<",\"address\":"<<a.address<<",\"mask\":"<<a.mask<<",\"constants\":[";bool item=false;
-        for(unsigned j=0;j<64;++j)if(a.mask&(std::uint64_t(1)<<j)){if(item)o<<',';item=true;o<<'['<<j<<','<<a.values[j]<<']';}o<<"]}";
-    }o<<"]}";
-}
 }
 namespace {
 template<auto Detour,unsigned I> struct Chained;
@@ -226,44 +215,22 @@ namespace {
 bool install_chained(ID3D12GraphicsCommandList *list,Resolver resolve,std::string &reason){
     // AL registered all max_hooks methods at PRE_MAIN and installed them at
     // DEVICE_CREATED. The targets are still resolved to check them.
-    if(installed_hooks!=max_hooks){reason="bindings-al-hook-set";return false;}
-    for(unsigned i=0;i<installed_hooks;++i){
+    for(unsigned i=0;i<max_hooks;++i){
         if(!resolve(reinterpret_cast<std::uintptr_t>(list),methods[i],targets[i])){reason="bindings-system-method-"+std::to_string(methods[i]);return false;}
         for(unsigned j=0;j<i;++j)if(targets[i]==targets[j]){reason="bindings-method-alias";return false;}
         if(!originals[i]){reason="bindings-al-chain-"+std::to_string(methods[i]);return false;}
     }
-    enabled.fill(false);for(unsigned i=0;i<installed_hooks;++i)enabled[i]=true;
+    enabled.fill(true);
     chain_live.store(true,std::memory_order_release);return true;
 }
 }
-bool install(ID3D12Device *device,Resolver resolve,std::string &reason,bool raster,ViewportListener listener,bool predicate,bool indexed){
-    if(installed||!device||!resolve||(!raster&&(listener||predicate||indexed))||(indexed&&!predicate)){reason="bindings-install-contract";return false;}installed=true;viewport_listener=listener;
+bool install(ID3D12Device *device,Resolver resolve,std::string &reason,ViewportListener listener){
+    if(installed||!device||!resolve){reason="bindings-install-contract";return false;}installed=true;viewport_listener=listener;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
     if(FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator)))||
        FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())){
         reason="bindings-discovery-list";return false;}
-    installed_hooks=indexed?max_hooks:predicate?predicate_hooks:raster?raster_hooks:hook_count;
-    if(astera::active())return install_chained(list.Get(),resolve,reason);
-    const std::array<void *,max_hooks> detours{
-        reinterpret_cast<void *>(pointer_call<0>),reinterpret_cast<void *>(pointer_call<1>),reinterpret_cast<void *>(pointer_call<2>),reinterpret_cast<void *>(heaps_call),
-        reinterpret_cast<void *>(pointer_call<4>),reinterpret_cast<void *>(pointer_call<5>),reinterpret_cast<void *>(table_call<6>),reinterpret_cast<void *>(table_call<7>),
-        reinterpret_cast<void *>(constant_call<8>),reinterpret_cast<void *>(constant_call<9>),reinterpret_cast<void *>(constants_call<10>),reinterpret_cast<void *>(constants_call<11>),
-        reinterpret_cast<void *>(address_call<12>),reinterpret_cast<void *>(address_call<13>),reinterpret_cast<void *>(address_call<14>),reinterpret_cast<void *>(address_call<15>),reinterpret_cast<void *>(address_call<16>),reinterpret_cast<void *>(address_call<17>),
-        reinterpret_cast<void *>(topology_call),reinterpret_cast<void *>(raster_call<19,D3D12_VIEWPORT>),reinterpret_cast<void *>(raster_call<20,D3D12_RECT>),reinterpret_cast<void *>(vertices_call),reinterpret_cast<void *>(outputs_call),reinterpret_cast<void *>(predicate_call),reinterpret_cast<void *>(pointer_call<24>)};
-    for(unsigned i=0;i<installed_hooks;++i){
-        if(!resolve(reinterpret_cast<std::uintptr_t>(list.Get()),methods[i],targets[i])){reason="bindings-system-method-"+std::to_string(methods[i]);return false;}
-        for(unsigned j=0;j<i;++j)if(targets[i]==targets[j]){reason="bindings-method-alias";return false;}
-        const auto status=MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i]);
-        if(status!=MH_OK){reason="bindings-create-"+std::to_string(methods[i])+"-"+std::to_string(status);return false;}created[i]=true;
-    }
-    // MinHook's queue is shared with the native temporal activation owner.
-    // Its hooks must remain pending until all original-code gates have passed.
-    for(unsigned i=0;i<installed_hooks;++i){
-        const auto status=MH_EnableHook(reinterpret_cast<void *>(targets[i]));
-        if(status!=MH_OK){reason="bindings-enable-"+std::to_string(methods[i])+"-"+std::to_string(status);return false;}
-        enabled[i]=true;
-    }
-    return true;
+    return install_chained(list.Get(),resolve,reason);
 }
 void begin() noexcept {accepting.store(true,std::memory_order_release);}
 void reset(ID3D12GraphicsCommandList *list,std::uint64_t generation,ID3D12PipelineState *pipeline) noexcept {
@@ -300,16 +267,6 @@ void forget(ID3D12GraphicsCommandList *list) noexcept {
         ReleaseSRWLockExclusive(&e.lock);return;
     }
 }
-bool capture(unsigned i,std::uint64_t frame,ID3D12GraphicsCommandList *list,std::uintptr_t root,std::uintptr_t pipeline) noexcept {
-    Lock lock;if(i>=sample_limit||samples[i].captured||!healthy()||!accepting.load())return false;
-    auto *e=find(list);if(!e){fail(2);return false;}
-    AcquireSRWLockExclusive(&e->lock);
-    const bool ok=e->state.ready()&&e->state.compute.signature==root&&e->state.pipeline==pipeline&&frame;
-    if(ok)samples[i]={true,frame,reinterpret_cast<std::uintptr_t>(list),root,pipeline,e->state};
-    ReleaseSRWLockExclusive(&e->lock);
-    if(!ok)fail(2);return ok;
-}
-bool sample(unsigned i,Bindings &s) noexcept {Lock lock;if(i>=sample_limit||!samples[i].captured)return false;s=samples[i].state;return true;}
 bool matches_current(ID3D12GraphicsCommandList *list,const Bindings &state) noexcept {
     Locked lock(list);const auto *e=lock.get();return healthy()&&e&&e->state==state;
 }
@@ -320,10 +277,10 @@ bool inspect(ID3D12GraphicsCommandList *list,Bindings &state) noexcept {
     Locked lock(list);const auto *e=lock.get();if(!e)return false;state=e->state;return true;
 }
 bool raster_current(ID3D12GraphicsCommandList *list,RasterBindings &state) noexcept {
-    Locked lock(list);const auto *e=lock.get();if(installed_hooks<raster_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->raster.ready())return false;state=e->raster;return true;
+    Locked lock(list);const auto *e=lock.get();if(!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->raster.ready())return false;state=e->raster;return true;
 }
 bool predicate_current(ID3D12GraphicsCommandList *list,Predicate &state) noexcept {
-    Locked lock(list);const auto *e=lock.get();if(installed_hooks<predicate_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->predicate.known)return false;state=e->predicate;return true;
+    Locked lock(list);const auto *e=lock.get();if(!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->predicate.known)return false;state=e->predicate;return true;
 }
 bool hooks_disabled() noexcept {Lock lock;for(const auto v:enabled)if(v)return false;return true;}
 void stop() noexcept {accepting.store(false,std::memory_order_release);}
@@ -332,20 +289,7 @@ bool healthy() noexcept {return fault.load(std::memory_order_acquire)==0;}
 bool finish() noexcept {
     if(!installed)return true;
     stop();const auto start=GetTickCount64();while(!settled()&&GetTickCount64()-start<2000)Sleep(1);drained=settled();bool ok=drained;
-    if(astera::active()){chain_live.store(false,std::memory_order_release);enabled.fill(false);}
-    for(unsigned i=0;i<installed_hooks;++i)if(created[i]){
-        const auto status=MH_DisableHook(reinterpret_cast<void *>(targets[i]));
-        if(status==MH_OK||status==MH_ERROR_DISABLED)enabled[i]=false;else ok=false;
-    }
+    chain_live.store(false,std::memory_order_release);enabled.fill(false);
     return ok&&healthy()&&settled();
-}
-void write(std::ostream &o){Lock lock;bool disabled=true;for(const auto e:enabled)disabled=disabled&&!e;
-    o<<"{\"schema\":1,\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"hooks_disabled\":"<<disabled<<",\"drained\":"<<drained<<",\"list_count\":"<<entry_count.load()<<",\"lists_forgotten\":"<<forgotten.load()<<",\"hook_count\":"<<installed_hooks
-     <<",\"hook_control\":\"owned-targets-only\",\"viewport_listener\":"<<(viewport_listener!=nullptr)<<",\"viewport_notifications\":"<<viewport_notifications.load()<<",\"records\":[";bool comma=false;
-    for(unsigned i=0;i<sample_limit;++i){const auto &v=samples[i];if(!v.captured)continue;if(comma)o<<',';comma=true;
-        o<<"{\"receipt\":"<<i<<",\"frame\":"<<v.frame<<",\"command\":"<<v.list<<",\"generation\":"<<v.state.generation<<",\"ready\":"<<v.state.ready()<<",\"pipeline\":"<<v.state.pipeline
-         <<",\"expected_pipeline\":"<<v.expected_pipeline<<",\"expected_root\":"<<v.expected_root<<",\"heaps\":[";
-        for(unsigned j=0;j<v.state.heap_count;++j){if(j)o<<',';o<<v.state.heaps[j];}o<<"],\"compute\":";root_json(o,v.state.compute);o<<",\"graphics\":";root_json(o,v.state.graphics);o<<'}';
-    }o<<"]}";
 }
 }

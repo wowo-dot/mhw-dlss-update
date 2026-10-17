@@ -93,8 +93,8 @@ You need:
   - the [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline) 2.12.0
     (`MHW_STREAMLINE_SDK_ROOT`).
 
-MinHook 1.3.4 is vendored in `third_party/minhook` (pinned commit `c3fcafdc`), with
-Astera Loader's process-thread adapter in `src/hook.c` (`AL_MINHOOK_PROCESS_THREADS`);
+MinHook 1.3.4 is vendored in `third_party/minhook` (pinned commit `c3fcafdc`) for
+the tests' stand-in Astera Loader; the shipped DLL links no hooking library, and
 the build needs no download.
 
 ```powershell
@@ -105,7 +105,7 @@ cmake --build build --config Release --target mhw_dlss_alpha
 The mod is `build/bin/Release/mhw_dlss_alpha.dll`, renamed `mhw_dlss.dll` in
 the package. Leave out `--target` to build the tests as well.
 
-**Tests:** run `ctest --test-dir build -C Release -j 32` (85 tests, about ten
+**Tests:** run `ctest --test-dir build -C Release -j 32` (84 tests, about ten
 seconds: the C++ tests and one for the Python tools). They come in two tiers:
 - `quick`: everything under about a second. While iterating, run
   `ctest -L quick` plus the changed area's own tests (`ctest -R <name>`).
@@ -182,8 +182,8 @@ NVIDIA Reflex. It is not affiliated with, sponsored or endorsed by NVIDIA.
 Release packages include NVIDIA's unmodified runtime DLLs under NVIDIA's
 licenses, which ship with them.
 
-MinHook, DirectXShaderCompiler's DxilHash, NVAPI declarations and the Astera
-Loader and CMFM headers are used under their licenses
+MinHook (tests only), DirectXShaderCompiler's DxilHash, NVAPI declarations and
+the Astera Loader and CMFM headers are used under their licenses
 ([`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)).
 
 Monster Hunter: World is a trademark of CAPCOM CO., LTD. This mod is not

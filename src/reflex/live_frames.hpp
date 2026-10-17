@@ -30,7 +30,6 @@ class LiveFrames final {
 public:
     struct State;
     explicit LiveFrames(Streamline& sdk);
-    static bool reserve(std::uintptr_t image, std::string& reason);
     void install(std::uintptr_t image, std::uintptr_t sdk_device, std::ostream& log);
     PresentationObserver observer() noexcept;
     LiveFrameStats snapshot() const;

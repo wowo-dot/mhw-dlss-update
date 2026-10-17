@@ -45,13 +45,12 @@ COVERAGE = [
 # component, license file in this repository (None: one of NVIDIA's above), name
 # in the package's licenses folder.
 BUILT_IN = [
-    ('MinHook 1.3.4 (hooking library, with the process-thread adapter from Astera Loader)', 'third_party/minhook/LICENSE.txt', 'MinHook-LICENSE.txt'),
     ('DxilHash from Microsoft DirectXShaderCompiler (shader container checksum)', 'third_party/dxc_hash/LICENSE.TXT',
      'DirectXShaderCompiler-NCSA-LICENSE.txt'),
     ('NVIDIA DLSS SDK NGX library (nvsdk_ngx_d.lib)', None, 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
     ('NVIDIA Streamline SDK headers', None, 'Streamline-MIT-LICENSE.txt'),
     ('NVIDIA NVAPI declarations (Reflex sleep status)', 'third_party/nvapi-sleep-status-LICENSE.txt', 'NVAPI-MIT-LICENSE.txt'),
-    ('Astera Loader plugin header and thread snapshot', 'third_party/al/LICENSE', 'AsteraLoader-MIT-LICENSE.txt'),
+    ('Astera Loader plugin header', 'third_party/al/LICENSE', 'AsteraLoader-MIT-LICENSE.txt'),
     ('CMFM menu header', 'third_party/cmfm/LICENSE', 'CMFM-MIT-LICENSE.txt'),
 ]
 INI = """# MHW DLSS / Frame Generation (alpha) configuration.

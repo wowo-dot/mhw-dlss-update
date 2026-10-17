@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     std::string reason;
     const auto resolver = [](std::uintptr_t p, unsigned slot, std::uintptr_t &target) noexcept { target = (*reinterpret_cast<std::uintptr_t **>(p))[slot]; return target != 0; };
     mhw::perf::toggles.store(mhw::perf::all_toggles);
-    require(obs::install(device.Get(), resolver, reason, true, nullptr, true, true), reason.c_str());
+    require(obs::install(device.Get(), resolver, reason), reason.c_str());
     obs::begin();
     // Adjacent observer entries, one per list, from their Reset generations.
     for (unsigned t = 0; t < max_threads; ++t) { restart(recorders[t]); obs::reset(recorders[t].list.Get(), t + 1, nullptr); }

@@ -74,13 +74,6 @@ inline constexpr std::array<unsigned,kind_count> method_slots={0,0,0,0,0,0,0,0,0
 template<class T> bool read(std::uintptr_t,T &) noexcept;
 bool copy_memory(std::uintptr_t,void *,unsigned) noexcept;
 bool read_arena(std::uintptr_t,Arena &) noexcept;
-struct PoolState {
-  bool attempted{},ready{},policy_available{};
-  unsigned policy_flags{},win32{}; int status{};
-  std::uintptr_t origin{},slot{},page{};
-};
-const PoolState &pool_state() noexcept;
-bool reserve_pool(const std::array<std::uintptr_t,10> &,std::string &reason);
 std::string file_sha256(const std::wstring &);
 // A file's hash with the reason it could not be taken (v0.28.5): the stage
 // that stopped ("open", "size", "read", "short", "hash"; empty when complete),

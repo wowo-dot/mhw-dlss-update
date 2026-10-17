@@ -5,7 +5,6 @@
 #include "../perf/toggles.hpp"
 #include <windows.h>
 #include <d3d12.h>
-#include <MinHook.h>
 #include <intrin.h>
 #include <atomic>
 #include <array>
@@ -22,7 +21,6 @@ namespace mhw::render_resolution {
 namespace {
 namespace pb=projection_binding;
 using Setter=void (*)(std::uintptr_t,float);
-using Viewport=void (STDMETHODCALLTYPE *)(ID3D12GraphicsCommandList *,UINT,const D3D12_VIEWPORT *);
 pb::Runtime discovered;
 std::uintptr_t image{},renderer{},expected_return{};
 std::array<std::uintptr_t,2> targets{};
@@ -33,7 +31,6 @@ void *original{};
 constexpr char update_head[]="40 53 48 83 EC 20 80 B9 F4 B3 07 00 00 48 8B D9";
 static_assert(astera::valid_pattern<16>(update_head),"the renderer update's pattern is its first 16 bytes");
 astera::OwnedHook update_hook{"mhw_dlss Render:Update",update_head};
-Viewport original_viewport{};
 Setter setter{};
 // The planned extent. The worker replaces it (install, retarget) under the
 // lock; the render thread and the input checks take one copy per use.
@@ -50,7 +47,6 @@ std::atomic<bool> yielded{};
 bool adopted{};
 std::atomic<unsigned> pending{},fault{};
 unsigned render_thread{};
-bool shared_viewport{};
 std::uint64_t visits{},unqualified{},overrides{},pre_restores{},foreign_requests{},scaled_observed{},restored_observed{};
 std::array<std::uint64_t,3> viewport_counts{}; // display / reduced / other
 std::uint64_t viewport_unreadable{};
@@ -265,9 +261,6 @@ void viewport_observation(ID3D12GraphicsCommandList *list,UINT count,const D3D12
     if(!overrides)return;++viewport_counts[kind];
     if(kind==1){if(!first_reduced_viewport.tick)first_reduced_viewport=sample;last_reduced_viewport=sample;}
 }
-void STDMETHODCALLTYPE viewport_call(ID3D12GraphicsCommandList *list,UINT count,const D3D12_VIEWPORT *views) {
-    ++pending;__try{original_viewport(list,count,views);viewport_observation(list,count,views,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}__finally{--pending;}
-}
 void write_snapshot(std::ostream &out,const Snapshot &s) {
     out<<"{\"tick\":"<<s.tick<<",\"frame\":"<<s.frame<<",\"view\":"<<s.view<<",\"display\":["<<s.width<<','<<s.height
        <<"],\"scales\":["<<s.desired<<','<<s.applied<<','<<s.previous<<','<<s.content_desired<<','<<s.content<<','<<s.combined<<','<<s.view_scale<<','<<s.view_content<<','<<s.view_combined
@@ -316,9 +309,8 @@ bool ready(std::uintptr_t base,float scale,std::string &reason) {
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     return true;
 }
-bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,bool yielded_start) {
+bool install(std::uintptr_t base,float scale,std::string &reason,bool yielded_start) {
     if(image){reason="already prepared";return false;}
-    shared_viewport=shared;
     if(!pb::discover(base,discovered,reason))return false;
     // A pillarboxed scene quantizes its scale against the window (config basis).
     basis_width=discovered.scene_override?discovered.window_width:discovered.width;
@@ -330,14 +322,10 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,boo
     Snapshot s{};const bool admitted=snapshot(s,target);{Lock lock;startup=s;}
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     targets={base+0x229ed30,discovered.targets[pb::viewport]};
-    // The viewport method hook is the research builds' (shared_viewport
-    // false); D3D12 methods are not al.hooks targets.
-    if(!shared_viewport&&MH_CreateHook(reinterpret_cast<void *>(targets[1]),reinterpret_cast<void *>(viewport_call),reinterpret_cast<void **>(&original_viewport))!=MH_OK){reason="hook creation";return false;}
     // Yielded from the start (the player's DLSS Off): no visit checks or writes.
     yielded=yielded_start;requested=!yielded_start;hooks_disabled=false;
     update_hook.target=reinterpret_cast<void *>(targets[0]);
-    if(!astera::hook_owned(update_hook,reinterpret_cast<void *>(mhw_resolution_entry),&original)||
-       (!shared_viewport&&MH_EnableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)){
+    if(!astera::hook_owned(update_hook,reinterpret_cast<void *>(mhw_resolution_entry),&original)){
         astera::unhook_owned(update_hook);requested=false;yielded=false;reason="hook activation";return false;}
     return true;
 }
@@ -415,7 +403,6 @@ bool finish() {
     while((!restored.load()||pending.load())&&GetTickCount64()-start<5000)Sleep(1);
     if(!restored.load()||pending.load())return false; // Keep the pinned recovery hook available.
     if(!astera::unhook_owned(update_hook))return false;
-    if(!shared_viewport&&MH_DisableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)return false;
     while(pending.load()&&GetTickCount64()-start<6000)Sleep(1);
     if(pending.load())return false;
     hooks_disabled=true;return true;
@@ -427,7 +414,7 @@ void write(std::ostream &out) {
        <<",\"pre_restores\":"<<pre_restores<<",\"foreign_requests\":"<<foreign_requests<<",\"scaled_observed\":"<<scaled_observed<<",\"restored_observed\":"<<restored_observed<<",\"truncated_views\":"<<truncated_views
        <<",\"display\":["<<target.display.width<<','<<target.display.height<<"],\"render\":["<<target.render.width<<','<<target.render.height<<"],\"requested_scale\":"<<target.requested<<",\"quantized_scale\":"<<target.quantized
        <<",\"swapchain_format\":"<<discovered.format<<",\"adapter_luid\":["<<discovered.luid_high<<','<<discovered.luid_low<<"],\"render_thread\":"<<render_thread
-       <<",\"shared_viewport\":"<<shared_viewport<<",\"owned_hooks\":"<<(shared_viewport?1:2)
+       <<",\"shared_viewport\":true,\"owned_hooks\":1"  // the observer forwards viewports (v0.29.0: always)
        <<",\"scene_changes\":"<<scene_changes<<",\"scene_pending\":"<<scene_pending
        <<",\"viewport_counts\":["<<viewport_counts[0]<<','<<viewport_counts[1]<<','<<viewport_counts[2]<<"],\"viewport_unreadable\":"<<viewport_unreadable
        <<",\"baseline\":";write_snapshot(out,baseline);out<<",\"reduced\":";write_snapshot(out,reduced);out<<",\"last\":";write_snapshot(out,last);out<<",\"restoration\":";write_snapshot(out,restoration);

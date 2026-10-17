@@ -36,7 +36,6 @@
 #include "../ngx_startup/startup.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../astera/astera_hooks.hpp"
-#include <MinHook.h>
 #include <wrl/client.h>
 #include <atomic>
 #include <bit>
@@ -86,8 +85,8 @@ void fail(unsigned n) noexcept {unsigned zero{};fault.compare_exchange_strong(ze
 bool read(void *,std::uintptr_t p,std::span<std::byte> out){return pb::copy_memory(p,out.data(),static_cast<unsigned>(out.size()));}
 const tb::Reader reader{nullptr,read};
 std::array<std::uintptr_t,hook_count> targets{};std::array<void *,hook_count> originals{};std::array<bool,hook_count> enabled{};
-// AL: hooks 5.. (D3D12) are AL chains; their detours run from install to
-// finish, as the MinHook patches did, and otherwise continue straight on.
+// Hooks 5.. (D3D12) are AL chains; their detours run from install to finish
+// and otherwise continue straight on.
 constexpr unsigned first_api_hook=5;
 std::atomic<bool> chain_live{};
 // v0.29.0: hooks 0-4 (game functions) on al.hooks under AL (astera::OwnedHook),
@@ -1239,8 +1238,8 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(!wait_for([&]{return render_resolution::full_scale(image);},2000))
                 throw std::runtime_error("the game did not apply resolution scaling High");
         }
-        if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true,off_at_start))throw std::runtime_error(reason);
-        if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
+        if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,off_at_start))throw std::runtime_error(reason);
+        if(!obs::install(device,pb::system_method,reason,render_resolution::observe_viewports))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
         sr::observe_final_scene(&fg_final_scene);
         for(unsigned i=0;i<targets.size();++i){
@@ -1249,10 +1248,8 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
                 if(!astera::hook_owned(h,detours[i],&originals[i]))throw std::runtime_error("continuous hook creation");
                 enabled[i]=true;continue;
             }
-            if(astera::active()){if(!originals[i])throw std::runtime_error("continuous AL chain");enabled[i]=true;continue;}
-            // Research builds without AL: the D3D12 methods through MinHook, applied below.
-            if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK)throw std::runtime_error("continuous hook creation");
-            if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)throw std::runtime_error("continuous enable queue");enabled[i]=true;
+            if(!originals[i])throw std::runtime_error("continuous AL chain");
+            enabled[i]=true;
         }
         // Each hook is live as it goes in (al.hooks): the player's Off at start
         // must hold before activation can own a camera frame.
@@ -1262,11 +1259,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(off_at_start)off.store(true);
         else sr::begin();
         accepting.store(!off_at_start);
-        if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
         live_installed.store(true);
-        if(astera::active()){chain_live.store(true,std::memory_order_release);
-            sr::chains_live(true);
-        }
+        chain_live.store(true,std::memory_order_release);
+        sr::chains_live(true);
         return true;
     }catch(const std::exception &e){reason=e.what();stop();return false;}
 }
@@ -1292,22 +1287,19 @@ void finish() noexcept {
         while(!abandoned&&GetTickCount64()<deadline+6000){Sleep(1);abandoned=sr::abandon();}
         if(!abandoned)return;
     }
-    // The game hooks come out at once (OwnedHook); without AL the D3D12 method
-    // hooks are queued and applied together below.
+    // The game hooks come out of their chains at once (OwnedHook); the D3D12
+    // chains stay, with every detour forwarding once chain_live is off.
     const bool route_unhooked=sr::unhook();
     if(!route_unhooked)fail(45);
     if(!activation::unhook())fail(25);
     std::array<bool,targets.size()> disable_queued{};
     for(unsigned i=0;i<targets.size();++i)if(enabled[i]){
-        disable_queued[i]=i<first_api_hook?astera::unhook_owned(game_hooks[i]):
-            astera::active()||MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
+        disable_queued[i]=i>=first_api_hook||astera::unhook_owned(game_hooks[i]);
         if(!disable_queued[i])fail(25);
     }
-    if(MH_ApplyQueued()==MH_OK){
-        if(astera::active())chain_live.store(false,std::memory_order_release);
-        for(unsigned i=0;i<targets.size();++i)if(disable_queued[i])enabled[i]=false;
-        if(route_unhooked)sr::disabled(true);
-    }else fail(26);
+    chain_live.store(false,std::memory_order_release);
+    for(unsigned i=0;i<targets.size();++i)if(disable_queued[i])enabled[i]=false;
+    if(route_unhooked)sr::disabled(true);
     // A forwarded callback may have entered before the patch was removed.
     // Keep the observer and all trampolines available until it returns.
     const auto return_deadline=GetTickCount64()+2000;
