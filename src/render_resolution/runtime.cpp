@@ -1,5 +1,6 @@
 #include "runtime.hpp"
 #include "control.hpp"
+#include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../perf/toggles.hpp"
 #include <windows.h>
@@ -26,6 +27,12 @@ pb::Runtime discovered;
 std::uintptr_t image{},renderer{},expected_return{};
 std::array<std::uintptr_t,2> targets{};
 void *original{};
+// v0.29.0: the renderer update on al.hooks under AL; its first 16 original
+// bytes (clean image; gate 0x229ed30 in sizing_code()). The stub reads its
+// caller, so the hook runs first in its chain (OwnedHook).
+constexpr char update_head[]="40 53 48 83 EC 20 80 B9 F4 B3 07 00 00 48 8B D9";
+static_assert(astera::valid_pattern<16>(update_head),"the renderer update's pattern is its first 16 bytes");
+astera::OwnedHook update_hook{"mhw_dlss Render:Update",update_head};
 Viewport original_viewport{};
 Setter setter{};
 // The planned extent. The worker replaces it (install, retarget) under the
@@ -323,12 +330,15 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,boo
     Snapshot s{};const bool admitted=snapshot(s,target);{Lock lock;startup=s;}
     if(!admitted){reason="native sizing admission (check "+std::to_string(s.check)+")";return false;}
     targets={base+0x229ed30,discovered.targets[pb::viewport]};
-    if(MH_CreateHook(reinterpret_cast<void *>(targets[0]),reinterpret_cast<void *>(mhw_resolution_entry),&original)!=MH_OK||
-       (!shared_viewport&&MH_CreateHook(reinterpret_cast<void *>(targets[1]),reinterpret_cast<void *>(viewport_call),reinterpret_cast<void **>(&original_viewport))!=MH_OK)){reason="hook creation";return false;}
-    if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[0]))!=MH_OK||(!shared_viewport&&MH_QueueEnableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)){reason="hook queue";return false;}
+    // The viewport method hook is the research builds' (shared_viewport
+    // false); D3D12 methods are not al.hooks targets.
+    if(!shared_viewport&&MH_CreateHook(reinterpret_cast<void *>(targets[1]),reinterpret_cast<void *>(viewport_call),reinterpret_cast<void **>(&original_viewport))!=MH_OK){reason="hook creation";return false;}
     // Yielded from the start (the player's DLSS Off): no visit checks or writes.
     yielded=yielded_start;requested=!yielded_start;hooks_disabled=false;
-    if(MH_ApplyQueued()!=MH_OK){requested=false;yielded=false;reason="hook activation";return false;}
+    update_hook.target=reinterpret_cast<void *>(targets[0]);
+    if(!astera::hook_owned(update_hook,reinterpret_cast<void *>(mhw_resolution_entry),&original)||
+       (!shared_viewport&&MH_EnableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)){
+        astera::unhook_owned(update_hook);requested=false;yielded=false;reason="hook activation";return false;}
     return true;
 }
 void stop() noexcept {requested=false;}
@@ -405,8 +415,8 @@ bool finish() {
     const auto start=GetTickCount64();
     while((!restored.load()||pending.load())&&GetTickCount64()-start<5000)Sleep(1);
     if(!restored.load()||pending.load())return false; // Keep the pinned recovery hook available.
-    for(unsigned i=0;i<(shared_viewport?1U:2U);++i)if(MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)return false;
-    if(MH_ApplyQueued()!=MH_OK)return false;
+    if(!astera::unhook_owned(update_hook))return false;
+    if(!shared_viewport&&MH_DisableHook(reinterpret_cast<void *>(targets[1]))!=MH_OK)return false;
     while(pending.load()&&GetTickCount64()-start<6000)Sleep(1);
     if(pending.load())return false;
     hooks_disabled=true;return true;

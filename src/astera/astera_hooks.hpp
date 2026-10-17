@@ -68,6 +68,27 @@ void provide_game_hooks(const void *table,void *self) noexcept;
 bool game_hooks_available() noexcept;
 // The hook's handle, or 0 when AL refused it (AL's plugin log says why).
 std::uint32_t game_hook(const GameHook &hook) noexcept;
+// Detours that read their caller ([rsp] at entry: the asm stubs' caller,
+// _ReturnAddress()) must run first in their chain: AL's entry stub jumps
+// straight to the first detour, and each later one is called by the one
+// before. The mod's own game hooks use this order (v0.29.0).
+inline constexpr std::int32_t first_in_chain=-1000000;
+// One of the mod's own game-function hooks: through al.hooks when the plugin
+// handed it over (the shipped DLL), else MinHook (research builds; MinHook
+// initialized by the caller). hook_owned() creates and enables it at once, so
+// `next` must be the very pointer the detour continues with: it is written
+// before the detour can run, and stays valid after unhook_owned().
+struct OwnedHook {
+    const char *name{};     // for AL's log, e.g. "mhw_dlss Render:Update"
+    const char *pattern{};  // the target's first 16 original bytes (al.hooks checks them)
+    void *target{};
+    std::uint32_t handle{}; // al.hooks; 0 with MinHook or when refused
+    bool minhook{},live{};
+};
+bool hook_owned(OwnedHook &hook,void *detour,void **next) noexcept;
+// Takes it out of the game's path again (AL: set_enabled; MinHook: disabled,
+// trampoline kept). True when it is out, or was never in.
+bool unhook_owned(OwnedHook &hook) noexcept;
 // Takes the detour out of its chain or puts it back; calls already inside it
 // finish normally. False for an unknown handle or without al.hooks.
 bool set_game_hook_enabled(std::uint32_t handle,bool enabled) noexcept;

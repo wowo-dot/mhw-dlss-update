@@ -1,8 +1,8 @@
 #include "game_options.hpp"
+#include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../ngx_startup/startup.hpp"
 #include <windows.h>
-#include <MinHook.h>
 #include <xmmintrin.h>
 #include <array>
 #include <atomic>
@@ -36,7 +36,19 @@ std::uintptr_t image{};
 std::string refusal;
 AaApply aa_original{};RsApply rs_original{};AaSetter aa_setter{};Grey grey{};
 RowEnabled row_original{};PageRefresh page_original{};RowBuild build_original{};RestoreDefaults defaults_original{};
-std::array<std::uintptr_t,6> targets{};
+// v0.29.0: al.hooks under AL (astera::OwnedHook). Patterns: each function's
+// first 16 original bytes (clean image, checked against the gates in install()).
+struct HookSpec {unsigned rva;const char *name,*pattern;};
+constexpr HookSpec hook_specs[]{
+    {0x43dcb0,"mhw_dlss Options:AaApply","40 53 48 83 EC 50 0F B6 D9 E8 32 55 00 00 84 C0"},
+    {0x43eeb0,"mhw_dlss Options:RsApply","40 53 48 83 EC 60 0F 29 74 24 50 0F B6 D9 0F 29"},
+    {0x53f580,"mhw_dlss Options:RowEnabled","48 89 5C 24 08 57 48 83 EC 20 0F B6 FA B3 01 83"},
+    {0x53f440,"mhw_dlss Options:PageRefresh","48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48"},
+    {0x53f190,"mhw_dlss Options:RowBuild","48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48"},
+    {0x540720,"mhw_dlss Options:RestoreDefaults","48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55"}};
+static_assert([]{for(const auto &h:hook_specs)if(!astera::valid_pattern<16>(h.pattern))return false;return true;}(),
+              "each game options pattern is its function's first 16 bytes");
+std::array<astera::OwnedHook,std::size(hook_specs)> hooks{};
 std::atomic<bool> taken_now{};
 // The player's choices: the saved ones at install, then every value the game
 // applies (its menu, presets, start-up), except restore defaults while taken.
@@ -141,28 +153,21 @@ bool install(std::uintptr_t host,std::string &reason){
     aa_setter=reinterpret_cast<AaSetter>(host+0x2287a00);grey=reinterpret_cast<Grey>(host+0xb72f00);
     saved_aa=saved(0x4413e0,anti_aliasing_values);saved_rs=saved(0x442120,resolution_scaling_values);
     player_aa=saved_aa;player_rs=saved_rs;
-    constexpr std::array<unsigned,6> rvas{0x43dcb0,0x43eeb0,0x53f580,0x53f440,0x53f190,0x540720};
-    const std::array<void *,6> detours{reinterpret_cast<void *>(aa_apply),reinterpret_cast<void *>(rs_apply),
+    // Pass-through until take_over(), live as each goes in: every detour
+    // continues with its own typed original, written before it can run.
+    const std::array<void *,hooks.size()> detours{reinterpret_cast<void *>(aa_apply),reinterpret_cast<void *>(rs_apply),
         reinterpret_cast<void *>(row_enabled),reinterpret_cast<void *>(page_refresh),reinterpret_cast<void *>(row_build),
         reinterpret_cast<void *>(restore_defaults)};
-    std::array<void *,6> originals{};
-    unsigned created=0;
-    for(;created<rvas.size();++created){
-        targets[created]=host+rvas[created];
-        if(MH_CreateHook(reinterpret_cast<void *>(targets[created]),detours[created],&originals[created])!=MH_OK)break;
+    const std::array<void **,hooks.size()> originals{reinterpret_cast<void **>(&aa_original),reinterpret_cast<void **>(&rs_original),
+        reinterpret_cast<void **>(&row_original),reinterpret_cast<void **>(&page_original),reinterpret_cast<void **>(&build_original),
+        reinterpret_cast<void **>(&defaults_original)};
+    bool live=true;
+    for(unsigned i=0;i<hooks.size()&&live;++i){
+        hooks[i].name=hook_specs[i].name;hooks[i].pattern=hook_specs[i].pattern;hooks[i].target=reinterpret_cast<void *>(host+hook_specs[i].rva);
+        live=astera::hook_owned(hooks[i],detours[i],originals[i]);
     }
-    if(created==rvas.size()){
-        aa_original=reinterpret_cast<AaApply>(originals[0]);rs_original=reinterpret_cast<RsApply>(originals[1]);
-        row_original=reinterpret_cast<RowEnabled>(originals[2]);page_original=reinterpret_cast<PageRefresh>(originals[3]);
-        build_original=reinterpret_cast<RowBuild>(originals[4]);defaults_original=reinterpret_cast<RestoreDefaults>(originals[5]);
-        // Pass-through until take_over(): enabled now, apart from the
-        // runtime's queued hooks.
-        unsigned enabled=0;
-        for(;enabled<rvas.size();++enabled)if(MH_EnableHook(reinterpret_cast<void *>(targets[enabled]))!=MH_OK)break;
-        if(enabled==rvas.size())return true;
-        for(unsigned i=0;i<enabled;++i)MH_DisableHook(reinterpret_cast<void *>(targets[i]));
-    }
-    for(unsigned i=0;i<created;++i)MH_RemoveHook(reinterpret_cast<void *>(targets[i]));
+    if(live)return true;
+    for(auto &h:hooks)astera::unhook_owned(h);
     image=0;reason="game options hooks";refusal=reason;return false;
 }
 void take_over() noexcept {

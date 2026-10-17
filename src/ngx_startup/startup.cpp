@@ -41,16 +41,16 @@ bool decline_requested{},game_dlss_hooked{};
 std::atomic_uint game_dlss_state{};
 // v0.29.0: under Astera Loader both hooks join al.hooks chains (AL patches each
 // entry once, with its own thread handling; removal is set_enabled). Research
-// builds without AL keep MinHook. The order puts both detours first in their
-// chains: hook() checks _ReturnAddress() against the game's DLSS 1 builder,
-// which holds only when AL's entry jumps straight to it.
-constexpr std::int32_t chain_order=-1000000;
+// builds without AL keep MinHook. Both detours run first in their chains
+// (astera::first_in_chain): hook() checks _ReturnAddress() against the game's
+// DLSS 1 builder. The removal is logged in detail (disable_result), so these
+// two keep their own code rather than astera::OwnedHook.
 static_assert(astera::valid_pattern<head_size>(entry_head)&&astera::valid_pattern<head_size>(game_dlss_head),
               "each startup hook's pattern is its function's first 16 bytes");
 bool chained{};
 std::uint32_t entry_handle{},game_dlss_handle{};
 std::uint32_t chain(const char *name,const char *pattern,void *target,void *detour,void **next) noexcept {
-    return astera::game_hook({chain_order,name,pattern,target,detour,next});
+    return astera::game_hook({astera::first_in_chain,name,pattern,target,detour,next});
 }
 bool chain_active(std::uint32_t handle,void *next) noexcept {
     return handle&&next&&astera::game_hook_state(handle)==astera::GameHookState::active;

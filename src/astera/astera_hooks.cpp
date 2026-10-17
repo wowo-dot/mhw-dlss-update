@@ -1,5 +1,6 @@
 #include "astera_hooks.hpp"
 #include "../../third_party/al/al_plugin.h"
+#include <MinHook.h>
 #include <atomic>
 
 namespace mhw::astera {
@@ -41,5 +42,29 @@ GameHookState game_hook_state(std::uint32_t handle) noexcept {
     if(!hooks||!handle)return GameHookState::failed;
     const auto state=hooks->state(game_self,handle);
     return state<=AL_HOOK_FAILED?static_cast<GameHookState>(state):GameHookState::failed;
+}
+bool hook_owned(OwnedHook &hook,void *detour,void **next) noexcept {
+    if(hook.live||hook.handle||!hook.target||!detour||!next)return false;
+    if(game_hooks_available()){
+        hook.minhook=false;
+        hook.handle=game_hook({first_in_chain,hook.name,hook.pattern,hook.target,detour,next});
+        hook.live=hook.handle&&*next&&game_hook_state(hook.handle)==GameHookState::active;
+        return hook.live;
+    }
+    hook.minhook=true;
+    if(MH_CreateHook(hook.target,detour,next)!=MH_OK)return false;
+    if(MH_EnableHook(hook.target)!=MH_OK){MH_RemoveHook(hook.target);return false;}
+    hook.live=true;return true;
+}
+bool unhook_owned(OwnedHook &hook) noexcept {
+    if(hook.minhook){
+        if(!hook.live)return true;
+        const bool out=MH_DisableHook(hook.target)==MH_OK;
+        if(out)hook.live=false;return out;
+    }
+    // Refused or failed hooks hold a handle too; AL takes them out alike.
+    if(!hook.handle)return true;
+    const bool out=set_game_hook_enabled(hook.handle,false);
+    if(out)hook.live=false;return out;
 }
 }
