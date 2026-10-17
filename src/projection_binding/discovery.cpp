@@ -34,9 +34,6 @@ bool system_target(std::uintptr_t at,bool dxgi=false) noexcept {
      m.Type!=MEM_IMAGE || m.State!=MEM_COMMIT || (m.Protect&(PAGE_GUARD|PAGE_NOACCESS)))return false;
   const auto p=m.Protect&255;
   if(p!=PAGE_EXECUTE_READ && p!=PAGE_EXECUTE_READWRITE && p!=PAGE_EXECUTE_WRITECOPY)return false;
-#ifdef MHW_BINDING_FIXTURE
-  if(m.AllocationBase==GetModuleHandleW(nullptr))return true;
-#endif
   wchar_t path[32768]{},directory[32768]{};
   const auto n=GetModuleFileNameW(static_cast<HMODULE>(m.AllocationBase),path,static_cast<DWORD>(std::size(path)));
   const auto d=GetSystemDirectoryW(directory,static_cast<UINT>(std::size(directory)));

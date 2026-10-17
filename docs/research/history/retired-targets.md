@@ -124,10 +124,9 @@ pinned SDK checks and the one library each that the mod links.
 `overlay_extent.cpp`, the haze, radial, depth-of-field, depth-colour and
 screen-filter shaders). The DLL had not called them since v0.26.0.
 
-**Still in the shipped files:** the research-only code paths, which are
-compiled in but never run by the mod:
+**Then from the shipped files:** the research-only code paths, which were
+compiled in but never run by the mod, each with its own commit:
 - the projection recorder's capture machinery and its buffers;
-- the MinHook paths for running without Astera Loader;
-- the research `#if` branches.
-
-They come out next, with their own commits.
+- the research `#if` branches, resolved to their shipped values, with the
+  FG scene probe (`scene_probe.inl`, `scene_trace.hpp`) they guarded;
+- next: the MinHook paths for running without Astera Loader.

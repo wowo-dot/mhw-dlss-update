@@ -18,14 +18,6 @@ constexpr std::array<unsigned,max_hooks> methods{11,25,27,28,29,30,31,32,33,34,3
 // entries[i] until the owner reports the list released (forget()); the slot is
 // then free for another list, and `epoch` invalidates threads' cached lookups.
 struct Entry {SRWLOCK lock=SRWLOCK_INIT;Bindings state;RasterBindings raster;Predicate predicate;};
-#ifdef MHW_FG_SCENE_PROBE
-struct OutputObservation {
-    bool seen{},rtv_argument{},rtv_read{},depth_argument{},depth_read{};
-    unsigned count{},contiguous{};std::uintptr_t rtv{},depth{};
-};
-// Same bounded index as entries. No COM references or resource calls.
-std::array<OutputObservation,list_limit> output_observations;
-#endif
 struct Sample {bool captured{};std::uint64_t frame{};std::uintptr_t list{},expected_root{},expected_pipeline{};Bindings state;};
 std::array<Entry,list_limit> entries;
 std::array<std::atomic<ID3D12GraphicsCommandList *>,list_limit> lists{};
@@ -135,19 +127,8 @@ void after(unsigned which,ID3D12GraphicsCommandList *list,bool admitted,bool ret
             // c is the depth descriptor pointer, not the contiguous-range flag.
             // Keep the existing rendering admission contract unchanged.
             if(which==22){r.output_known=a==1&&!c&&copy(reinterpret_cast<const void *>(b),&r.render_target,sizeof(r.render_target));
-#ifdef MHW_FG_SCENE_PROBE
-                auto &o=output_observations[static_cast<std::size_t>(entry-entries.data())];o={};
-                o.seen=true;o.count=static_cast<unsigned>(a);o.contiguous=static_cast<unsigned>(d);
-                o.rtv_argument=b!=0;o.depth_argument=c!=0;
-                if(r.output_known){o.rtv_read=true;o.rtv=r.render_target;}
-                else if(a&&b){std::uintptr_t value{};o.rtv_read=copy(reinterpret_cast<const void *>(b),&value,sizeof(value));if(o.rtv_read)o.rtv=value;}
-                if(c){std::uintptr_t value{};o.depth_read=copy(reinterpret_cast<const void *>(c),&value,sizeof(value));if(o.depth_read)o.depth=value;}
-#endif
             }
         }
-#ifdef MHW_FG_SCENE_PROBE
-        if(!returned||which==0)output_observations[static_cast<std::size_t>(entry-entries.data())]={};
-#endif
     }}
     pending.sub();
 }
@@ -289,9 +270,6 @@ void reset(ID3D12GraphicsCommandList *list,std::uint64_t generation,ID3D12Pipeli
     if(!accepting.load(std::memory_order_acquire))return;
     const auto apply=[&](Entry *e){
         e->state.reset(generation,reinterpret_cast<std::uintptr_t>(pipeline));e->raster={};e->raster.generation=generation;e->predicate={0,0,D3D12_PREDICATION_OP_EQUAL_ZERO,true};
-#ifdef MHW_FG_SCENE_PROBE
-        output_observations[static_cast<std::size_t>(e-entries.data())]={};
-#endif
     };
     {Locked lock(list);if(auto *e=lock.get()){apply(e);return;}}
     // First Reset of this list: a freed slot or a new one, under the
@@ -318,9 +296,6 @@ void forget(ID3D12GraphicsCommandList *list) noexcept {
         auto &e=entries[i];AcquireSRWLockExclusive(&e.lock);
         lists[i].store(nullptr,std::memory_order_release);
         e.state={};e.raster={};e.predicate={};
-#ifdef MHW_FG_SCENE_PROBE
-        output_observations[i]={};
-#endif
         epoch.fetch_add(1,std::memory_order_acq_rel);forgotten.fetch_add(1,std::memory_order_relaxed);
         ReleaseSRWLockExclusive(&e.lock);return;
     }
@@ -347,17 +322,6 @@ bool inspect(ID3D12GraphicsCommandList *list,Bindings &state) noexcept {
 bool raster_current(ID3D12GraphicsCommandList *list,RasterBindings &state) noexcept {
     Locked lock(list);const auto *e=lock.get();if(installed_hooks<raster_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->raster.ready())return false;state=e->raster;return true;
 }
-#ifdef MHW_FG_SCENE_PROBE
-bool raster_inspect(ID3D12GraphicsCommandList *list,std::array<std::uint64_t,19> &values) noexcept {
-    Locked lock(list);values={};const auto *e=lock.get();if(!e)return false;
-    const auto &r=e->raster;const auto &o=output_observations[static_cast<std::size_t>(e-entries.data())];
-    const unsigned mask=(r.vertex_known?1U:0U)|(r.viewport_known?2U:0U)|(r.scissor_known?4U:0U)|
-        (r.topology_known?8U:0U)|(r.index_known?16U:0U)|(r.output_known?32U:0U);
-    values={1,installed_hooks>=raster_hooks,accepting.load(),healthy(),e->state.known,e->state.valid,
-        e->state.generation,r.generation,mask,r.vertex_mask,o.seen,o.count,o.contiguous,
-        o.rtv_argument,o.rtv_read,o.rtv,o.depth_argument,o.depth_read,o.depth};return true;
-}
-#endif
 bool predicate_current(ID3D12GraphicsCommandList *list,Predicate &state) noexcept {
     Locked lock(list);const auto *e=lock.get();if(installed_hooks<predicate_hooks||!accepting.load()||!healthy()||!e||!e->state.known||!e->state.valid||!e->predicate.known)return false;state=e->predicate;return true;
 }

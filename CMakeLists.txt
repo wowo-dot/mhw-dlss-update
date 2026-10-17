@@ -121,7 +121,6 @@ target_link_libraries(mhw_ngx_startup PUBLIC minhook mhw_thread_snapshot mhw_ast
 # Presentation through Streamline: the identity chain, the live FG switch.
 add_library(mhw_fg_reflex_presentation STATIC src/reflex/presentation.cpp)
 mhw_library(mhw_fg_reflex_presentation)
-target_compile_definitions(mhw_fg_reflex_presentation PRIVATE MHW_FG_SCENE_PROBE)
 target_link_libraries(mhw_fg_reflex_presentation PUBLIC mhw_streamline_reflex minhook d3d12 dxgi dxguid mhw_astera_hooks)
 
 # --- The shipped mod ------------------------------------------------------------
@@ -153,8 +152,7 @@ mhw_cxx(mhw_dlss_alpha)
 target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
 target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe
     "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
-target_compile_definitions(mhw_dlss_alpha PRIVATE MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL
-    MHW_CONTINUOUS_SCALED MHW_FG_GAME MHW_ALPHA WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_compile_definitions(mhw_dlss_alpha PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_link_libraries(mhw_dlss_alpha PRIVATE minhook bcrypt d3d12 dxgi dxguid
     mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
 # The map file names this DLL's functions in crash stacks and stack-sampler
@@ -202,9 +200,9 @@ if(BUILD_TESTING)
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.
     mhw_test(continuous_runtime_tests SOURCES tests/continuous_runtime_tests.cpp src/continuous_dlaa/activation.cpp
-        src/continuous_dlaa/activation_entry.asm ${temporal_binding_sources} ${binding_common}
+        src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp ${temporal_binding_sources} ${binding_common}
         INCLUDES ${binding_includes} DEFINES MHW_TEMPORAL_FIXTURE
-        LIBS minhook bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve NO_TEST)
+        LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve NO_TEST)
     foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate
             pending-retirement released-lists held-lists unfiltered-copy reconstruction state-trace native-state-trace
             native-state-admission depth-eligibility depth-destination shutdown-success shutdown-partial
@@ -227,7 +225,7 @@ if(BUILD_TESTING)
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
     mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm
         src/continuous_dlaa/activation_entry.asm ${binding_common}
-        INCLUDES ${binding_includes} DEFINES MHW_CONTINUOUS_SCALED LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid
+        INCLUDES ${binding_includes} LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid
         TEST native_activation_contract)
     mhw_test(render_resolution_tests SOURCES tests/render_resolution_tests.cpp src/render_resolution/resolution_entry.asm ${binding_common}
         INCLUDES ${binding_includes} LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid TEST render_resolution_contract)

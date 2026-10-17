@@ -10,11 +10,7 @@ namespace mhw::reflex::boundaries {
 inline constexpr unsigned capacity = 262144, duration_ms = 15000;
 enum Kind : unsigned { update, advance, publish, render, native_present, execute, present,
     keyboard, mouse, devices, jobs, submit, device_poll };
-#ifdef MHW_REFLEX_INPUT_TRACE
-inline constexpr unsigned kinds = 13;
-#else
 inline constexpr unsigned kinds = 7;
-#endif
 struct Frame {
     std::array<std::uintptr_t, 7> gpr{};
     std::uint64_t flags{};

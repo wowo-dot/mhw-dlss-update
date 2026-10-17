@@ -49,9 +49,5 @@ void fixture_copy(ID3D12GraphicsCommandList *,ID3D12Resource *,ID3D12Resource *,
 bool fixture_release_pixels(bool) noexcept;
 void fixture_map_failure() noexcept;
 void fixture_before_marker(void (*)()) noexcept;
-#ifdef MHW_TEMPORAL_SCALED
-void fixture_draw_start(void *) noexcept;
-void fixture_draw(ID3D12GraphicsCommandList *,unsigned,unsigned,unsigned,unsigned,std::uintptr_t);
-#endif
 #endif
 }

@@ -208,7 +208,6 @@ struct Presentation::State {
     template<class T> T* native_of(T* self) const noexcept {
         return is_identity(self) && swap ? static_cast<T*>(swap.Get()) : self;
     }
-#ifdef MHW_FG_SCENE_PROBE
     // Scene diagnostic only: CPU labels, no retained buffers. Writers already
     // hold the route mutex; readers take only this lock.
     SRWLOCK scene_lock = SRWLOCK_INIT;
@@ -223,7 +222,6 @@ struct Presentation::State {
         const auto index = proxy_swap->GetCurrentBackBufferIndex();
         scene([&](auto& map) { map.present(reinterpret_cast<std::uintptr_t>(self), index); });
     }
-#endif
 
     void record(OwnershipCall call) noexcept {
         if(!diagnostic_image)return;
@@ -287,9 +285,7 @@ struct Presentation::State {
     void retire_swap() noexcept {
         paced_host_swap.store(0); paced_host_thread.store(0); creation_queue = 0; swap.Reset(); proxy_swap.Reset();
         identity_key.store(0); identity.Reset(); stats.identity = false;
-#ifdef MHW_FG_SCENE_PROBE
         scene([](auto& map) { map.chain(0); });
-#endif
     }
     void describe() {
         DXGI_SWAP_CHAIN_DESC desc{};
@@ -307,9 +303,7 @@ struct Presentation::State {
         // runs through the proxy. No backbuffer is retained by this bridge.
         retire_swap();
         swap = next_native; proxy_swap = next_proxy;
-#ifdef MHW_FG_SCENE_PROBE
         scene([&](auto& map) { map.chain(reinterpret_cast<std::uintptr_t>(swap.Get())); });
-#endif
         creation_queue = reinterpret_cast<std::uintptr_t>(queue);
         paced_host_swap.store(reinterpret_cast<std::uintptr_t>(swap.Get()));
         paced_host_thread.store(GetCurrentThreadId());
@@ -783,9 +777,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
     return route(self, {4,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
         if (!(flags & DXGI_PRESENT_TEST)) host_frame();
-#ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
-#endif
         const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
         SetLastError(before);
         auto* target = s.native_of(self);
@@ -798,9 +790,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? s.paced(decision.result, hr) : capture.value.result;
-#ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene([&](auto& map) { map.present_result(reinterpret_cast<std::uintptr_t>(self), static_cast<std::uint32_t>(result)); });
-#endif
         v.args[2]=ticket;v.args[3]=capture.value.calls;
         const auto error = GetLastError();
         if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
@@ -814,9 +804,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* self, UINT interval, UINT
 HRESULT STDMETHODCALLTYPE buffer_hook(IDXGISwapChain* self, UINT index, REFIID iid, void** out) {
     return route(self,{5,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{index,iid==__uuidof(ID3D12Resource)}}, [&](auto& s,auto& v) {
         const auto hr=s.proxy_swap->GetBuffer(index,iid,out);v.returned=SUCCEEDED(hr)&&out?reinterpret_cast<std::uintptr_t>(*out):0;
-#ifdef MHW_FG_SCENE_PROBE
         if(v.returned&&iid==__uuidof(ID3D12Resource))s.scene([&](auto& map){map.buffer(reinterpret_cast<std::uintptr_t>(self),index,v.returned);});
-#endif
         return hr;},
         [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); },
         [&](auto& s) { return original<BufferFn>(s, 5)(self, index, iid, out); });  // the identity chain's own buffers
@@ -848,9 +836,7 @@ HRESULT STDMETHODCALLTYPE resize_hook(IDXGISwapChain* self, UINT count, UINT w, 
         const auto hr = s.proxy_swap->ResizeBuffers(count, w, h, format, flags);
         if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(FaultSite::resize, S_OK, "describe"); } }
         if (SUCCEEDED(hr) && s.is_identity(self)) s.follow_identity();
-#ifdef MHW_FG_SCENE_PROBE
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
-#endif
         return hr;
     }, [&](auto& s) { return original<ResizeFn>(s, 8)(self, count, w, h, format, flags); },
     [&](auto& s) { s.switch_request.store(0); return s.unroutable_resize(true, count, w, h, format, flags); });
@@ -860,9 +846,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
     return route(self,{9,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress()),0,0,{interval,flags}}, [&](auto& s,auto& v) {
         const auto before = GetLastError();
         if (!(flags & DXGI_PRESENT_TEST)) host_frame();
-#ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
-#endif
         const bool ticket = s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
         SetLastError(before);
         auto* target = s.native_of(self);
@@ -875,9 +859,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
         if (!(flags & DXGI_PRESENT_TEST)) s.stats.native_presents += capture.value.calls;
         if (!(flags & DXGI_PRESENT_TEST) && s.contract == PresentationContract::sdk_paced) ++s.stats.sdk_paced_presents;
         const auto result = s.contract == PresentationContract::sdk_paced ? s.paced(decision.result, hr) : capture.value.result;
-#ifdef MHW_FG_SCENE_PROBE
         if (!(flags & DXGI_PRESENT_TEST)) s.scene([&](auto& map) { map.present_result(reinterpret_cast<std::uintptr_t>(self), static_cast<std::uint32_t>(result)); });
-#endif
         v.args[2]=ticket;v.args[3]=capture.value.calls;
         const auto error = GetLastError();
         if (ticket && s.observer.end) s.observer.end(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags, result);
@@ -889,9 +871,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1* self, UINT interval, UI
 UINT STDMETHODCALLTYPE index_hook(IDXGISwapChain3* self) {
     return route(self,{10,0,0,0,0,0,reinterpret_cast<std::uintptr_t>(_ReturnAddress())}, [&](auto& s,auto&) {
         const auto index = s.proxy_swap->GetCurrentBackBufferIndex();
-#ifdef MHW_FG_SCENE_PROBE
         s.scene([&](auto& map) { map.game_index(reinterpret_cast<std::uintptr_t>(self), index); });
-#endif
         return index; },
         [&](auto& s) { return original<IndexFn>(s, 10)(self); }, [&](auto& s) { return original<IndexFn>(s, 10)(self); });
 }
@@ -918,9 +898,7 @@ HRESULT STDMETHODCALLTYPE resize1_hook(IDXGISwapChain3* self, UINT count, UINT w
         }
         if (SUCCEEDED(hr)) { ++s.stats.resizes; try { s.describe(); } catch (...) { s.fault(FaultSite::resize1, S_OK, "describe"); } }
         if (SUCCEEDED(hr) && s.is_identity(self)) s.follow_identity();
-#ifdef MHW_FG_SCENE_PROBE
         if (SUCCEEDED(hr)) s.scene([&](auto& map) { map.resized(reinterpret_cast<std::uintptr_t>(self)); });
-#endif
         return hr;
     }, [&](auto& s) { return original<Resize1Fn>(s, 11)(self, count, w, h, format, flags, masks, queues); },
     [&](auto& s) { s.switch_request.store(0); return s.unroutable_resize(true, count, w, h, format, flags); });
@@ -1240,11 +1218,9 @@ unsigned Presentation::drain_lifecycle(std::array<LifecycleEvent, lifecycle_capa
     ReleaseSRWLockExclusive(&s.lifecycle_lock);
     return count;
 }
-#ifdef MHW_FG_SCENE_PROBE
 bool scene_presentation_buffers(frame_generation::PresentationBuffers& out) noexcept {
     auto* s = dispatch.load(); if (!s) return false;
     AcquireSRWLockShared(&s->scene_lock); out = s->scene_buffers.snapshot(); ReleaseSRWLockShared(&s->scene_lock);
     return true;
 }
-#endif
 }

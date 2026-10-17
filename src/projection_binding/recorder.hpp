@@ -194,11 +194,4 @@ Install install_status() noexcept;
 const Runtime &runtime() noexcept;
 const Capture *finished_capture() noexcept;
 void write_capture(std::ostream &,const Capture &,const std::wstring &output_prefix);
-#ifdef MHW_BINDING_FIXTURE
-bool install_owned(std::uintptr_t,const Runtime &,const std::array<std::uintptr_t,kind_count> &,bool stimulus=false,bool attachments=false,bool sequence=false) noexcept;
-bool remove_owned() noexcept;
-void expire_owned() noexcept;
-bool hold_owned(unsigned kind,bool exiting) noexcept;
-void release_owned() noexcept;
-#endif
 }

@@ -3,22 +3,26 @@
 The map behind the 0.29.0 cleanup: what `mhw_dlss.dll` (CMake target
 `mhw_dlss_alpha`) is made of, how it starts, what runs per frame, every hook,
 how it fails, and which log output players send us. Line numbers refer to
-`ddb7ab9`. That was before the research targets were retired (tag
-`research-final`, `docs/research/history/retired-targets.md`); some tests
-still compile shipped files with other switches. This page describes only
+`ddb7ab9` (v0.28.6). Since then the research targets were retired (tag
+`research-final`, `docs/research/history/retired-targets.md`) and the
+research switches were resolved to their shipped values, so the files have
+lost the `#if` branches those line numbers count. This page describes only
 the shipped configuration.
 
 ## 1. What ships
 
-- **The DLL's own files:** 32 C++ and 8 assembly files (listed in
-  `CMakeLists.txt`), compiled with `MHW_ALPHA MHW_CONTINUOUS_SCALED
-  MHW_FG_GAME MHW_REFLEX_FRAME_PROBE MHW_REFLEX_TEMPORAL`.
+- **The DLL's own files** (listed in `CMakeLists.txt`). Up to v0.28.6 they
+  were compiled with five research switches (`MHW_ALPHA`,
+  `MHW_CONTINUOUS_SCALED`, `MHW_FG_GAME`, `MHW_REFLEX_FRAME_PROBE`,
+  `MHW_REFLEX_TEMPORAL`). Their shipped branches are now the only code; the
+  one `MHW_` switch left is the test seam `MHW_TEMPORAL_FIXTURE`.
 - **13 static libraries:**
-  - none of them has an `MHW_` define, except `mhw_fg_reflex_presentation`,
-    which is `src/reflex/presentation.cpp` with `MHW_FG_SCENE_PROBE`;
+  - none of them has an `MHW_` define (`mhw_fg_reflex_presentation` had
+    `MHW_FG_SCENE_PROBE`; its presentation buffers, which the crash log
+    writes, are now unconditional);
   - the NVIDIA DLSS SDK's `nvsdk_ngx_d.lib`, MinHook and DxilHash are linked
     in too.
-- **Size:**
+- **Size at v0.28.6** (section 9 has the cleanup's progress):
   - about 27,000 lines of our own code (21,900 in the DLL's files and their
     headers, 5,200 in the libraries), out of 56,000 in `src/`;
   - the DLL file is 4.9 MB, and its `.data` is 22 MB in memory;
@@ -273,17 +277,11 @@ event's `schema`.
 
 **Names:**
 - "alpha" means the shipped plugin.
-- "probe" names the plugin entry (`presentation_probe.cpp`,
-  `MHW_REFLEX_FRAME_PROBE`).
-- `MHW_FG_SCENE_PROBE` is always on in the shipped presentation library.
+- "probe" names the plugin entry (`presentation_probe.cpp`).
 - `silhouette_probe.inl` holds production code.
 - "identity" means four things.
 - The `"build":"alpha"` marker is checked by `package_release.py`, so it
   stays.
-
-**Product questions:**
-- CMFM's "Reset to defaults" and `Config`'s defaults (Performance, 2x, Reflex
-  On) disagree with the shipped ini, which has all three off.
 
 ## 9. The 0.29.0 plan
 
@@ -309,3 +307,21 @@ Behaviour stays the same; the log fields stay.
    - in-game checkpoints after NGX startup, after the DLSS runtime, and after
      MinHook's removal;
    - a long session.
+
+**Progress:**
+- The defaults: `Config`'s defaults and CMFM's "Reset to defaults" had
+  DLSS Performance, FG 2x and Reflex On, unlike the shipped ini (all off).
+  Both follow the ini now (`671be63`).
+- Steps 1 and 2 are done; checkpoints 1 and 2 passed in game (0.29.0-dev.1
+  and dev.2).
+- Step 3:
+  - the research targets are retired (`9a8a056`);
+  - the projection recorder's capture machinery and its buffers left the DLL;
+  - the research switches are resolved to their shipped values. The DLL
+    built from the result has the same functions, sizes and bytes as before;
+    only its time stamps and one RTTI name (the anonymous namespace's hash,
+    which follows the source path) differ;
+  - `continuous_runtime_tests` used to compile `runtime.cpp` without the
+    switches, so it tested the unscaled path, which no longer ships. It now
+    runs the shipped path, with test doubles for the modules the runtime
+    calls (`tests/runtime_neighbours.cpp`).

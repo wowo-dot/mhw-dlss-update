@@ -1,5 +1,4 @@
 #include "runtime.hpp"
-#ifdef MHW_CONTINUOUS_SCALED
 #include "../scaled_temporal/stream_route.hpp"
 #include "../scaled_temporal/resolve.hpp"
 #include "../render_resolution/runtime.hpp"
@@ -8,11 +7,8 @@
 #include "depth_schedule_trace.hpp"
 #include "depth_consumer_admission.hpp"
 #include "depth_consumer_copy.hpp"
-#endif
 #include "activation.hpp"
-#ifdef MHW_ALPHA
 #include "game_options.hpp"
-#endif
 #include "history.hpp"
 #include "requests.hpp"
 #include "retention.hpp"
@@ -38,9 +34,7 @@
 #include "../gpu_memory/budget.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
-#ifdef MHW_FG_GAME
 #include "../frame_generation/game_session.hpp"
-#endif
 #include "../astera/astera_hooks.hpp"
 #include <MinHook.h>
 #include <wrl/client.h>
@@ -65,7 +59,6 @@ namespace {
 namespace pb=projection_binding;namespace tb=temporal_bindings;namespace dr=tb::depth_routes;namespace obs=temporal_present::observer;
 using Microsoft::WRL::ComPtr;using tb::NativeFrame;
 tb::Config cfg;pb::Runtime runtime;
-#ifdef MHW_CONTINUOUS_SCALED
 namespace sr=scaled_temporal::stream_route;
 constexpr unsigned hook_count=13;
 constexpr auto runtime_history_policy=HistoryPolicy::distance_only_comparison;
@@ -80,11 +73,6 @@ dlss_sdk::ReconstructionMode configured_mode{dlss_sdk::ReconstructionMode::perfo
 // The player's DLSS Off (turn_off(), or start_off() before install): the game
 // renders as without the mod until change_mode() takes it over again.
 std::atomic<bool> off{};bool off_at_start{};
-#else
-constexpr unsigned hook_count=11;
-constexpr auto runtime_history_policy=HistoryPolicy::camera_displacement;
-unsigned render_width(){return runtime.width;}unsigned render_height(){return runtime.height;}
-#endif
 // pending: callbacks in flight, without a locked instruction a call
 // (perf/in_flight.hpp; the indexed-draw hook alone runs about 2,600 times a
 // frame on several recording threads). Drain checks use zero().
@@ -160,13 +148,10 @@ struct Projection {pb::Source source;HistoryStamp history;std::uint64_t candidat
 std::array<Projection,32> projections;
 struct Taa {tb::Snapshot source;tb::SceneDepth depth;tb::Packet packet;tb::ShaderRecipe shader;Projection projection;std::uint64_t sequence{};bool live{},forwarding{};
     ResourcePins resources;
-#ifdef MHW_CONTINUOUS_SCALED
     std::uint64_t depth_sequence{};
     std::uintptr_t depth_object{};dr::CopyPacket depth_packet;
-#endif
     std::uint64_t bypasses{},last_bypass_tick{},last_bypass_caller{};unsigned last_bypass_publishers{};};
 struct Depth {dr::Stamp stamp;dr::CopyPacket packet;tb::Owner source,destination;std::uintptr_t object{};std::uint64_t sequence{};bool live{};};
-#ifdef MHW_CONTINUOUS_SCALED
 ScaledDepthTrace scaled_depth_trace;
 DepthScheduleTrace depth_schedule_trace;
 DepthConsumerAdmission depth_consumer_admission;
@@ -182,9 +167,6 @@ void note_depth(unsigned stage,unsigned reason,const Depth &d,ScaledDepthTrace::
     DepthTraceLock lock;scaled_depth_trace.observe({GetTickCount64(),frame,epoch,d.sequence,stage,reason,values});
 }
 #define DEPTH_NOTE(...) note_depth(__VA_ARGS__)
-#else
-#define DEPTH_NOTE(...) ((void)0)
-#endif
 std::array<Taa,32> requests;std::array<Depth,64> depths;
 std::atomic<unsigned> publishing{};
 RequestTelemetry request_telemetry;
@@ -196,14 +178,8 @@ thread_local bool native_forwarding{};
 ResolveTelemetry resolve_telemetry;
 ShaderRejection shader_rejection;
 NativeShaderCache shader_cache;
-#ifdef MHW_CONTINUOUS_SCALED
 NativeShaderCache preparation_shader_cache;
-#endif
-#ifdef MHW_CONTINUOUS_SCALED
 constexpr bool include_menu_shader=true;
-#else
-constexpr bool include_menu_shader=false;
-#endif
 struct PreparedResolve {temporal_present::Bindings bindings;HistoryDecision history;bool evaluate{},full_output{};};
 thread_local PreparedResolve prepared_resolve;
 thread_local bool injected{};
@@ -230,7 +206,6 @@ void transition(ID3D12GraphicsCommandList *list,ID3D12Resource *r,D3D12_RESOURCE
 void copy_input(ID3D12GraphicsCommandList *list,ID3D12Resource *source,unsigned role,D3D12_RESOURCE_STATES state){
     transition(list,source,state,D3D12_RESOURCE_STATE_COPY_SOURCE);reinterpret_cast<CopyFn>(originals[10])(list,raw[role].Get(),source);transition(list,source,D3D12_RESOURCE_STATE_COPY_SOURCE,state);
 }
-#ifdef MHW_CONTINUOUS_SCALED
 // An odd scene's effects sample up to scene x scale (1706.5 of 3413 columns),
 // half a column past the 1706 the game renders. That column keeps what the
 // full-size frames before the reduced scale drew there, and the game's effects
@@ -249,7 +224,6 @@ void fill_edge(ID3D12GraphicsCommandList *list,ID3D12Resource *native,unsigned r
     transition(list,native,D3D12_RESOURCE_STATE_COPY_DEST,state);transition(list,copy,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
     if(copied)++edge_fills;
 }
-#endif
 bool state_of(std::uintptr_t resource,D3D12_RESOURCE_STATES expected){bool known=false;unsigned state{};
     for(unsigned i=0;i<barrier_count;++i){const auto &b=barriers[i];
         if(b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING&&(!b.Aliasing.pResourceBefore||!b.Aliasing.pResourceAfter||reinterpret_cast<std::uintptr_t>(b.Aliasing.pResourceBefore)==resource||reinterpret_cast<std::uintptr_t>(b.Aliasing.pResourceAfter)==resource))return false;
@@ -298,9 +272,7 @@ bool anchor(pb::Source &s,const NativeFrame &f) noexcept {
 }
 bool projection_before(const NativeFrame &f){
     if(!accepting.load()||reconstruction.failed()||f.call.caller!=cfg.image+0x228e834)return false;
-#ifdef MHW_CONTINUOUS_SCALED
     if(!render_resolution::active_ready())return false;
-#endif
     if(projection_busy.test_and_set()){fail(2);return false;}
     projection={};pb::Provider provider_state;
     auto &s=projection.source;
@@ -344,7 +316,6 @@ bool taa_before(const NativeFrame &f){
         values={a.frame,s.frame,a.view,s.view};
         ok=gate(6,producer.projection.valid)&&gate(7,a.frame==s.frame&&a.epoch==s.epoch)&&gate(8,a.view==s.view&&a.context==s.context)&&
            gate(9,a.bank==s.bank&&a.async_mode==s.async);}
-    #ifdef MHW_CONTINUOUS_SCALED
     render_resolution::InputStamp scale;
     if(ok){ok=gate(10,render_resolution::input_stamp(s.view,scale)&&scale.frame==s.frame&&scale.render_width==render_width()&&scale.render_height==render_height());
         values={scale.frame,s.frame,scale.render_width,scale.render_height};}
@@ -353,7 +324,6 @@ bool taa_before(const NativeFrame &f){
     if(ok){ok=gate(11,dlss_sdk::projection_jitter(scaled_geometry,{std::bit_cast<float>(projection_bits.jitter_bits[0]),std::bit_cast<float>(projection_bits.jitter_bits[1])},
         std::bit_cast<float>(projection_bits.viewport_bits[0]),std::bit_cast<float>(projection_bits.viewport_bits[1]),mapped));
         values={projection_bits.jitter_bits[0],projection_bits.jitter_bits[1],projection_bits.viewport_bits[0],projection_bits.viewport_bits[1]};}
-#endif
     if(ok){values={s.rectangle[0],s.rectangle[1],s.rectangle[2],s.rectangle[3]};ok=gate(12,s.rectangle==std::array<unsigned,4>{0,0,render_width(),render_height()});}
     if(ok){values={s.inputs[0].format,s.inputs[5].format,s.inputs[4].format,producer.depth.texture.format};
         ok=gate(13,pin(s.inputs[0].resource,26,producer.resources[0])&&pin(s.inputs[5].resource,42,producer.resources[1])&&
@@ -390,7 +360,6 @@ void taa_after(bool admitted,bool returned){
         reader.get(s.context+0x2b78,array)&&array&&reader.get(array+16ULL*(count-1)+8,object)&&tb::packet(reader,object,producer.packet)&&
         tb::packet_matches(s,producer.packet,(render_width()+15)/16,(render_height()+15)/16,1);
     if(ok){Lock lock;publish_taa();
-#ifdef MHW_CONTINUOUS_SCALED
         Depth selected;selected.stamp.frame=s.frame;selected.stamp.epoch=s.epoch;selected.sequence=producer.depth_sequence;
         note_depth(2,producer.depth_sequence?0U:1U,selected,{producer.sequence,producer.packet.object,s.context,s.view,producer.depth.texture.resource});
         // A prepared full-output frame must have a qualified color resolve
@@ -402,17 +371,14 @@ void taa_after(bool admitted,bool returned){
             preparation_shader_cache.matches(variant,std::span<const std::byte>(native_bytes).first(producer.shader.size),
                 [](std::span<const std::byte> data){return pb::bytes_sha256(data.data(),static_cast<unsigned>(data.size()));});
         if(accepting.load()&&color_contract)sr::publish(producer.source,producer.packet);
-#endif
     }
     else fail(7);producer.resources={};publishing.fetch_sub(1);
 }
-#ifdef MHW_CONTINUOUS_SCALED
 // Render scale 1.0 (DLAA): the render extent is the scene. The depth writer
 // then takes the game's plain path (a native CopyResource, not the nested
 // draw the scaled admission qualifies), so depth is leased at that copy, as in
 // the unscaled build (dlaa-identity-path.md).
 bool identity_extent(){return pass&&render_width()==runtime.width&&render_height()==runtime.height;}
-#endif
 bool depth_before(const NativeFrame &f){
     if(!accepting.load()||f.call.gpr[1]!=cfg.renderer+0x710||static_cast<unsigned>(f.call.stack[0])!=8)return false;
     depth_producer={};auto &d=depth_producer;std::uintptr_t destination{},attachment{},source{};
@@ -421,10 +387,8 @@ bool depth_before(const NativeFrame &f){
         gate(3,reader.get(d.stamp.context+0x50,attachment)&&attachment&&reader.get(attachment+0x58,source))&&
         gate(4,tb::read_owner(reader,source,d.source))&&gate(5,tb::read_owner(reader,destination,d.destination))&&
         gate(6,reader.get(d.stamp.context+0x2b80,depth_producer_count)&&depth_producer_count<65535);
-    #ifdef MHW_CONTINUOUS_SCALED
     unsigned flags{};const bool flags_read=reader.get(cfg.renderer+0x710+0x1ea74,flags);
     note_depth(0,reason,d,{f.call.gpr[1],f.call.gpr[4],destination,attachment,source,d.stamp.container,flags_read,flags,depth_producer_count});
-    #endif
     return ok;
 }
 void depth_after(bool admitted,bool returned){
@@ -461,11 +425,7 @@ void finish_forwarded(ForwardedRequest &token,bool returned){
 }
 bool consumer_before(const NativeFrame &f,bool depth,ForwardedRequest *forwarded=nullptr){
     const bool prepared_output=
-#ifdef MHW_CONTINUOUS_SCALED
         !depth&&sr::owns_packet(f.call.gpr[3]);
-#else
-        false;
-#endif
     if(!accepting.load()&&!prepared_output)return false;
     if(current_kind||native_forwarding){Lock lock;auto &m=request_telemetry.consumers[depth?1:0];++m.calls;++m.reentrant;fail(9);return false;}
     const auto publishers=publishing.load();
@@ -511,15 +471,12 @@ void consumer_after(bool admitted,bool returned){if(admitted){if(!returned)fail(
 void WINAPI barrier_hook(ID3D12GraphicsCommandList *list,UINT n,const D3D12_RESOURCE_BARRIER *data){
     perf::hook_timing::Scope timing(perf::hook_timing::barrier);Guard guard;
     {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<BarrierFn>(originals[8])(list,n,data);}
-    #ifdef MHW_CONTINUOUS_SCALED
     if(!injected)sr::barriers(list,n,data);
-#endif
     if(injected||!current_kind||!accepting.load())return;
     if(list!=current_list||n>barriers.size()-barrier_count||!pb::copy_memory(reinterpret_cast<std::uintptr_t>(data),barriers.data()+barrier_count,n*sizeof(*data))){fail(11);return;}
     barrier_count+=n;
 }
 
-#ifdef MHW_CONTINUOUS_SCALED
 using DrawFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,UINT,UINT);
 using IndexedFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,UINT,UINT,INT,UINT);
 void WINAPI indexed_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT first,INT base,UINT instance){
@@ -564,42 +521,19 @@ void WINAPI draw_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT
  }
  {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);}
 }
-#endif
 void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destination,ID3D12Resource *source){
     perf::hook_timing::Scope timing(perf::hook_timing::copy);Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<CopyFn>(originals[10])(list,destination,source);}
-#ifdef MHW_CONTINUOUS_SCALED
     // The scaled build copies depth at the TAA dispatch, on its own recording,
     // at every render scale (DepthConsumerAdmission; render scale 1.0 is its
     // whole-copy mode since v0.19.3). A lease at the native copy needed that
     // copy on the TAA's command list, which the game does not keep at 1.0
     // (dlaa-identity-path.md, game-70/74/75).
     (void)caller;
-#else
-    if(injected||current_kind!=2||!accepting.load())return;
-    const auto &d=depth_consumer;
-    if(++copy_count!=1||caller!=cfg.image+0x259e100||list!=current_list||reinterpret_cast<std::uintptr_t>(destination)!=d.destination.resource||reinterpret_cast<std::uintptr_t>(source)!=d.source.resource||
-        !dr::copy_states(std::span(barriers).first(barrier_count),d.source.resource,d.destination.resource)
-        ){
-        DEPTH_NOTE(5,8,d,{2,copy_count,caller,reinterpret_cast<std::uintptr_t>(list),reinterpret_cast<std::uintptr_t>(source),reinterpret_cast<std::uintptr_t>(destination)});return;}
-    Lock lock;if(!accepting.load())return;if(lease.list){DEPTH_NOTE(5,2,d,{2,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame});++skips;return;}
-    auto *l=find(list);if(!l||l->closed){DEPTH_NOTE(5,3,d,{2,reinterpret_cast<std::uintptr_t>(list)});return;}
-    const Taa *selected{};for(const auto &t:requests)if(depth_copy_belongs(t,d))selected=&t;
-    if(!selected){DEPTH_NOTE(5,4,d,{2,reinterpret_cast<std::uintptr_t>(list),l->generation});return;}
-    recording_pins.collect(fence->GetCompletedValue());
-    if(!recording_pins.retain(list,l->generation,selected->resources)){fail(1);return;}
-    lease={list,l->generation,d.stamp.frame,true,false};l->injected_generation=l->generation;
-    copy_input(list,destination,1,D3D12_RESOURCE_STATE_COPY_DEST);++depth_count;
-    DEPTH_NOTE(5,0,d,{2,reinterpret_cast<std::uintptr_t>(list),l->generation,selected->sequence});
-#endif
 }
 bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::uintptr_t caller){
     const bool prepared_output=
-#ifdef MHW_CONTINUOUS_SCALED
         current_kind==1&&sr::full_contract(consumer.source);
-#else
-        false;
-#endif
     if(injected||current_kind!=1||(!accepting.load()&&!prepared_output))return false;
     const auto skip=[](unsigned why){last_skip=why;++skips;Lock lock;++dispatch_reasons[why];return false;};
     if(++dispatch_count!=1||list!=current_list||caller!=cfg.image+0x259cfca)return skip(1);
@@ -634,12 +568,9 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
             shader_rejection.generation=state.generation;shader_rejection.list=reinterpret_cast<std::uintptr_t>(list);}
         ++resolve_telemetry.shader_rejected;fail(29);return locked_skip(9);}
     if(!l||l->closed||l->generation!=state.generation)return locked_skip(5);
-#ifdef MHW_CONTINUOUS_SCALED
     obs::Predicate native_predicate;
     if(!obs::predicate_current(list,native_predicate)||native_predicate.buffer)return locked_skip(5);
-#endif
     const auto unfiltered=[&](unsigned why,bool allow_full=true){
-#ifdef MHW_CONTINUOUS_SCALED
         const bool owns_private=!lease.list||(lease.list==list&&lease.generation==l->generation&&lease.frame==s.frame&&!lease.evaluated);
         if(prepared_output&&allow_full&&owns_private){
             // The native post chain already owns a full-output contract. A
@@ -656,9 +587,6 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
             fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             last_skip=why;++skips;++dispatch_reasons[why];reconstruction.suspend();prepared_resolve={state,{},false,true};return true;
         }
-#else
-        (void)allow_full;
-#endif
         const ResourcePins colors{consumer.resources[0],consumer.resources[2],consumer.resources[0],consumer.resources[2]};
         if(!temporal_present::can_copy_unfiltered(list,colors[0].Get(),colors[1].Get(),runtime.width,runtime.height,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)||
            !unfiltered_lifetime.retain(list,l->generation,colors)){fail(33);return locked_skip(11);}
@@ -675,7 +603,6 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
     depth_eligibility.scene(depth_at,consumer.depth,depth,depth_readable,depth_equal,depth_reads);
     if(!depth_destination.check(depth_at,consumer.depth,depth,depth_readable))return unfiltered(3);
     if(!state_of(s.inputs[5].resource,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)){trace_states(list,true);return unfiltered(6);}
-    #ifdef MHW_CONTINUOUS_SCALED
     auto *depth_resource=consumer.resources[3].Get();
     const bool depth_description=depth_resource&&reinterpret_cast<std::uintptr_t>(depth_resource)==consumer.depth.texture.resource&&
         depth_copy_description(depth_resource->GetDesc(),runtime.width,runtime.height,true)&&
@@ -697,30 +624,21 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
         sr::full_post_states(s,depth_state,reinterpret_cast<std::uintptr_t>(depth_resource),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,s.inputs[5].resource);
     }
-    #endif
     const bool qualified_depth=lease.depth
-#ifdef MHW_CONTINUOUS_SCALED
         &&depth_state!=0
-#endif
         ;
     depth_eligibility.lease(depth_at,reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame,qualified_depth,lease.evaluated);
-    #ifdef MHW_CONTINUOUS_SCALED
     depth_schedule_trace.observe(reader,s,consumer.depth,consumer.depth_object,consumer.depth_packet,consumer.depth_sequence,
         consumer.sequence,reinterpret_cast<std::uintptr_t>(list),l->generation,consumer.packet.object,GetTickCount64(),
         lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated,std::span(barriers).first(barrier_count));
-    #endif
-    #ifdef MHW_CONTINUOUS_SCALED
     // Render scale 1.0: record the native depth schedule (observation only).
     if(identity_extent())identity_depth_survey.observe(reader,s,consumer.depth.texture,consumer.depth_object,consumer.depth_packet,
         consumer.packet.object,consumer.sequence,consumer.depth_sequence,reinterpret_cast<std::uintptr_t>(list),l->generation,GetTickCount64(),
         lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated);
-    #endif
     if(lease.list!=list||lease.generation!=l->generation||lease.frame!=s.frame||!qualified_depth||lease.evaluated){
-        #ifdef MHW_CONTINUOUS_SCALED
         {DepthTraceLock trace_lock;scaled_depth_trace.missing({GetTickCount64(),s.frame,s.epoch,consumer.sequence,consumer.depth_sequence,
             consumer.packet.object,reinterpret_cast<std::uintptr_t>(list),l->generation},
             {reinterpret_cast<std::uintptr_t>(lease.list),lease.generation,lease.frame,qualified_depth,lease.evaluated});}
-        #endif
         return unfiltered(7);}
     if(!recording_pins.matches(list,l->generation,consumer.resources))return unfiltered(8);
     const auto decision=history_decision(previous,consumer.projection.history,runtime_history_policy);
@@ -729,24 +647,19 @@ bool dispatch_before(ID3D12GraphicsCommandList *list,UINT x,UINT y,UINT z,std::u
     if(!decision.valid||(reconstruction.waiting()&&!decision.reset))return unfiltered(10);
     if(!temporal_present::can_copy_unfiltered(list,raw[0].Get(),reinterpret_cast<ID3D12Resource *>(s.inputs[4].resource),runtime.width,runtime.height,D3D12_RESOURCE_STATE_COPY_DEST)){
         fail(30);return locked_skip(11);}
-    #ifdef MHW_CONTINUOUS_SCALED
     if(!sr::ready(list,l->generation,s,current_recording)){
         {DepthTraceLock trace_lock;++scaled_depth_trace.readiness_rejected;}return unfiltered(7,false);}
-#endif
     prepared_resolve={state,decision,true,prepared_output};
     copy_input(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     copy_input(list,reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource),2,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-#ifdef MHW_CONTINUOUS_SCALED
     fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource),0,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     fill_edge(list,reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource),2,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-#endif
     return true;
 }
 ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
     Lock lock;const auto &state=prepared_resolve.bindings;const auto &decision=prepared_resolve.history;
     if(!prepared_resolve.evaluate){
         if(!obs::matches_current(list,state)){fail(12);return {};}
-#ifdef MHW_CONTINUOUS_SCALED
         if(prepared_resolve.full_output){
             auto result=scaled_temporal::record_resolve(*pass,*spatial,list,reinterpret_cast<ID3D12Resource *>(consumer.source.inputs[4].resource),
                 state,{},true,0,false);
@@ -754,7 +667,6 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
             if(!result.output_written()||!obs::matches_current(list,state)){fail(46);return {ResolveOutcome::unrecoverable};}
             lease.evaluated=true;return result;
         }
-#endif
         const bool copied=temporal_present::copy_unfiltered(list,consumer.resources[0].Get(),consumer.resources[2].Get(),
             runtime.width,runtime.height,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         if(!copied||!obs::matches_current(list,state)){fail(34);return {ResolveOutcome::unrecoverable};}
@@ -762,24 +674,15 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
     }
     if(!obs::matches_current(list,state)||lease.list!=list||lease.generation!=state.generation){fail(12);return {};}
     const auto bits=consumer.projection.source.projection.jitter_bits;
-    #ifdef MHW_CONTINUOUS_SCALED
     dlss_sdk::PixelJitter mapped;const auto viewport=consumer.projection.source.projection.viewport_bits;
     if(!dlss_sdk::projection_jitter(scaled_geometry,{std::bit_cast<float>(bits[0]),std::bit_cast<float>(bits[1])},
         std::bit_cast<float>(viewport[0]),std::bit_cast<float>(viewport[1]),mapped)){sr::resolved(false);fail(41);return {};}
     const dlss_sdk::HistoryFrame frame{consumer.source.frame,consumer.source.epoch,mapped.x,mapped.y};
-#else
-    const dlss_sdk::HistoryFrame frame{consumer.source.frame,consumer.source.epoch,std::bit_cast<float>(bits[0])*.5F,std::bit_cast<float>(bits[1])*-.5F};
-#endif
     // Once claimed, even an explicit stop between preparation and replacement
     // must write the output. It must never resume the native TAA calculation.
-    #ifdef MHW_CONTINUOUS_SCALED
     auto result=scaled_temporal::record_resolve(*pass,*spatial,list,reinterpret_cast<ID3D12Resource *>(consumer.source.inputs[4].resource),
         state,frame,decision.reset,decision.milliseconds,accepting.load()&&!reconstruction.failed());
     sr::resolved(result.output_written(),result.outcome==ResolveOutcome::reconstructed);
-#else
-    auto result=record_resolve(*pass,list,raw[0].Get(),reinterpret_cast<ID3D12Resource *>(consumer.source.inputs[4].resource),
-        runtime.width,runtime.height,state,frame,decision.reset,decision.milliseconds,accepting.load()&&!reconstruction.failed());
-#endif
     if(!obs::matches_current(list,state)){fail(31);result.outcome=ResolveOutcome::unrecoverable;return result;}
     if(result.output_written())lease.evaluated=true;
     if(result.outcome!=ResolveOutcome::reconstructed){
@@ -787,7 +690,6 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
         else if(result.outcome!=ResolveOutcome::unfiltered)fail(30);
         return result;
     }
-#ifdef MHW_FG_GAME
     // Stage this frame's converted depth/motion and camera; the replaced final
     // screen draw of the same frame records them with the HUD-less colour.
     {frame_generation::game::SlotCamera camera;const auto &h=consumer.projection.history;camera.view=h.view_matrix;
@@ -797,13 +699,11 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list){
      const bool outer=injected;injected=true;  // our staging copy is not native work
      frame_generation::game::stage(list,consumer.source.frame,consumer.source.epoch,images[1],images[2],camera);
      injected=outer;}
-#endif
     history_telemetry.record(previous,consumer.projection.history,decision);
     history_depth=consumer.resources[3];previous=consumer.projection.history;lease.evaluated=true;++frames;last_skip=0;if(decision.reset)++reset_count;
     reconstruction.complete();
     return result;
 }
-#ifdef MHW_FG_GAME
 // stream_route final-scene observer: our barriers, copies and dispatch must
 // bypass this runtime's own hooks exactly like the DLSS replacement's work.
 void fg_final_scene(ID3D12GraphicsCommandList *list,const temporal_present::Bindings &roots,ID3D12Resource *scene,
@@ -812,7 +712,6 @@ void fg_final_scene(ID3D12GraphicsCommandList *list,const temporal_present::Bind
     frame_generation::game::record(list,roots,scene,frame,epoch,scene_state);
     injected=outer;
 }
-#endif
 ResolveResult replace_scoped(ID3D12GraphicsCommandList *list){
     ResolveResult result;injected=true;__try{result=dispatch_replace(list);}__finally{injected=false;}return result;
 }
@@ -841,14 +740,10 @@ unsigned prune_released(){
         if(!p||lease.list==p)continue;
         p->AddRef();if(p->Release()!=1)continue;
         if(recording_pins.pending(p,l.generation)||unfiltered_lifetime.pending(p,l.generation))continue;
-#ifdef MHW_CONTINUOUS_SCALED
         if(!sr::reset(p,l.generation)){fail(42);break;}
-#endif
         if(!recording_pins.reset(p,l.generation)){fail(16);break;}
         if(!unfiltered_lifetime.reset(p,l.generation)){fail(35);break;}
-#ifdef MHW_FG_GAME
         frame_generation::game::reset(reinterpret_cast<std::uintptr_t>(p),l.generation);
-#endif
         obs::forget(p);
         l=List{};++pruned;
     }
@@ -873,29 +768,23 @@ HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list,ID3D12CommandAllocator
     if(!l){if(!accepting.load())return result;l=list_slot();if(!l){fail(15);return result;}*l=List{};l->value=list;
         if(const auto n=live_lists();n>lists_peak)lists_peak=n;}
     if(lease.list==list){if(!l->submitted)fail(16);lease={};}
-    #ifdef MHW_CONTINUOUS_SCALED
     if(!sr::reset(list,l->generation))fail(42);
     if(fence)sr::collect(fence->GetCompletedValue());
-#endif
     if(!recording_pins.reset(list,l->generation))fail(16);
     if(!unfiltered_lifetime.reset(list,l->generation))fail(35);
     if(fence&&!fault.load()){recording_pins.collect(fence->GetCompletedValue());unfiltered_lifetime.collect();}
-#ifdef MHW_FG_GAME
     frame_generation::game::reset(reinterpret_cast<std::uintptr_t>(list),l->generation);
-#endif
     l->generation=++generation;l->closed=false;l->submitted=false;
     obs::reset(list,l->generation,pipeline);return result;
 }
 HRESULT WINAPI close_hook(ID3D12GraphicsCommandList *list){
     perf::hook_timing::Scope close_timing(perf::hook_timing::reset_close);Guard guard;
-#ifdef MHW_FG_GAME
     // FG brightness capture: the list's last commands, before the native Close.
     if(!injected&&frame_generation::game::capture_wanted()){
         bool open=false;{Lock lock;const auto *l=find(list);open=l&&!l->closed;}
         temporal_present::Bindings roots;
         if(open&&obs::inspect(list,roots)){injected=true;frame_generation::game::closing(list,roots);injected=false;}
     }
-#endif
     HRESULT result;
     {perf::hook_timing::ForwardScope forward(close_timing.sample);result=reinterpret_cast<HRESULT(WINAPI *)(ID3D12GraphicsCommandList *)>(originals[6])(list);}
     Lock lock;if(auto *l=find(list)){if(SUCCEEDED(result))l->closed=true;else if(lease.list==list||unfiltered_lifetime.tracked(list,l->generation))fail(17);}return result;
@@ -909,23 +798,16 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
     Guard guard;std::array<ID3D12CommandList *,128> copy{};
     bool selected=false,signal_requested=false;ID3D12GraphicsCommandList *selected_list{};std::uint64_t value{};
     UnfilteredLifetime::Submission unfiltered_submission;bool unfiltered_valid=false;
-    #ifdef MHW_CONTINUOUS_SCALED
     std::array<std::array<std::uint64_t,2>,128> observed_lists{};bool observed_batch=false,route_selected=false;
-    #endif
     if(count<=copy.size()&&(!count||pb::copy_memory(reinterpret_cast<std::uintptr_t>(submitted),copy.data(),count*sizeof(copy[0])))){
         Lock lock;unsigned matches{};
-        #ifdef MHW_CONTINUOUS_SCALED
         observed_batch=true;
-        #endif
         for(unsigned i=0;i<count;++i){auto *l=find(reinterpret_cast<ID3D12GraphicsCommandList *>(copy[i]));
-            #ifdef MHW_CONTINUOUS_SCALED
             observed_lists[i]={reinterpret_cast<std::uintptr_t>(copy[i]),l?l->generation:0};
-            #endif
             if(!l||l->injected_generation!=l->generation)continue;
             if(l->submitted||!l->closed||lease.list!=l->value.Get()||lease.generation!=l->generation){fail(18);continue;}
             ++matches;selected_list=l->value.Get();
         }
-        #ifdef MHW_CONTINUOUS_SCALED
         route_selected=sr::submission_needed(std::span(observed_lists).first(count));
         bool route_closed=true;
         if(route_selected)for(unsigned i=0;i<count;++i)
@@ -934,20 +816,13 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
                 route_closed=route_closed&&l&&l->closed;
             }
         const bool owned_batch=matches||route_selected;
-        #else
-        const bool owned_batch=matches!=0;
-        #endif
         if(owned_batch){
             const bool queue_valid=matches<=1&&child(queue)&&queue->GetDesc().Type==D3D12_COMMAND_LIST_TYPE_DIRECT
-#ifdef MHW_CONTINUOUS_SCALED
                 &&route_closed
-#endif
                 ;
             selected=queue_valid&&matches==1;
             if(!queue_valid){
-#ifdef MHW_CONTINUOUS_SCALED
                 if(route_selected)sr::reject_submission(std::span(observed_lists).first(count));
-#endif
                 fail(19);
             }
             else {
@@ -955,14 +830,10 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
                 // changes DIRECT queues, explicitly chain our private work.
                 bool ordered=true;
                 if(last_queue&&last_queue.Get()!=queue&&FAILED(queue->Wait(fence.Get(),signal_value))){selected=false;ordered=false;fail(20);}
-                #ifdef MHW_CONTINUOUS_SCALED
                 if(ordered&&route_selected&&!sr::validate_submission(reinterpret_cast<std::uintptr_t>(queue),std::span(observed_lists).first(count),signal_value+1)){
                     sr::reject_submission(std::span(observed_lists).first(count));selected=false;ordered=false;fail(43);}
-                #endif
                 if(ordered){value=++signal_value;last_queue=queue;signal_requested=true;if(selected)find(selected_list)->submitted=true;
-#ifdef MHW_CONTINUOUS_SCALED
                     if(route_selected&&!selected)++route_only_signals;
-#endif
                 }
             }
         }
@@ -972,18 +843,12 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
     }else if(accepting.load())fail(21);
     {perf::hook_timing::ForwardScope forward(execute_timing.sample);
     reinterpret_cast<void(WINAPI *)(ID3D12CommandQueue *,UINT,ID3D12CommandList *const *)>(originals[7])(queue,count,submitted);}
-    #ifdef MHW_CONTINUOUS_SCALED
     if(observed_batch)sr::observe_submission(reinterpret_cast<std::uintptr_t>(queue),GetTickCount64(),std::span(observed_lists).first(count));
-    #endif
-    #ifdef MHW_FG_GAME
     if(observed_batch){static std::atomic<std::uint64_t> fg_batches{};const auto fg_batch=++fg_batches;
         for(unsigned i=0;i<count;++i)if(observed_lists[i][1])frame_generation::game::submitted(observed_lists[i][0],observed_lists[i][1],fg_batch);}
-    #endif
     if(signal_requested){const auto result=queue->Signal(fence.Get(),value);Lock lock;
         if(FAILED(result)){fail(22);return;}
-        #ifdef MHW_CONTINUOUS_SCALED
         if(route_selected&&!sr::submitted_batch(reinterpret_cast<std::uintptr_t>(queue),std::span(observed_lists).first(count),value)){fail(43);return;}
-        #endif
         if(selected){
         auto *l=find(selected_list);if(!l||l->generation!=lease.generation){fail(23);return;}
         if(!recording_pins.submitted(selected_list,l->generation,value)){fail(28);return;}
@@ -992,7 +857,6 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue,UINT count,ID3D12CommandList 
     }
     if(unfiltered_valid){Lock lock;if(!unfiltered_lifetime.after(queue,unfiltered_submission))fail(37);}
 }
-#ifdef MHW_CONTINUOUS_SCALED
 bool observe_prepared_resolve(const NativeFrame &f){
     if(!sr::owns_packet(f.call.gpr[3]))return false;
     std::uintptr_t backend{},recording{},command{};
@@ -1001,16 +865,13 @@ bool observe_prepared_resolve(const NativeFrame &f){
     Lock lock;auto *list=reinterpret_cast<ID3D12GraphicsCommandList *>(command);const auto *entry=find(list);
     return entry&&!entry->closed&&sr::observe_resolve(f.call.gpr[3],list,entry->generation);
 }
-#endif
 void native_seh(unsigned kind,NativeFrame *f){
     auto timing=perf::hook_timing::begin(perf::hook_timing::native_frame);
     bool admitted=false,returned=false;
-#ifdef MHW_CONTINUOUS_SCALED
     // Forwarding saves native RETURN registers into f->call. R8 is volatile;
     // preserve the entry packet independently for after-call scope cleanup.
     const auto prepared_packet=f->call.gpr[3];
     const bool prepared=kind==1&&observe_prepared_resolve(*f);
-#endif
     ForwardedRequest forwarded{};
     if(kind==0)admitted=taa_before(*f);
     else if(kind==1)admitted=consumer_before(*f,false,&forwarded);
@@ -1019,9 +880,7 @@ void native_seh(unsigned kind,NativeFrame *f){
     else admitted=projection_before(*f);
     __try{perf::hook_timing::forward_begin(timing);mhw_binding_forward(originals[kind],&f->call);perf::hook_timing::forward_end(timing);returned=true;}
     __finally{
-#ifdef MHW_CONTINUOUS_SCALED
         if(prepared)sr::finish_resolve(prepared_packet,returned);
-#endif
         if(kind==0)taa_after(admitted,returned);
         else if(kind==1||kind==3){finish_forwarded(forwarded,returned);consumer_after(admitted,returned);}
         else if(kind==2)depth_after(admitted,returned);
@@ -1063,7 +922,6 @@ void request_off() noexcept{mode_request.store(off_request);}
 bool requested_mode(ModeRequest &r) noexcept{
     const int v=mode_request.exchange(-1);if(v<0)return false;
     r.off=v==off_request;r.mode=r.off?configured_mode_value():static_cast<dlss_sdk::ReconstructionMode>(v);return true;}
-#ifdef MHW_CONTINUOUS_SCALED
 namespace {
 // Polls `done` until true or `ms` pass; Sleep(1) between polls.
 template<class F> bool wait_for(F &&done,std::uint64_t ms){
@@ -1071,7 +929,6 @@ template<class F> bool wait_for(F &&done,std::uint64_t ms){
     while(!done()){if(GetTickCount64()>=end)return false;Sleep(1);}
     return true;
 }
-#ifdef MHW_ALPHA
 // The player's anti-aliasing and resolution scaling again (game_options.hpp),
 // once the render thread restored the owned scale.
 void give_back_options() noexcept {
@@ -1079,7 +936,6 @@ void give_back_options() noexcept {
     wait_for(render_resolution::released,1000);
     game_options::give_back();
 }
-#endif
 // Observes `count` at zero once within `ms`. Every hook counts itself before
 // it reads `accepting`, so after a stop one zero proves that no callback that
 // could still have seen the runtime accepting is running.
@@ -1183,19 +1039,15 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         mark(3);
         // 4 the render scale: retarget, or rebase on the new scene. From here
         // a failure stops the runtime.
-#ifdef MHW_ALPHA
         // From Off: the game's own DLSS rules again (anti-aliasing Off,
         // resolution scaling High) before the scale is taken.
         if(from_off)game_options::take_over();
-#endif
         if(scene){
             if(std::string why;!render_resolution::rebase({found.width,found.height},basis,dlss_sdk::requested_scale(requested),why))
                 throw std::runtime_error("render scale: "+why);
         }else if(std::string why;from_off?!render_resolution::resume(dlss_sdk::requested_scale(requested),why)
                                            :!render_resolution::retarget(dlss_sdk::requested_scale(requested),why)){
-#ifdef MHW_ALPHA
             if(from_off)give_back_options();
-#endif
             return resume(("render scale: "+why).c_str());
         }
         changed=true;
@@ -1284,9 +1136,7 @@ ModeChange turn_off() noexcept{
         mark(2);
         // 3 the game's own AA and scale from its next frame.
         activation::yield(true);render_resolution::yield();
-#ifdef MHW_ALPHA
         give_back_options();
-#endif
         off.store(true);r.off=r.ok=true;mark(3);return r;
     }catch(const std::exception &e){r.reason=e.what();}
     catch(...){r.reason="turn off";}
@@ -1305,19 +1155,6 @@ void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept{if(!pass)confi
 // Worker: the mode DLSS runs (after install; it may differ from the configured
 // one, see install) or will run.
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return pass?scaled_geometry.mode:configured_mode;}
-#else
-bool live_modes() noexcept{return false;}
-ModeChange change_mode(dlss_sdk::ReconstructionMode) noexcept{ModeChange r;r.reason="unscaled build";return r;}
-ModeChange change_scene() noexcept{ModeChange r;r.reason="unscaled build";return r;}
-ModeChange turn_off() noexcept{ModeChange r;r.reason="unscaled build";return r;}
-bool dlss_off() noexcept{return false;}
-void start_off(bool) noexcept{}
-dlss_sdk::ReconstructionMode configured_mode_value() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
-bool diagnostic_pause(bool) noexcept{return false;}
-// The unscaled build always runs DLAA.
-void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept{}
-dlss_sdk::ReconstructionMode reconstruction_mode() noexcept{return dlss_sdk::ReconstructionMode::dlaa;}
-#endif
 bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept{
     if(!pass)return false;
     scene_width=runtime.width;scene_height=runtime.height;window_width=runtime.window_width;window_height=runtime.window_height;return true;
@@ -1346,9 +1183,7 @@ bool ready(std::uintptr_t image,std::string &reason){
     try{
         if(pass){reason="continuous-already-prepared";return false;}
         pb::Runtime found;if(!qualified(image,found,reason))return false;
-#ifdef MHW_CONTINUOUS_SCALED
         if(!render_resolution::ready(image,dlss_sdk::requested_scale(configured_mode),reason))return false;
-#endif
         return true;
     }catch(const std::exception &e){reason=e.what();return false;}
 }
@@ -1358,16 +1193,12 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!qualified(image,runtime,reason))return false;
         cfg={image,0,runtime.backend,runtime.device};if(!pb::read(image+0x51c4480,cfg.renderer)||!cfg.renderer)throw std::runtime_error("continuous renderer");
         auto *device=reinterpret_cast<ID3D12Device *>(cfg.device);
-#ifdef MHW_CONTINUOUS_SCALED
         {const auto planned=render_resolution::plan({runtime.width,runtime.height},runtime.scene_override?runtime.window_width:runtime.width,
              dlss_sdk::requested_scale(configured_mode));
          if(!planned.valid)throw std::runtime_error("scaled render plan");scaled_render={planned.render.width,planned.render.height};
          edge_column=static_cast<float>(runtime.width)*planned.quantized>static_cast<float>(planned.render.width);
          edge_row=static_cast<float>(runtime.height)*planned.quantized>static_cast<float>(planned.render.height);}
         const unsigned planned_width=render_width(),planned_height=render_height();
-#else
-        const unsigned planned_width=runtime.width,planned_height=runtime.height;
-#endif
         // The images must fit the video memory budget (gpu_memory/budget.hpp).
         if(!pin_adapter(device,runtime.swapchain))throw std::runtime_error("video memory: the game's adapter");
         gpu_memory::Check memory;
@@ -1380,7 +1211,6 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(FAILED(device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&raw[i]))))throw std::runtime_error("continuous raw allocation");}
         const auto *initialization=ngx_startup::borrowed_initialization();if(!initialization)throw std::runtime_error("continuous startup ownership");
         sdk_runtime=sdk;
-        #ifdef MHW_CONTINUOUS_SCALED
         // DLAA renders at the scene size. A basis width that is not a multiple
         // of 16 pixels quantizes 100% just below it; DLSS then upscales that
         // extent as Quality.
@@ -1389,9 +1219,6 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},mode};
         pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false,byte_limit);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
-#else
-        pass=std::make_unique<dlss_sdk::InlineFrame>(device,dlss_sdk::Geometry::dlaa(runtime.width,runtime.height),std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,true,byte_limit);
-#endif
         if(FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence))))throw std::runtime_error("continuous fence");
         if(!unfiltered_lifetime.initialize(device))throw std::runtime_error("unfiltered lifetime fence");
         ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;ComPtr<ID3D12CommandQueue> queue;
@@ -1401,21 +1228,15 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
          if(FAILED(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&allocator)))||FAILED(device->CreateCommandList(0,q.Type,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||FAILED(device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue))))throw std::runtime_error("continuous method discovery");}
         targets[0]=image+tb::dispatch_rva;targets[1]=image+0x259cc20;targets[2]=image+0x23cd170;targets[3]=image+0x259df30;targets[4]=image+0x228f3b0;
         constexpr unsigned slots[]{10,9,10,26,14,17
-#ifdef MHW_CONTINUOUS_SCALED
             ,12,13
-#endif
         };
         for(unsigned i=5;i<hook_count;++i)if(!pb::system_method(reinterpret_cast<std::uintptr_t>(i==7?static_cast<IUnknown *>(queue.Get()):static_cast<IUnknown *>(list.Get())),slots[i-5],targets[i]))throw std::runtime_error("continuous API gate");
         const std::array<void *,hook_count> detours{reinterpret_cast<void *>(temporal_dispatch_entry),reinterpret_cast<void *>(temporal_consumer_entry),reinterpret_cast<void *>(temporal_depth_producer_entry),reinterpret_cast<void *>(temporal_depth_consumer_entry),reinterpret_cast<void *>(temporal_jitter_entry),
             reinterpret_cast<void *>(reset_hook),reinterpret_cast<void *>(close_hook),reinterpret_cast<void *>(execute_hook),reinterpret_cast<void *>(barrier_hook),reinterpret_cast<void *>(dispatch_hook),reinterpret_cast<void *>(copy_hook)
-#ifdef MHW_CONTINUOUS_SCALED
             ,reinterpret_cast<void *>(draw_hook),reinterpret_cast<void *>(indexed_hook)
-#endif
         };
-        #ifdef MHW_CONTINUOUS_SCALED
         // The sizing gates must be checked before activation modifies their callees.
         // dlss_mode = off: everything is installed, nothing taken over.
-#ifdef MHW_ALPHA
         // The game's own DLSS rules (game_options.hpp), before the render
         // scale is taken: its start-up check needs the game's scale at 1.
         // Without them DLSS runs as before, over the player's own settings.
@@ -1424,16 +1245,10 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(!wait_for([&]{return render_resolution::full_scale(image);},2000))
                 throw std::runtime_error("the game did not apply resolution scaling High");
         }
-#endif
         if(!render_resolution::install(image,dlss_sdk::requested_scale(configured_mode),reason,true,off_at_start))throw std::runtime_error(reason);
         if(!obs::install(device,pb::system_method,reason,true,render_resolution::observe_viewports,true,true))throw std::runtime_error(reason);
         if(!sr::prepare(cfg,runtime.width,runtime.height,render_width(),render_height(),reason))throw std::runtime_error(reason);
-#ifdef MHW_FG_GAME
         sr::observe_final_scene(&fg_final_scene);
-#endif
-#else
-        if(!obs::install(device,pb::system_method,reason))return false;
-#endif
         for(unsigned i=0;i<targets.size();++i){
             if(i<first_api_hook){
                 auto &h=game_hooks[i];h.name=hook_names[i];h.pattern=hook_patterns[i];h.target=reinterpret_cast<void *>(targets[i]);
@@ -1445,50 +1260,33 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
             if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK)throw std::runtime_error("continuous hook creation");
             if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)throw std::runtime_error("continuous enable queue");enabled[i]=true;
         }
-#ifdef MHW_CONTINUOUS_SCALED
         // Each hook is live as it goes in (al.hooks): the player's Off at start
         // must hold before activation can own a camera frame.
         activation::yield(off_at_start);
-#endif
         if(!activation::prepare(image,cfg.renderer,reason))throw std::runtime_error(reason);
         obs::begin();
-#ifdef MHW_CONTINUOUS_SCALED
         if(off_at_start)off.store(true);
         else sr::begin();
         accepting.store(!off_at_start);
-#else
-        accepting.store(true);
-#endif
         if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("continuous enable apply");
-#ifdef MHW_CONTINUOUS_SCALED
         live_installed.store(true);
-#endif
         if(astera::active()){chain_live.store(true,std::memory_order_release);
-#ifdef MHW_CONTINUOUS_SCALED
             sr::chains_live(true);
-#endif
         }
         return true;
     }catch(const std::exception &e){reason=e.what();stop();return false;}
 }
 void stop() noexcept {accepting.store(false);live_installed.store(false);activation::stop();
-#ifdef MHW_CONTINUOUS_SCALED
     sr::stop();render_resolution::stop();
-#endif
-#ifdef MHW_ALPHA
     give_back_options();
-#endif
 }
 bool healthy() noexcept {return fault.load()==0&&obs::healthy()&&activation::healthy()
-#ifdef MHW_CONTINUOUS_SCALED
     &&sr::healthy()&&render_resolution::healthy()
-#endif
     ;}
 void finish() noexcept {
     stop();const auto deadline=GetTickCount64()+2000;
     while((!pending.zero()||projection_busy.test()||!activation::drained())&&GetTickCount64()<deadline)Sleep(1);
     if(!pending.zero()||projection_busy.test()||!activation::drained()){fail(24);return;}
-    #ifdef MHW_CONTINUOUS_SCALED
     // Restore native sizing while the render-thread callback is still installed.
     if(!render_resolution::finish()){fail(44);return;}
     while(sr::healthy()&&!sr::drained()&&GetTickCount64()<deadline+6000)Sleep(1);
@@ -1504,7 +1302,6 @@ void finish() noexcept {
     // hooks are queued and applied together below.
     const bool route_unhooked=sr::unhook();
     if(!route_unhooked)fail(45);
-#endif
     if(!activation::unhook())fail(25);
     std::array<bool,targets.size()> disable_queued{};
     for(unsigned i=0;i<targets.size();++i)if(enabled[i]){
@@ -1515,17 +1312,13 @@ void finish() noexcept {
     if(MH_ApplyQueued()==MH_OK){
         if(astera::active())chain_live.store(false,std::memory_order_release);
         for(unsigned i=0;i<targets.size();++i)if(disable_queued[i])enabled[i]=false;
-#ifdef MHW_CONTINUOUS_SCALED
         if(route_unhooked)sr::disabled(true);
-#endif
     }else fail(26);
     // A forwarded callback may have entered before the patch was removed.
     // Keep the observer and all trampolines available until it returns.
     const auto return_deadline=GetTickCount64()+2000;
     const auto callbacks_busy=[](){return !pending.zero()||projection_busy.test()||!activation::drained()
-#ifdef MHW_CONTINUOUS_SCALED
         ||!sr::callbacks_idle()
-#endif
         ;};
     while(callbacks_busy()&&GetTickCount64()<return_deadline)Sleep(1);
     if(callbacks_busy()){fail(24);return;}
@@ -1553,9 +1346,7 @@ bool quiescent() noexcept {
        !obs::settled()||!obs::hooks_disabled()||lease.list||
        (fence&&(fence->GetCompletedValue()==UINT64_MAX||fence->GetCompletedValue()<signal_value)))return false;
     for(bool e:enabled)if(e)return false;
-#ifdef MHW_CONTINUOUS_SCALED
     if(!sr::callbacks_idle()||!sr::drained())return false;
-#endif
     return healthy();
 }
 void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;const auto reads=bridge_probe::read_cache_stats();
@@ -1573,7 +1364,6 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     {const auto &l=last_producer_refusal;  // write_summary holds the lock
      out<<"],\"producer_last\":{\"frame\":"<<l.frame<<",\"reason\":"<<l.reason<<",\"values\":["<<l.values[0]<<','<<l.values[1]<<','<<l.values[2]<<','<<l.values[3]<<"]}";}
     out<<",\"projection_viewports\":[";for(unsigned i=0;i<projection_viewports.size();++i){if(i)out<<',';out<<projection_viewports[i].load();}out<<']';
-#ifdef MHW_CONTINUOUS_SCALED
     // Skip reason 7 is a missing depth lease or a route readiness rejection.
     {DepthTraceLock trace_lock;out<<",\"depth_missing\":"<<scaled_depth_trace.missing_count<<",\"route_not_ready\":"<<scaled_depth_trace.readiness_rejected;}
     // Why the private depth copy was not admitted (DLAA, game-65: every frame),
@@ -1582,14 +1372,11 @@ void write_summary(std::ostream &out){Lock lock;const auto &h=history_telemetry;
     out<<",\"depth_capture\":";{DepthTraceLock trace_lock;scaled_depth_trace.write(out);}
     out<<",\"identity_depth\":";identity_depth_survey.write(out);
     out<<",\"route\":";sr::write_summary(out);
-#endif
-#ifdef MHW_ALPHA
     // The game's own DLSS rules for its AA and resolution scaling options,
     // with the game's per-frame AA choice (Off, TAA, FXAA, both) seen by
     // the owned frames.
     out<<",\"game_options\":";game_options::write(out);
     out<<",\"native_choices\":";activation::write_choices(out);
-#endif
     out<<'}';
 }
 void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)disabled=disabled&&!e;
@@ -1597,9 +1384,7 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     // A failed/duplicate native submission is still forwarded. Its old fence
     // may not cover that unexpected use, so freeze all remaining pins on fault.
     if(!fault.load())recording_pins.collect(completed);
-#ifdef MHW_CONTINUOUS_SCALED
     if(!fault.load())sr::collect(completed);
-#endif
     out<<std::boolalpha<<"{\"event\":\"continuous\",\"schema\":1,\"active\":"<<accepting.load()<<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"frames\":"<<frames.load()<<",\"skips\":"<<skips.load()<<",\"history_resets\":"<<reset_count.load()
        <<",\"jitter_injections\":"<<jitter_count.load()<<",\"jitter_restorations\":"<<restorations.load()<<",\"depth_copies\":"<<depth_count.load()<<",\"signal_value\":"<<signal_value<<",\"completed_value\":"<<completed
        <<",\"last_skip\":"<<last_skip.load()<<",\"list_count\":"<<list_count<<",\"lists\":{\"live\":"<<live_lists()<<",\"peak\":"<<lists_peak<<",\"pruned\":"<<lists_pruned<<"},\"resource_count\":"<<4*recording_pins.live()<<",\"pending_private_recording\":"<<(lease.list!=nullptr)<<",\"hooks_disabled\":"<<disabled<<",\"retention\":\"reset-and-fence-v1\",\"width\":"<<runtime.width<<",\"height\":"<<runtime.height<<",\"format\":"<<runtime.format<<",\"luid_low\":"<<runtime.luid_low<<",\"luid_high\":"<<runtime.luid_high<<",\"sdk\":";
@@ -1607,7 +1392,6 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     out<<",\"requests\":";request_telemetry.write(out);out<<",\"recordings\":";recording_pins.write(out,completed);
     out<<",\"resolve\":";resolve_telemetry.write(out);
     out<<",\"shader_rejection\":";shader_rejection.write(out,shader_rejection.bytes?pb::bytes_sha256(shader_rejection.bytecode.data(),shader_rejection.bytes):std::string{});
-#ifdef MHW_CONTINUOUS_SCALED
     out<<",\"shader_admission\":{\"schema\":1,\"variants\":[";
     for(unsigned i=0;i<unknown_native_shader;++i){if(i)out<<',';const auto &v=native_shader_variants[i];
         out<<"{\"technique\":"<<v.technique<<",\"bytes\":"<<v.bytes<<",\"verified\":"<<shader_cache.verified[i]<<",\"accepted\":"<<shader_cache.accepted[i]<<'}';}
@@ -1616,7 +1400,6 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     for(unsigned i=0;i<unknown_native_shader;++i){if(i)out<<',';const auto &v=native_shader_variants[i];
         out<<"{\"technique\":"<<v.technique<<",\"bytes\":"<<v.bytes<<",\"verified\":"<<preparation_shader_cache.verified[i]<<",\"accepted\":"<<preparation_shader_cache.accepted[i]<<'}';}
     out<<"]}";
-#endif
     out<<",\"reconstruction\":";reconstruction.write(out);
     out<<",\"state_trace\":";state_trace.write(out);
     out<<",\"state_admission\":";state_admission.write(out);
@@ -1627,10 +1410,7 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     for(unsigned i=0;i<dispatch_reasons.size();++i)out<<(i?",":"")<<dispatch_reasons[i];out<<']';
     out<<",\"forwarded_requests\":";forwarded_telemetry.write(out);
     out<<",\"activation\":";activation::write(out);
-#ifdef MHW_ALPHA
     out<<",\"game_options\":";game_options::write(out);
-#endif
-#ifdef MHW_CONTINUOUS_SCALED
     out<<",\"scaled_depth_capture\":";{DepthTraceLock trace_lock;scaled_depth_trace.write(out);}
     out<<",\"depth_schedule\":";depth_schedule_trace.write(out);
     out<<",\"consumer_depth\":";depth_consumer_admission.write(out);
@@ -1639,7 +1419,6 @@ void write(std::ostream &out){Lock lock;bool disabled=true;for(bool e:enabled)di
     out<<",\"scaled_route\":";sr::write(out);
     out<<",\"render_width\":"<<render_width()<<",\"render_height\":"<<render_height();
     std::ostringstream scale;render_resolution::write(scale);auto json=scale.str();while(!json.empty()&&(json.back()=='\n'||json.back()=='\r'))json.pop_back();out<<",\"resolution\":"<<json;
-#endif
     out<<"}\n"<<std::flush;
 
 }
@@ -1666,10 +1445,8 @@ const ChainedMethod chained_methods[]{
     {8,astera::command_list,26,reinterpret_cast<void *>(&Chained<&barrier_hook,8>::call)},
     {9,astera::command_list,14,reinterpret_cast<void *>(&Chained<&dispatch_hook,9>::call)},
     {10,astera::command_list,17,reinterpret_cast<void *>(&Chained<&copy_hook,10>::call)},
-#ifdef MHW_CONTINUOUS_SCALED
     {11,astera::command_list,12,reinterpret_cast<void *>(&Chained<&draw_hook,11>::call)},
     {12,astera::command_list,13,reinterpret_cast<void *>(&Chained<&indexed_hook,12>::call)},
-#endif
 };
 static_assert(std::size(chained_methods)==hook_count-first_api_hook,"every D3D12 hook is chained");
 }

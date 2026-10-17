@@ -1,6 +1,7 @@
 // Exercise the actual continuous CPU callbacks against owned mock renderer
 // memory; no process inspection, game code, or SDK initialization is used.
 #include "../src/continuous_dlaa/runtime.cpp"
+#include "runtime_neighbours.hpp"
 #include <iostream>
 #include <cstdlib>
 #include <sstream>
@@ -181,7 +182,7 @@ void forwarded_request_fixture(){
         put(packet.p+offset,6U);put(packet.p+offset+0x10,std::uintptr_t{1234});
         put(packet.p+offset+0x18,160U);put(packet.p+offset+0x1c,90U);put(packet.p+offset+0x20,1U);
     }
-    cd::runtime.width=2560;cd::runtime.height=1440;cd::accepting=true;
+    cd::runtime.width=2560;cd::runtime.height=1440;cd::scaled_render={2560,1440};cd::accepting=true;
     cd::originals[1]=reinterpret_cast<void *>(&forward_consumer);
     const auto publish=[&](std::uint64_t frame,std::uintptr_t object){
         cd::Lock lock;cd::producer={};auto &t=cd::producer;
@@ -289,6 +290,7 @@ int main(int argc,char **argv){
     cd::cfg={image.p,renderer.p,backend.p,1234};
     put(image.p+0x51c4480,renderer.p);put(renderer.p+0x78,backend.p);put(backend.p+0x18,std::uintptr_t{1234});put(renderer.p+0x1f450,view.p);
     JitterFixture fixture(cd::cfg,2560,1440);cd::originals[4]=reinterpret_cast<void *>(JitterFixture::forward);cd::accepting=true;
+    mhw::test::neighbours::resolution_active=true;  // render_resolution applied for 32 visits
     if(mode=="reconstruction"){
         cd::reconstruction.suspend();cd::reconstruction.suspend();fixture.stage(5);auto f=fixture.frame();cd::native(4,&f);
         check(cd::projections[5].valid&&cd::projections[5].source.projection.jitter_bits[0]==0&&cd::zero_jitter_projections==1,"waiting publishes unjittered matrices");

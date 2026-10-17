@@ -11,9 +11,6 @@
 #include "watch_filter.hpp"
 #include "full_post.hpp"
 #include "full_post_inputs.hpp"
-#ifdef MHW_FG_SCENE_PROBE
-#include "../frame_generation/scene_trace.hpp"
-#endif
 #include "../projection_binding/memory.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../temporal_bindings/copy_execution.hpp"
@@ -243,9 +240,6 @@ void fail(unsigned n){unsigned zero{};fault.compare_exchange_strong(zero,n);acce
 template<class T>bool field(std::uintptr_t at,unsigned off,T &v){return at&&at<=UINTPTR_MAX-off-sizeof(T)&&pb::copy_memory(at+off,&v,sizeof(T));}
 bool read(void *,std::uintptr_t at,std::span<std::byte> b){return pb::copy_memory(at,b.data(),static_cast<unsigned>(b.size()));}
 const tb::Reader reader{nullptr,read};
-#ifdef MHW_FG_SCENE_PROBE
-#include "scene_probe.inl"
-#endif
 bool same_stamp(const tb::Snapshot &);
 std::shared_ptr<SilhouetteCpu> silhouette_cpu(std::uintptr_t packet,bool &silent);
 std::uint64_t silhouette_planned{};
@@ -356,9 +350,6 @@ bool choose(Plan &p,FrameHandoff::Choice choice){
  const std::uint64_t value=choice==FrameHandoff::Choice::native?0:1;
  std::memcpy(mapped,&value,8);const D3D12_RANGE written{0,8};p.selector->Unmap(0,&written);
  const bool ok=p.handoff.choose(choice)==FrameHandoff::Result::ok;
-#ifdef MHW_FG_SCENE_PROBE
- if(ok)scene_trace.choice(p.stamp.frame,p.stamp.epoch,static_cast<unsigned>(choice));
-#endif
  return ok;
 }
 // Predication gates only the draw/copy commands. Native resource barriers and
@@ -513,9 +504,6 @@ bool copy_override(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_LOCA
      (box&&(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box),&b,sizeof(b))||b.left||b.top||b.front||b.back!=1||b.right!=width||b.bottom!=height))){
    fail(5);return false;}
   if(!retain_recording(p,list,bindings.generation)||p.handoff.record(final_node(p),p.final_copy,{reinterpret_cast<std::uintptr_t>(list),bindings.generation})!=FrameHandoff::Result::ok){fail(5);return false;}
-#ifdef MHW_FG_SCENE_PROBE
-  scene_prepare(p);
-#endif
   reinterpret_cast<CopyFn>(originals[2])(list,destination,0,0,0,source,box);
   ++identity_final_copies;
   if(const auto observer=final_scene_observer.load()){
@@ -548,15 +536,9 @@ void WINAPI copy_hook(ID3D12GraphicsCommandList *list,const D3D12_TEXTURE_COPY_L
  if(full_slot_scope!=UINT_MAX&&!injecting){full_slot_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));return;}
  // An unplanned DLAA copy never runs.
  if(full_final_scope!=UINT_MAX&&!injecting){full_final_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));return;}
-#ifdef MHW_FG_SCENE_PROBE
- const auto scene_receipt=scene_copy(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
-#endif
  try{replaced=copy_override(list,d,x,y,z,s,box,reinterpret_cast<std::uintptr_t>(_ReturnAddress()));}
  catch(const std::exception &e){Lock lock;failure=e.what();fail(5);}
  if(!replaced)reinterpret_cast<CopyFn>(originals[2])(list,d,x,y,z,s,box);
-#ifdef MHW_FG_SCENE_PROBE
- scene_copy_returned(scene_receipt,replaced);
-#endif
 }
 }
 namespace ht=perf::hook_timing;
@@ -593,27 +575,15 @@ void final_dispatch(pb::Frame *f){auto timing=ht::begin(ht::route_final);++pendi
  __finally{final_after(slot,returned);--pending;ht::end(timing);}}
 void indexed_dispatch(pb::Frame *f){
  auto timing=ht::begin(ht::route_indexed);++pending;const auto previous=indexed_scope;indexed_scope=filtering()&&!watched_packet(f->gpr[3])?IndexedScope{}:indexed_before(*f);bool returned=false;
-#ifdef MHW_FG_SCENE_PROBE
- const auto previous_scene=scene_scope;scene_scope=scene_enter(*f);
-#endif
  __try{ht::forward_begin(timing);mhw_binding_forward(originals[5],f);ht::forward_end(timing);returned=true;}
  __finally{indexed_after(returned);silhouette_after(returned);
-#ifdef MHW_FG_SCENE_PROBE
-  scene_exit(returned);scene_scope=previous_scene;
-#endif
   indexed_scope=previous;--pending;ht::end(timing);}
 }
 bool indexed_draw(ID3D12GraphicsCommandList *list,unsigned n,unsigned instances,unsigned first,int base,unsigned instance,std::uintptr_t caller) noexcept {
-#ifdef MHW_FG_SCENE_PROBE
- scene_api(list,true,{n,instances,first,static_cast<std::uint64_t>(static_cast<std::int64_t>(base)),instance},caller);
-#endif
  if(injecting||(indexed_scope.sample==UINT_MAX&&indexed_scope.slot==UINT_MAX))return false;Lock lock;
  try{
   if(indexed_scope.sample!=UINT_MAX)indexed_sample(list,n,instances,first,base,instance,caller);
   if(indexed_scope.slot!=UINT_MAX&&!fault.load()&&!abandoned){const bool result=record_indexed(list,n,instances,first,base,instance,caller);
-#ifdef MHW_FG_SCENE_PROBE
-   scene_scope.replaced=result;
-#endif
    return result;}
  }catch(const std::exception &e){injecting=false;failure=e.what();fail(14);}
  catch(...){injecting=false;fail(14);}
@@ -772,13 +742,9 @@ void finish_resolve(std::uintptr_t packet,bool returned) noexcept{
 }
 void observe_submission(std::uint64_t queue,std::uint64_t tick,std::span<const std::array<std::uint64_t,2>> lists) noexcept{
  Lock lock;diagnostics.submit(queue,tick,lists);
-#ifdef MHW_FG_SCENE_PROBE
- scene_trace.submit(queue,scene_qpc(),lists);
-#endif
 }
 void barriers(ID3D12GraphicsCommandList *list,unsigned n,const D3D12_RESOURCE_BARRIER *data) noexcept{
  if(injecting)return;
-#ifndef MHW_FG_SCENE_PROBE
  // Only aliasing barriers and transitions of listed plan resources reach the
  // journal; an unreadable or oversized batch takes the locked path and fails there.
  if(filtering()&&n<=4096){bool listed=false;
@@ -786,15 +752,11 @@ void barriers(ID3D12GraphicsCommandList *list,unsigned n,const D3D12_RESOURCE_BA
    listed=!pb::copy_memory(reinterpret_cast<std::uintptr_t>(data+j),&b,sizeof(b))||b.Type==D3D12_RESOURCE_BARRIER_TYPE_ALIASING||
     (b.Type==D3D12_RESOURCE_BARRIER_TYPE_TRANSITION&&watched_resource(reinterpret_cast<std::uintptr_t>(b.Transition.pResource)));}
   if(!listed)return;}
-#endif
  Lock lock;if(fault.load())return;
  const auto slot=copy_slot!=UINT_MAX?copy_slot:resolve_slot;
  temporal_present::Bindings bindings;if(!obs::inspect(list,bindings)||!bindings.known||!bindings.valid)return;
  if(n>4096){fail(10);return;}
  for(unsigned j=0;j<n;++j){D3D12_RESOURCE_BARRIER b{};if(!pb::copy_memory(reinterpret_cast<std::uintptr_t>(data+j),&b,sizeof(b))){fail(10);return;}
-#ifdef MHW_FG_SCENE_PROBE
-  scene_barrier(list,bindings.generation,b);
-#endif
   // Observe the whole recording, including barriers emitted before an owned
   // native callback. Only already pinned plan resources may enter the journal.
   // A resource shared by several plans/roles is observed exactly once.
@@ -863,9 +825,6 @@ void reject_submission(std::span<const std::array<std::uint64_t,2>> batch) noexc
 }
 bool reset(ID3D12GraphicsCommandList *list,std::uint64_t gen) noexcept{
  Lock lock;if(!lifetime.reset(list,gen)){fail(12);return false;}
-#ifdef MHW_FG_SCENE_PROBE
- scene_trace.reset(reinterpret_cast<std::uintptr_t>(list),gen);
-#endif
  if(!recording_states.reset(reinterpret_cast<std::uintptr_t>(list),gen)){fail(12);return false;}
  for(auto &p:plans)if(p.prepared){
   const auto result=p.handoff.reset({reinterpret_cast<std::uintptr_t>(list),gen});
@@ -878,19 +837,11 @@ bool drained() noexcept{Lock lock;if(pending.load()||active.list)return false;
  for(const auto &p:plans)if(p.prepared&&p.handoff.submitted_count()!=p.handoff.count())return false;return true;}
 bool callbacks_idle() noexcept{return pending.load()==0;}
 bool scene_request(unsigned request,const frame_generation::PresentationBuffers &buffers) noexcept {
-#ifdef MHW_FG_SCENE_PROBE
- Lock lock;return accepting.load()&&!fault.load()&&scene_trace.request(request,buffers);
-#else
  (void)request;(void)buffers;return false;
-#endif
 }
 void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap,
     const frame_generation::PresentationBuffers &buffers) noexcept {
-#ifdef MHW_FG_SCENE_PROBE
- Lock lock;scene_trace.present(frame,epoch,reflex_id,thread,swap,scene_qpc(),buffers);
-#else
  (void)frame;(void)epoch;(void)reflex_id;(void)thread;(void)swap;(void)buffers;
-#endif
 }
 bool abandon() noexcept{
  Lock lock;if(accepting.load()||pending.load())return false;
@@ -937,13 +888,6 @@ bool unhook() noexcept{
 void chains_live(bool yes) noexcept{chain_live.store(yes,std::memory_order_release);}
 void disabled(bool yes) noexcept{if(yes){chain_live.store(false,std::memory_order_release);Lock lock;enabled.fill(false);recording_states.clear();}}
 bool healthy() noexcept{return !fault.load();}
-#ifdef MHW_FG_SCENE_PROBE
-// Status writers copy the bounded CPU map under the route lock, then
-// serialize it after release so render callbacks never wait on its text.
-SceneTrace scene_snapshot;
-SRWLOCK scene_write_lock=SRWLOCK_INIT;
-struct SceneWriteLock {SceneWriteLock(){AcquireSRWLockExclusive(&scene_write_lock);}~SceneWriteLock(){ReleaseSRWLockExclusive(&scene_write_lock);}};
-#endif
 void write_summary(std::ostream &o){
  Lock lock;const auto a=[&](const auto &v){o<<'[';for(unsigned i=0;i<v.size();++i){if(i)o<<',';o<<v[i];}o<<']';};
  o<<"{\"fault\":"<<fault.load()<<",\"published\":"<<published<<",\"built\":"<<built<<",\"claimed\":"<<claimed
@@ -964,10 +908,6 @@ void write_summary(std::ostream &o){
  summarized_rejections=diagnostics.rejected_graphs();o<<'}';
 }
 void write(std::ostream &o){
-#ifdef MHW_FG_SCENE_PROBE
- SceneWriteLock scene_guard;
- {
-#endif
  Lock lock;bool off=true;for(bool b:enabled)off=off&&!b;
  unsigned unresolved{},unsubmitted{};for(const auto &p:plans)if(p.prepared){unresolved+=!p.resolved;unsubmitted+=p.handoff.submitted_count()!=p.handoff.count();}
  o<<"{\"silhouette_probe\":";indexed_write(o);o<<",\"silhouette_output\":";silhouette_write(o);
@@ -981,13 +921,6 @@ void write(std::ostream &o){
  o<<",\"extent\":{\"render\":["<<render_w<<','<<render_h<<"],\"output\":["<<width<<','<<height
   <<"],\"final_miss\":["<<final_miss[0]<<','<<final_miss[1]<<','<<final_miss[2]<<','<<final_miss[3]
   <<"],\"copy_miss\":["<<copy_miss[0]<<','<<copy_miss[1]<<','<<copy_miss[2]<<','<<copy_miss[3]<<"]}";
-#ifdef MHW_FG_SCENE_PROBE
- scene_snapshot=scene_trace; // Serialized below, after the route lock.
-#endif
-#ifdef MHW_FG_SCENE_PROBE
- }
- o<<",\"scene_boundary\":";scene_snapshot.write(o);
-#endif
  o<<'}';
 }
 }

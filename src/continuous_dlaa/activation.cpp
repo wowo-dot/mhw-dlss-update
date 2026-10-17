@@ -1,7 +1,5 @@
 #include "activation.hpp"
-#ifdef MHW_CONTINUOUS_SCALED
 #include "../scaled_temporal/stream_route.hpp"
-#endif
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <windows.h>
@@ -207,50 +205,36 @@ void dispatch_inner(unsigned kind,pb::Frame *f) {
         __try{mhw_binding_forward(originals[0],f);returned=true;}
         __finally{end_frame(owned,returned);}
     }else if(kind==1){
-#ifdef MHW_CONTINUOUS_SCALED
         const auto taa_context=f->gpr[2];
-#endif
         if(queued_taa&&f->gpr[1]==queued_taa&&owned_context(f->gpr[2])){
             record_admission();
             forward_taa(f);
         }else{++execute_unowned;mhw_binding_forward(originals[1],f);}
-#ifdef MHW_CONTINUOUS_SCALED
         // full_post: every later post callback inherits the full rectangle.
         scaled_temporal::stream_route::full_post_taa(taa_context);
-#endif
     }else if(kind==7){
         const auto previous=queued_taa;
         const auto previous_thread=InterlockedExchange64(&mhw_aa_thread,0);
-#ifdef MHW_CONTINUOUS_SCALED
         // Forward saves the native return registers over Frame. Preserve the
         // incoming identity before it, and notify only the admitted outer queue.
         const auto manager=f->gpr[1],ctx=f->gpr[2],view=f->gpr[3];
-#endif
         // Nested queues cannot inherit the outer queue's comparison authority.
         queued_taa=0;bool returned=false;
-#ifdef MHW_CONTINUOUS_SCALED
         bool full_entered=false;
-#endif
         __try{
             if(previous){++queue_visits;queued_taa=reject_queue(5);}else queued_taa=prepare_queue(*f);
-#ifdef MHW_CONTINUOUS_SCALED
             // Admitted as for post_queue_complete below: only such a queue is planned.
             if(!previous){scaled_temporal::stream_route::full_post_enter(ctx,queued_taa&&owning()&&!fault.load()&&owned_context(ctx)&&view==frame_view);
                 full_entered=true;}
-#endif
             mhw_binding_forward(originals[7],f);returned=true;
-#ifdef MHW_CONTINUOUS_SCALED
             // Before the queue is planned: restore the render rectangle (also on
             // an exception, below).
             if(full_entered){full_entered=false;scaled_temporal::stream_route::full_post_exit(ctx);}
             if(!previous&&queued_taa&&owning()&&!fault.load()&&owned_context(ctx)&&view==frame_view)
                 scaled_temporal::stream_route::post_queue_complete(manager,ctx,view,queued_taa);
-#endif
         }
         __finally{
-#ifdef MHW_CONTINUOUS_SCALED
             if(full_entered)scaled_temporal::stream_route::full_post_exit(ctx);
-#endif
             queued_taa=previous;InterlockedExchange64(&mhw_aa_thread,previous_thread);if(!returned)fail(7);}
     }else if(!suppress_jitter(kind,*f))mhw_binding_forward(originals[kind],f);
 }

@@ -11,11 +11,7 @@ namespace mhw::reflex::temporal {
 namespace {
 namespace cd=mhw::continuous_dlaa;
 namespace pb=mhw::projection_binding;
-#ifdef MHW_CONTINUOUS_SCALED
 constexpr const char* temporal_version="1.25.44",*experiment="continuous-scaled-native-resolve";
-#else
-constexpr const char* temporal_version="1.21.5",*experiment="native-temporal-resolve";
-#endif
 // Process-lived log owner: no vendor call or resource destruction in DllMain.
 auto& events=*new std::ofstream;
 std::filesystem::path directory,runtime;
@@ -64,16 +60,10 @@ void prepare(HMODULE module,const std::filesystem::path& output,std::uintptr_t b
     // API hook. All temporal native targets fit in that pool's reach interval.
     require(pb::pool_state().attempted&&pb::pool_state().slot,"shared-hook-pool");
     events<<"{\"event\":\"reservation\",\"ready\":true,\"slot\":"<<pb::pool_state().slot<<",\"hooks_installed\":false}\n"<<std::flush;
-#ifdef MHW_FG_GAME
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
-#ifdef MHW_ALPHA
     mhw::ngx_startup::use_paths(directory,runtime);  // mhw_dlss.ini, no research sidecars
     mhw::ngx_startup::decline_game_dlss();            // its own DLSS 1: never with this mod
-#endif
     require(mhw::ngx_startup::run(module,temporal_version,true,true),"coexistence-NGX-startup");
-#else
-    require(mhw::ngx_startup::run(module,temporal_version,true),"coexistence-NGX-startup");
-#endif
     events<<"{\"event\":\"ready\",\"hooks_installed\":false}\n"<<std::flush;prepared=true;
 }
 bool ready(std::string& reason){

@@ -47,13 +47,6 @@ bool current(ID3D12GraphicsCommandList *,Bindings &) noexcept;
 bool inspect(ID3D12GraphicsCommandList *,Bindings &) noexcept;
 // Optional API-derived IA/RS snapshot; never inferred from native caches.
 bool raster_current(ID3D12GraphicsCommandList *,RasterBindings &) noexcept;
-#ifdef MHW_FG_SCENE_PROBE
-// Incomplete CPU metadata only. Does not relax raster_current()/output_known.
-// found, raster-hooks, accepting, healthy, bindings-known/valid, root/raster
-// generations, raster-known mask, vertex mask, OM-seen/count/range,
-// RTV-argument/read/handle, DSV-argument/read/handle.
-bool raster_inspect(ID3D12GraphicsCommandList *,std::array<std::uint64_t,19> &) noexcept;
-#endif
 bool predicate_current(ID3D12GraphicsCommandList *,Predicate &) noexcept;
 void stop() noexcept;
 bool settled() noexcept;

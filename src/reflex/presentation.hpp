@@ -2,9 +2,7 @@
 #include "streamline.hpp"
 #include "present_result.hpp"
 #include "../astera/astera_hooks.hpp"
-#if defined(MHW_FG_SCENE_PROBE) || defined(MHW_FG_GAME)
 #include "../frame_generation/presentation_buffers.hpp"
-#endif
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <array>
@@ -135,12 +133,10 @@ private:
     // no destructor that could call the SDK under process-detach loader lock.
     State* state_;
 };
-#if defined(MHW_FG_SCENE_PROBE) || defined(MHW_FG_GAME)
 // Defined only in the scene-diagnostic library variant (mhw_fg_reflex_presentation). Copies the routed host chain's
 // GetBuffer labels, last host index and Present-entry index under a separate
 // lock that never waits for the route mutex. False before construction.
 bool scene_presentation_buffers(frame_generation::PresentationBuffers&) noexcept;
-#endif
 // AL: the presentation detours, each with the storage AL fills with its
 // continuation; registered at PRE_MAIN with claim_presentation. Factory and
 // device chains exist from DEVICE_CREATED, swap-chain chains once the game's

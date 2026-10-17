@@ -16,10 +16,6 @@ struct JitterFixture {
     put(c.image+0x4be7604,(48U<<12)|0xf55U);put(c.image+0x4be763c,(64U<<12)|0xf55U);
     const auto pair=std::uint64_t{std::bit_cast<unsigned>(.375F)}|(std::uint64_t{std::bit_cast<unsigned>(-.4375F)}<<32);
     for(unsigned i=0;i<20;++i)put(table.p+0xe6a0+8*i,pair);
-#if defined(MHW_TEMPORAL_LONG_HISTORY) || defined(MHW_AA_GPU_TRACE)
-    for(unsigned i=0;i<20;++i){const float x=.3125F+float(i)/128,y=-.3125F-float(i)/128;
-      put(table.p+0xe6a0+8*i,std::uint64_t{std::bit_cast<unsigned>(x)}|(std::uint64_t{std::bit_cast<unsigned>(y)}<<32));}
-#endif
   }
   static std::uint64_t forward(std::uintptr_t projection,std::uintptr_t context){
     auto &s=*active;++s.calls;check(projection==s.camera.p+0x50 && context==s.c.renderer+0x710,"jitter ABI");
