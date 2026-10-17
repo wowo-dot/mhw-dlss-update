@@ -31,8 +31,10 @@ public:
         }
     }
     void sub() noexcept {
-        if (auto *s = slot()) s->store(s->load(std::memory_order_relaxed) - 1, std::memory_order_release);
-        else shared_.fetch_sub(1, std::memory_order_release);
+        if (auto *s = slot())
+            s->store(s->load(std::memory_order_relaxed) - 1, std::memory_order_release);
+        else
+            shared_.fetch_sub(1, std::memory_order_release);
     }
     // Drainer, after clearing the admission flag: every slot at zero.
     bool zero() const noexcept {
@@ -56,7 +58,7 @@ public:
 private:
     static constexpr unsigned slot_count = 256;
 #pragma warning(push)
-#pragma warning(disable : 4324)  // padded to its own cache line on purpose
+#pragma warning(disable : 4324) // padded to its own cache line on purpose
     struct alignas(64) Slot {
         std::atomic<unsigned> value{};
     };
@@ -74,4 +76,4 @@ private:
         return index;
     }
 };
-}  // namespace mhw::perf
+} // namespace mhw::perf

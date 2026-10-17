@@ -53,18 +53,18 @@ namespace mhw::alpha {
 enum class ReflexMode : unsigned { off, on, boost };
 inline constexpr unsigned min_dynamic_target = 30, max_dynamic_target = 1000;
 struct Config {
-    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;  // the mode DLSS turns on with
-    bool dlss{};                 // dlss_mode = off (the default): false; dlss_mode keeps its default
+    dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance; // the mode DLSS turns on with
+    bool dlss{}; // dlss_mode = off (the default): false; dlss_mode keeps its default
     bool frame_generation{};
-    unsigned multiplier = 2;     // the fixed multiplier (kept while dynamic or off)
-    bool dynamic{};              // frame_generation = dynamic
-    unsigned dynamic_target{};   // frames per second; 0: the display's refresh rate
-    bool generation_auto{};      // frame_generation_auto = on
-    bool generation_plugin = true;  // frame_generation_plugin = auto (off: DLSS-G never loads)
-    ReflexMode reflex = ReflexMode::off;  // On when frame generation is on and reflex is unset
-    bool profile{};              // profile = on (diagnostic; not in the shipped ini)
-    bool perf_ab{};              // perf_ab = on (diagnostic; not in the shipped ini)
-    bool hook_timing{};          // hook_timing = on (diagnostic; not in the shipped ini)
+    unsigned multiplier = 2;             // the fixed multiplier (kept while dynamic or off)
+    bool dynamic{};                      // frame_generation = dynamic
+    unsigned dynamic_target{};           // frames per second; 0: the display's refresh rate
+    bool generation_auto{};              // frame_generation_auto = on
+    bool generation_plugin = true;       // frame_generation_plugin = auto (off: DLSS-G never loads)
+    ReflexMode reflex = ReflexMode::off; // On when frame generation is on and reflex is unset
+    bool profile{};                      // profile = on (diagnostic; not in the shipped ini)
+    bool perf_ab{};                      // perf_ab = on (diagnostic; not in the shipped ini)
+    bool hook_timing{};                  // hook_timing = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -134,7 +134,9 @@ inline bool parse_dynamic_target(std::string_view value, unsigned &target) {
     return true;
 }
 // The ini value of the DLSS setting: "off" or the mode's.
-inline const char *dlss_setting_value(bool dlss, dlss_sdk::ReconstructionMode m) { return dlss ? dlss_mode_value(m) : "off"; }
+inline const char *dlss_setting_value(bool dlss, dlss_sdk::ReconstructionMode m) {
+    return dlss ? dlss_mode_value(m) : "off";
+}
 inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode &m) {
     for (const auto candidate : {dlss_sdk::ReconstructionMode::dlaa, dlss_sdk::ReconstructionMode::quality,
                                  dlss_sdk::ReconstructionMode::balanced, dlss_sdk::ReconstructionMode::performance})
@@ -148,14 +150,15 @@ inline bool parse_dlss_mode(std::string_view value, dlss_sdk::ReconstructionMode
 inline Config parse_config(std::string_view text, const std::filesystem::path &dll_folder) {
     Config c;
     std::string runtime = ".", logs = "logs";
-    bool reflex_set{};  // the file says reflex = ...
+    bool reflex_set{}; // the file says reflex = ...
     unsigned line_number = 0;
     while (!text.empty()) {
         const auto end = text.find('\n');
         auto line = text.substr(0, end);
         text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
         ++line_number;
-        if (const auto comment = line.find_first_of("#;"); comment != std::string_view::npos) line = line.substr(0, comment);
+        if (const auto comment = line.find_first_of("#;"); comment != std::string_view::npos)
+            line = line.substr(0, comment);
         if (trimmed_lower(line).empty()) continue;
         const auto equals = line.find('=');
         const auto where = "line " + std::to_string(line_number) + ": ";
@@ -167,51 +170,74 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         const auto raw = line.substr(equals + 1);
         const auto value = trimmed_lower(raw);
         if (key == "dlss_mode") {
-            if (value == "off") c.dlss = false;
-            else if (parse_dlss_mode(value, c.dlss_mode)) c.dlss = true;
-            else c.warnings.push_back(where + "dlss_mode must be off, dlaa, quality, balanced or performance");
+            if (value == "off")
+                c.dlss = false;
+            else if (parse_dlss_mode(value, c.dlss_mode))
+                c.dlss = true;
+            else
+                c.warnings.push_back(where + "dlss_mode must be off, dlaa, quality, balanced or performance");
         } else if (key == "frame_generation") {
-            if (value == "off") c.frame_generation = c.dynamic = false;
-            else if (value == "dynamic") c.frame_generation = c.dynamic = true;
+            if (value == "off")
+                c.frame_generation = c.dynamic = false;
+            else if (value == "dynamic")
+                c.frame_generation = c.dynamic = true;
             else if (value == "2x" || value == "3x" || value == "4x" || value == "6x") {
                 c.frame_generation = true;
                 c.dynamic = false;
                 c.multiplier = static_cast<unsigned>(value[0] - '0');
-            } else c.warnings.push_back(where + "frame_generation must be off, 2x, 3x, 4x, 6x or dynamic");
+            } else
+                c.warnings.push_back(where + "frame_generation must be off, 2x, 3x, 4x, 6x or dynamic");
         } else if (key == "dynamic_target") {
             if (!parse_dynamic_target(value, c.dynamic_target))
                 c.warnings.push_back(where + "dynamic_target must be display or a frame rate from 30 to 1000");
         } else if (key == "frame_generation_auto") {
-            if (value == "on" || value == "off") c.generation_auto = value == "on";
-            else c.warnings.push_back(where + "frame_generation_auto must be on or off");
+            if (value == "on" || value == "off")
+                c.generation_auto = value == "on";
+            else
+                c.warnings.push_back(where + "frame_generation_auto must be on or off");
         } else if (key == "frame_generation_plugin") {
-            if (value == "auto" || value == "off") c.generation_plugin = value == "auto";
-            else c.warnings.push_back(where + "frame_generation_plugin must be auto or off");
+            if (value == "auto" || value == "off")
+                c.generation_plugin = value == "auto";
+            else
+                c.warnings.push_back(where + "frame_generation_plugin must be auto or off");
         } else if (key == "hook_timing") {
-            if (value == "on" || value == "off") c.hook_timing = value == "on";
-            else c.warnings.push_back(where + "hook_timing must be on or off");
+            if (value == "on" || value == "off")
+                c.hook_timing = value == "on";
+            else
+                c.warnings.push_back(where + "hook_timing must be on or off");
         } else if (key == "full_post") {
             // Retired in v0.26.0: after DLSS the game's post chain always runs
             // at the output size (scaled_temporal/full_post.hpp). Older ini
             // files keep the line harmlessly.
         } else if (key == "perf_ab") {
-            if (value == "on" || value == "off") c.perf_ab = value == "on";
-            else c.warnings.push_back(where + "perf_ab must be on or off");
+            if (value == "on" || value == "off")
+                c.perf_ab = value == "on";
+            else
+                c.warnings.push_back(where + "perf_ab must be on or off");
         } else if (key == "profile") {
-            if (value == "on" || value == "off") c.profile = value == "on";
-            else c.warnings.push_back(where + "profile must be on or off");
+            if (value == "on" || value == "off")
+                c.profile = value == "on";
+            else
+                c.warnings.push_back(where + "profile must be on or off");
         } else if (key == "reflex") {
-            if (parse_reflex(value, c.reflex)) reflex_set = true;
-            else c.warnings.push_back(where + "reflex must be on, boost or off");
+            if (parse_reflex(value, c.reflex))
+                reflex_set = true;
+            else
+                c.warnings.push_back(where + "reflex must be on, boost or off");
         } else if (key == "runtime_dir" || key == "log_dir") {
             // Folder names keep their case; only surrounding spaces and quotes go.
             std::string folder(raw);
-            while (!folder.empty() && (std::isspace(static_cast<unsigned char>(folder.back())) || folder.back() == '"')) folder.pop_back();
+            while (!folder.empty() && (std::isspace(static_cast<unsigned char>(folder.back())) || folder.back() == '"'))
+                folder.pop_back();
             std::size_t first = 0;
-            while (first < folder.size() && (std::isspace(static_cast<unsigned char>(folder[first])) || folder[first] == '"')) ++first;
+            while (first < folder.size() &&
+                   (std::isspace(static_cast<unsigned char>(folder[first])) || folder[first] == '"'))
+                ++first;
             folder = folder.substr(first);
-            if (folder.empty()) c.warnings.push_back(where + key + " is empty");
-            else (key == "runtime_dir" ? runtime : logs) = folder;
+            if (folder.empty())
+                c.warnings.push_back(where + key + " is empty");
+            else
+                (key == "runtime_dir" ? runtime : logs) = folder;
         } else {
             c.warnings.push_back(where + "unknown key " + key);
         }
@@ -224,13 +250,14 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
     // Frame generation needs Reflex: only a written "reflex = off" is worth a
     // warning; the default (off) simply follows frame generation.
     if (c.reflex == ReflexMode::off && c.frame_generation) {
-        if (reflex_set) c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
+        if (reflex_set)
+            c.warnings.push_back("reflex = off needs frame_generation = off (frame generation needs Reflex); using on");
         c.reflex = ReflexMode::on;
     }
     const auto resolve = [&](const std::string &folder) {
-        const std::filesystem::path p(std::u8string(folder.begin(), folder.end()));  // the file is UTF-8
+        const std::filesystem::path p(std::u8string(folder.begin(), folder.end())); // the file is UTF-8
         auto r = (p.is_absolute() ? p : dll_folder / p).lexically_normal();
-        if (!r.has_filename() && r.has_relative_path()) r = r.parent_path();  // "folder\." -> "folder"
+        if (!r.has_filename() && r.has_relative_path()) r = r.parent_path(); // "folder\." -> "folder"
         return r;
     };
     c.runtime_dir = resolve(runtime);
@@ -276,4 +303,4 @@ inline std::string with_frame_generation(std::string_view text, std::string_view
 inline std::string with_reflex(std::string_view text, ReflexMode mode) {
     return with_value(text, "reflex", reflex_value(mode));
 }
-}  // namespace mhw::alpha
+} // namespace mhw::alpha

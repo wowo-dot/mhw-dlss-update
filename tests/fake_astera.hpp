@@ -16,8 +16,10 @@ void start();
 // does): each hook's method (family, slot) is detoured on the matching
 // object's vtable and its *next receives the original. A family without an
 // object fails.
-struct Objects {void *factory{},*swapchain{},*device{},*queue{},*command_list{};};
-bool install_methods(const std::vector<astera::Hook> &,const Objects &);
+struct Objects {
+    void *factory{}, *swapchain{}, *device{}, *queue{}, *command_list{};
+};
+bool install_methods(const std::vector<astera::Hook> &, const Objects &);
 // Game hooks the fake has active (registered and not disabled).
 unsigned active_game_hooks();
-}
+} // namespace mhw::test::fake_astera

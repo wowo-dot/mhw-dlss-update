@@ -16,8 +16,7 @@ namespace mhw::scaled_temporal {
 // thread. Bits are only added while a plan is watched; a union is rebuilt
 // word by word without the unwatched plan, so a reader always sees at least
 // every watched plan's bits.
-template <unsigned Words>
-class WatchFilter {
+template <unsigned Words> class WatchFilter {
 public:
     static constexpr unsigned words = Words;
     static constexpr unsigned shift = static_cast<unsigned>(std::countr_zero(Words * 64U));
@@ -26,7 +25,8 @@ public:
         // Engine objects and resources are 16-byte aligned: drop those bits,
         // then take two fields of a multiplicative hash's high bits.
         const auto h = (static_cast<std::uint64_t>(address) >> 4) * 0x9E3779B97F4A7C15ULL;
-        return {static_cast<unsigned>(h >> (64 - shift)), static_cast<unsigned>((h >> (64 - 2 * shift)) & (Words * 64U - 1))};
+        return {static_cast<unsigned>(h >> (64 - shift)),
+                static_cast<unsigned>((h >> (64 - 2 * shift)) & (Words * 64U - 1))};
     }
     void add(std::uintptr_t address) noexcept {
         for (const auto b : bits(address)) words_[b >> 6].fetch_or(1ULL << (b & 63), std::memory_order_relaxed);
@@ -60,4 +60,4 @@ private:
 using PlanFilter = WatchFilter<16>;
 // Every watched plan (up to about 1,300 addresses: about 2% of others pass).
 using UnionFilter = WatchFilter<256>;
-}  // namespace mhw::scaled_temporal
+} // namespace mhw::scaled_temporal

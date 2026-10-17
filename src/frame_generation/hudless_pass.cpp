@@ -9,11 +9,15 @@
 namespace mhw::frame_generation {
 namespace {
 using Microsoft::WRL::ComPtr;
-void require(bool v, const char *why) { if (!v) throw std::runtime_error(why); }
-void hr(HRESULT v, const char *why) { require(SUCCEEDED(v), why); }
-constexpr std::uint32_t probe_magic = 0x48554431;   // "HUD1"
-constexpr std::uint32_t screen_magic = 0x53435231;  // "SCR1"
-constexpr std::uint32_t hdr_magic = 0x48445231;     // "HDR1"
+void require(bool v, const char *why) {
+    if (!v) throw std::runtime_error(why);
+}
+void hr(HRESULT v, const char *why) {
+    require(SUCCEEDED(v), why);
+}
+constexpr std::uint32_t probe_magic = 0x48554431;  // "HUD1"
+constexpr std::uint32_t screen_magic = 0x53435231; // "SCR1"
+constexpr std::uint32_t hdr_magic = 0x48445231;    // "HDR1"
 constexpr unsigned probe_bytes = 96, state_bytes = 96;
 
 // State buffer: [0] g, [4] fGammaCorrect, [8] 1, [12] SCREEN_MAGIC (last valid
@@ -157,15 +161,18 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
     return b;
 }
 
-ComPtr<ID3D12RootSignature> root_signature(ID3D12Device *device, const D3D12_ROOT_SIGNATURE_DESC &desc, const char *why) {
+ComPtr<ID3D12RootSignature> root_signature(ID3D12Device *device, const D3D12_ROOT_SIGNATURE_DESC &desc,
+                                           const char *why) {
     ComPtr<ID3DBlob> signature, errors;
     hr(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &errors), why);
     ComPtr<ID3D12RootSignature> root;
-    hr(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&root)), why);
+    hr(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&root)),
+       why);
     return root;
 }
 
-ComPtr<ID3D12PipelineState> compute_pipeline(ID3D12Device *device, ID3D12RootSignature *root, ID3DBlob *code, const char *why) {
+ComPtr<ID3D12PipelineState> compute_pipeline(ID3D12Device *device, ID3D12RootSignature *root, ID3DBlob *code,
+                                             const char *why) {
     D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
     pd.pRootSignature = root;
     pd.CS = {code->GetBufferPointer(), code->GetBufferSize()};
@@ -173,35 +180,58 @@ ComPtr<ID3D12PipelineState> compute_pipeline(ID3D12Device *device, ID3D12RootSig
     hr(device->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pipeline)), why);
     return pipeline;
 }
-}  // namespace
+} // namespace
 
 ComPtr<ID3DBlob> HudlessPass::compile(Shader which) {
     const auto min = std::to_string(screen::gamma_min), max = std::to_string(screen::gamma_max),
                magic = std::to_string(probe_magic) + "u", screen = std::to_string(screen_magic) + "u",
                hdr = std::to_string(hdr_magic) + "u", white_min = std::to_string(screen::hdr::white_min),
-               white_max = std::to_string(screen::hdr::white_max), hdr_gamma_min = std::to_string(screen::hdr::gamma_min),
+               white_max = std::to_string(screen::hdr::white_max),
+               hdr_gamma_min = std::to_string(screen::hdr::gamma_min),
                hdr_gamma_max = std::to_string(screen::hdr::gamma_max);
-    const D3D_SHADER_MACRO macros[]{{"GAMMA_MIN", min.c_str()}, {"GAMMA_MAX", max.c_str()}, {"PROBE_MAGIC", magic.c_str()},
-                                    {"SCREEN_MAGIC", screen.c_str()}, {"HDR_MAGIC", hdr.c_str()}, {"WHITE_MIN", white_min.c_str()},
-                                    {"WHITE_MAX", white_max.c_str()}, {"HDR_GAMMA_MIN", hdr_gamma_min.c_str()},
-                                    {"HDR_GAMMA_MAX", hdr_gamma_max.c_str()}, {nullptr, nullptr}};
+    const D3D_SHADER_MACRO macros[]{{"GAMMA_MIN", min.c_str()},
+                                    {"GAMMA_MAX", max.c_str()},
+                                    {"PROBE_MAGIC", magic.c_str()},
+                                    {"SCREEN_MAGIC", screen.c_str()},
+                                    {"HDR_MAGIC", hdr.c_str()},
+                                    {"WHITE_MIN", white_min.c_str()},
+                                    {"WHITE_MAX", white_max.c_str()},
+                                    {"HDR_GAMMA_MIN", hdr_gamma_min.c_str()},
+                                    {"HDR_GAMMA_MAX", hdr_gamma_max.c_str()},
+                                    {nullptr, nullptr}};
     const char *source{}, *name{};
     std::size_t bytes{};
     switch (which) {
-    case Shader::transform: source = transform_shader; bytes = sizeof(transform_shader) - 1; name = "mhw_fg_hudless"; break;
-    case Shader::capture: source = capture_shader; bytes = sizeof(capture_shader) - 1; name = "mhw_fg_screen_capture"; break;
+    case Shader::transform:
+        source = transform_shader;
+        bytes = sizeof(transform_shader) - 1;
+        name = "mhw_fg_hudless";
+        break;
+    case Shader::capture:
+        source = capture_shader;
+        bytes = sizeof(capture_shader) - 1;
+        name = "mhw_fg_screen_capture";
+        break;
     case Shader::transform_hdr:
-        source = transform_hdr_shader; bytes = sizeof(transform_hdr_shader) - 1; name = "mhw_fg_hudless_hdr"; break;
-    case Shader::capture_hdr: source = capture_hdr_shader; bytes = sizeof(capture_hdr_shader) - 1; name = "mhw_fg_frame_capture"; break;
+        source = transform_hdr_shader;
+        bytes = sizeof(transform_hdr_shader) - 1;
+        name = "mhw_fg_hudless_hdr";
+        break;
+    case Shader::capture_hdr:
+        source = capture_hdr_shader;
+        bytes = sizeof(capture_hdr_shader) - 1;
+        name = "mhw_fg_frame_capture";
+        break;
     }
     ComPtr<ID3DBlob> code, errors;
-    const auto compiled = D3DCompile(source, bytes, name, macros, nullptr,
-                                     "main", "cs_5_0",
-                                     D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS |
-                                         D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+    const auto compiled =
+        D3DCompile(source, bytes, name, macros, nullptr, "main", "cs_5_0",
+                   D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
+                   &code, &errors);
     if (FAILED(compiled))
-        throw std::runtime_error(errors ? std::string(static_cast<const char *>(errors->GetBufferPointer()), errors->GetBufferSize())
-                                        : "hudless shader compile");
+        throw std::runtime_error(
+            errors ? std::string(static_cast<const char *>(errors->GetBufferPointer()), errors->GetBufferSize())
+                   : "hudless shader compile");
     return code;
 }
 
@@ -210,7 +240,8 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     require(device && width && height && width <= 16384 && height <= 16384, "hudless extent");
     const auto typed_store = [&](DXGI_FORMAT f) {
         D3D12_FEATURE_DATA_FORMAT_SUPPORT support{f};
-        hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)), "hudless format query");
+        hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)),
+           "hudless format query");
         return (support.Support1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) &&
                (support.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
     };
@@ -238,11 +269,13 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     capture_hdr_root_ = root_signature(device, {3, capture_hdr_params}, "frame capture root");
     pipeline_ = compute_pipeline(device, root_.Get(), compile(Shader::transform).Get(), "hudless pipeline");
     hdr_pipeline_ = compute_pipeline(device, root_.Get(), compile(Shader::transform_hdr).Get(), "hudless HDR pipeline");
-    capture_pipeline_ = compute_pipeline(device, capture_root_.Get(), compile(Shader::capture).Get(), "screen capture pipeline");
+    capture_pipeline_ =
+        compute_pipeline(device, capture_root_.Get(), compile(Shader::capture).Get(), "screen capture pipeline");
     capture_hdr_pipeline_ =
         compute_pipeline(device, capture_hdr_root_.Get(), compile(Shader::capture_hdr).Get(), "frame capture pipeline");
 
-    D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 2 * slots, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+    D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 2 * slots,
+                                  D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
     hr(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)), "hudless descriptors");
     heap_->SetName(L"mhw-fg-hudless-descriptors");
     step_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -257,14 +290,17 @@ HudlessPass::HudlessPass(ID3D12Device *device, unsigned width, unsigned height)
     buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     const D3D12_HEAP_PROPERTIES default_heap{D3D12_HEAP_TYPE_DEFAULT}, readback_heap{D3D12_HEAP_TYPE_READBACK};
     buffer.Width = state_bytes;
-    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                       IID_PPV_ARGS(&state_)), "screen state");
+    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON,
+                                       nullptr, IID_PPV_ARGS(&state_)),
+       "screen state");
     buffer.Width = probe_bytes * slots;
-    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                       IID_PPV_ARGS(&probe_)), "hudless probe");
+    hr(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COMMON,
+                                       nullptr, IID_PPV_ARGS(&probe_)),
+       "hudless probe");
     buffer.Flags = D3D12_RESOURCE_FLAG_NONE;
-    hr(device->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                       IID_PPV_ARGS(&readback_)), "hudless probe readback");
+    hr(device->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST,
+                                       nullptr, IID_PPV_ARGS(&readback_)),
+       "hudless probe readback");
     state_->SetName(L"mhw-fg-screen-state");
     probe_->SetName(L"mhw-fg-hudless-probe");
     readback_->SetName(L"mhw-fg-hudless-probe-readback");
@@ -318,7 +354,8 @@ void HudlessPass::record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12R
     for (auto &b : after) std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
     after[2].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
     list->ResourceBarrier(4, after);
-    list->CopyBufferRegion(readback_.Get(), UINT64(probe_bytes) * slot, probe_.Get(), UINT64(probe_bytes) * slot, probe_bytes);
+    list->CopyBufferRegion(readback_.Get(), UINT64(probe_bytes) * slot, probe_.Get(), UINT64(probe_bytes) * slot,
+                           probe_bytes);
     const auto rest = transition(probe_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     list->ResourceBarrier(1, &rest);
     written_[slot] = true;
@@ -337,7 +374,8 @@ void HudlessPass::capture(ID3D12GraphicsCommandList *list, D3D12_GPU_VIRTUAL_ADD
     list->ResourceBarrier(1, &b);
 }
 
-void HudlessPass::capture_hdr(ID3D12GraphicsCommandList *list, D3D12_GPU_VIRTUAL_ADDRESS frame_constants, unsigned parameter) {
+void HudlessPass::capture_hdr(ID3D12GraphicsCommandList *list, D3D12_GPU_VIRTUAL_ADDRESS frame_constants,
+                              unsigned parameter) {
     require(list && frame_constants, "frame capture arguments");
     auto b = transition(state_.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     list->ResourceBarrier(1, &b);
@@ -355,8 +393,9 @@ HudlessPass::Probe HudlessPass::probe(unsigned slot) const noexcept {
     if (slot >= slots || !written_[slot] || !mapped_) return {};
     const auto *v = mapped_ + slot * (probe_bytes / 4);
     if (v[3] != probe_magic) return {};
-    Probe p{std::bit_cast<float>(v[0]), std::bit_cast<float>(v[1]), v[2] == 1, true, v[4], v[5],
-            std::bit_cast<float>(v[6]), std::bit_cast<float>(v[7]), {v[8], v[9], v[10], v[11]}};
+    Probe p{
+        std::bit_cast<float>(v[0]), std::bit_cast<float>(v[1]), v[2] == 1, true, v[4], v[5], std::bit_cast<float>(v[6]),
+        std::bit_cast<float>(v[7]), {v[8], v[9], v[10], v[11]}};
     p.hdr = (v[19] & 1u) != 0;
     p.hdr_ok = (v[19] & 2u) != 0;
     p.white = std::bit_cast<float>(v[12]);
@@ -373,4 +412,4 @@ HudlessPass::Probe HudlessPass::probe(unsigned slot) const noexcept {
     return p;
 }
 
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

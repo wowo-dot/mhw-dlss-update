@@ -12,9 +12,11 @@ struct SceneRect {
 // outside the back buffer, Streamline reset the subrect to the whole window,
 // warped the scene across it and ignored the scene-sized HUD-less image
 // ("extent does not match color buffer size", game-19 to game-27).
-constexpr std::array<unsigned, 4> extent_fields(SceneRect r) noexcept { return {r.y, r.x, r.width, r.height}; }
+constexpr std::array<unsigned, 4> extent_fields(SceneRect r) noexcept {
+    return {r.y, r.x, r.width, r.height};
+}
 // The rectangle lies inside a width x height back buffer.
 constexpr bool inside(SceneRect r, unsigned width, unsigned height) noexcept {
     return r.width && r.height && r.x <= width && r.y <= height && r.width <= width - r.x && r.height <= height - r.y;
 }
-}  // namespace mhw::frame_generation::game
+} // namespace mhw::frame_generation::game

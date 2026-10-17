@@ -12,9 +12,9 @@
 // - The line functions below are pure (tests/alpha_menu_tests.cpp).
 namespace mhw::alpha::status {
 
-enum class Loader : unsigned { active, degraded, disabled };  // as reported to Astera Loader
+enum class Loader : unsigned { active, degraded, disabled }; // as reported to Astera Loader
 // player_off: DLSS only, the player's Off (the game renders as without the mod).
-enum class Stage : unsigned { starting, running, off, player_off };  // DLSS, Reflex
+enum class Stage : unsigned { starting, running, off, player_off }; // DLSS, Reflex
 // Frame generation in this session: off in the ini, waiting for the game, armed,
 // not possible here, or stopped after it ran.
 enum class Generation : unsigned { off, starting, armed, unavailable, stopped };
@@ -22,8 +22,8 @@ enum class Generation : unsigned { off, starting, armed, unavailable, stopped };
 struct View {
     Loader loader = Loader::active;
     std::string loader_reason;
-    std::string dlss_mode = "Performance";  // as players read it
-    std::string reflex_mode = "On";         // the mode applied: On, Boost or Off
+    std::string dlss_mode = "Performance"; // as players read it
+    std::string reflex_mode = "On";        // the mode applied: On, Boost or Off
     Stage dlss = Stage::starting, reflex = Stage::starting;
     std::string dlss_reason, reflex_reason;
     unsigned render_width{}, render_height{}, scene_width{}, scene_height{};
@@ -31,18 +31,18 @@ struct View {
     std::string generation_reason;
     // Live values, filled in by the menu.
     bool dlss_healthy = true;
-    bool generation_enabled = true;       // the player's frame generation setting
-    bool generating{};                    // DLSS-G on at the last Present
-    unsigned requested{}, generated{};    // total multiplier asked for; generated frames per rendered frame
-    std::uint64_t presented_generated{};  // generated frames shown since the start
+    bool generation_enabled = true;      // the player's frame generation setting
+    bool generating{};                   // DLSS-G on at the last Present
+    unsigned requested{}, generated{};   // total multiplier asked for; generated frames per rendered frame
+    std::uint64_t presented_generated{}; // generated frames shown since the start
     // The mode asked for (0 fixed, 1 Auto, 2 Dynamic) and Dynamic's target (0:
     // display refresh); whether DLSS-G runs Dynamic now and whether the card
     // supports it (0 not known, 1 no, 2 yes); frames shown for the last
     // rendered frame, and Presents in a row with none generated.
     unsigned generation_mode{}, target{}, dynamic_support{}, presented_now{}, single_streak{};
-    unsigned display_hz{};  // the game's monitor, 0 if unknown (display_refresh.hpp)
+    unsigned display_hz{}; // the game's monitor, 0 if unknown (display_refresh.hpp)
     bool dynamic_applied{}, dynamic_refused{};
-    capabilities::Capabilities caps;  // what this card offers (v0.27.5)
+    capabilities::Capabilities caps; // what this card offers (v0.27.5)
 };
 // Presents in a row without a generated frame before Auto reads as paused
 // (single ones happen at camera cuts).
@@ -138,7 +138,8 @@ inline std::string resolution_line(const View &v) {
     if (v.dlss == Stage::starting) return "Starting";
     if (v.dlss != Stage::running || !v.dlss_healthy) return "The game's own";
     if (!v.render_width || !v.render_height || !v.scene_width || !v.scene_height) return "Not known yet";
-    if (v.render_width == v.scene_width && v.render_height == v.scene_height) return size_text(v.scene_width, v.scene_height);
+    if (v.render_width == v.scene_width && v.render_height == v.scene_height)
+        return size_text(v.scene_width, v.scene_height);
     return size_text(v.render_width, v.render_height) + " to " + size_text(v.scene_width, v.scene_height);
 }
 
@@ -166,7 +167,8 @@ inline std::string generation_line(const View &v) {
         // Dynamic never goes past its target: at 1x for a while, the game
         // already runs above half of it (game-81: ~175 fps at 240 Hz).
         if (v.presented_now == 1 && v.single_streak >= auto_pause_presents) return "Dynamic, 1x (target reached)";
-        return v.presented_now ? "Dynamic, showing " + std::to_string(v.presented_now) + "x" : std::string("Dynamic, generating");
+        return v.presented_now ? "Dynamic, showing " + std::to_string(v.presented_now) + "x"
+                               : std::string("Dynamic, generating");
     }
     const auto shown = std::to_string(v.generated + 1) + "x";
     if (dynamic && v.dynamic_support == 1) return shown + " (no Dynamic here)";
@@ -181,4 +183,4 @@ inline std::string generated_line(const View &v) {
     return v.generation == Generation::off ? "None" : count_text(v.presented_generated);
 }
 
-}  // namespace mhw::alpha::status
+} // namespace mhw::alpha::status

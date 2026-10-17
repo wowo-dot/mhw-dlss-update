@@ -3,7 +3,11 @@
 
 namespace mhw::reflex {
 enum class PresentationContract { synchronous_native, sdk_paced };
-struct PresentDecision { HRESULT result; bool fault; bool forward_native; };
+struct PresentDecision {
+    HRESULT result;
+    bool fault;
+    bool forward_native;
+};
 // A lost device. Any failed Present reaches the game's sRender::checkResult,
 // which aborts (MtDebug::abort); for a lost device that is the game's own
 // behaviour without the mod, so that result is passed on unchanged.
@@ -16,7 +20,7 @@ constexpr bool device_lost(HRESULT hr) noexcept {
 // fault (frame generation then turns off) and the game gets S_OK for the lost
 // frame (v0.28.6), except a lost device, which it gets as before.
 constexpr PresentDecision presentation_result(PresentationContract contract, unsigned observed_native_calls,
-                                               HRESULT sdk_result, HRESULT native_result) noexcept {
+                                              HRESULT sdk_result, HRESULT native_result) noexcept {
     if (contract == PresentationContract::sdk_paced)
         return {FAILED(sdk_result) && !device_lost(sdk_result) ? S_OK : sdk_result, FAILED(sdk_result), false};
     return {native_result, observed_native_calls != 1 || FAILED(sdk_result), observed_native_calls == 0};
@@ -64,4 +68,4 @@ constexpr IdentityRoute identity_route(bool bypass, bool identity_self, bool rea
     if (bypass || !identity_self) return IdentityRoute::forward;
     return real_chain ? IdentityRoute::real : IdentityRoute::unroutable;
 }
-}
+} // namespace mhw::reflex

@@ -5,9 +5,15 @@
 #include <iosfwd>
 #include "scene_rect.hpp"
 
-namespace sl { struct FrameToken; }
-namespace mhw::reflex { class Streamline; }
-namespace mhw::temporal_present { struct Bindings; }
+namespace sl {
+struct FrameToken;
+}
+namespace mhw::reflex {
+class Streamline;
+}
+namespace mhw::temporal_present {
+struct Bindings;
+}
 
 // In-game ordinary frame generation (opt-in target only). Process-lived state.
 //
@@ -23,7 +29,7 @@ namespace mhw::temporal_present { struct Bindings; }
 namespace mhw::frame_generation::game {
 
 struct SlotCamera {
-    std::array<float, 16> view{}, projection{};  // fView, fNoJitterProj
+    std::array<float, 16> view{}, projection{}; // fView, fNoJitterProj
     float jitter_x{}, jitter_y{};               // render pixels, NGX convention
     bool reset{};                               // DLSS history decision
 };
@@ -73,18 +79,18 @@ void mode(Mode mode, unsigned target_fps) noexcept;
 // Any thread, lock-free: the session as status lines show it (alpha menu).
 struct Status {
     bool armed{}, on{};
-    unsigned requested{};                 // total multiplier asked for
-    unsigned generated{};                 // generated frames per rendered frame now; 0 while Off
-    unsigned maximum{};                   // generated frames DLSS-G allows; 0 until its state was read
-    std::uint64_t presented_generated{};  // generated frames presented since the start
-    Mode mode{};                          // asked for
-    unsigned target{};                    // dynamic target asked for; 0: the display's refresh rate
-    bool dynamic_applied{};               // DLSS-G runs in eDynamic now
-    unsigned dynamic_support{};           // 0 not known yet, 1 no, 2 yes (DLSSGState)
-    bool dynamic_refused{};               // DLSS-G refused eDynamic although supported
-    unsigned presented_now{};             // frames presented for the last rendered frame
-    unsigned single_streak{};             // Presents in a row, while On, that showed no generated frame
-    bool enabled{true};                   // the player's setting (enable())
+    unsigned requested{};                // total multiplier asked for
+    unsigned generated{};                // generated frames per rendered frame now; 0 while Off
+    unsigned maximum{};                  // generated frames DLSS-G allows; 0 until its state was read
+    std::uint64_t presented_generated{}; // generated frames presented since the start
+    Mode mode{};                         // asked for
+    unsigned target{};                   // dynamic target asked for; 0: the display's refresh rate
+    bool dynamic_applied{};              // DLSS-G runs in eDynamic now
+    unsigned dynamic_support{};          // 0 not known yet, 1 no, 2 yes (DLSSGState)
+    bool dynamic_refused{};              // DLSS-G refused eDynamic although supported
+    unsigned presented_now{};            // frames presented for the last rendered frame
+    unsigned single_streak{};            // Presents in a row, while On, that showed no generated frame
+    bool enabled{true};                  // the player's setting (enable())
 };
 Status status() noexcept;
 
@@ -126,4 +132,4 @@ void present_end(bool presented) noexcept;
 
 void write(std::ostream &out);
 
-}  // namespace mhw::frame_generation::game
+} // namespace mhw::frame_generation::game

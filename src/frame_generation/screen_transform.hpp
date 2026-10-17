@@ -16,7 +16,9 @@ namespace mhw::frame_generation::screen {
 // it are treated as not CBSystem (the capture keeps its last valid value; the
 // transform falls back to the neutral curve g = 1 before any).
 constexpr float gamma_min = 0.05f, gamma_max = 4.0f;
-inline bool gamma_plausible(float g) noexcept { return std::isfinite(g) && g >= gamma_min && g <= gamma_max; }
+inline bool gamma_plausible(float g) noexcept {
+    return std::isfinite(g) && g >= gamma_min && g <= gamma_max;
+}
 
 inline float brightness(float c, float g) noexcept {
     c = std::clamp(c, 0.0f, 1.0f);
@@ -44,19 +46,21 @@ inline float channel(float linear, float g) noexcept {
 //   ST.2084 PQ of saturate(x * fHdrOutputWhiteLevel / 10000), capped at 1.
 namespace hdr {
 struct Parameters {
-    float white{100.0f}, ratio{0.0f}, gamma{1.0f};  // the shader's defaults
+    float white{100.0f}, ratio{0.0f}, gamma{1.0f}; // the shader's defaults
     bool gui_gamma{};
 };
 // Accepted as CBRenderFrame's HDR fields (the capture's layout check).
 constexpr float white_min = 10.0f, white_max = 10000.0f, gamma_min = 0.1f, gamma_max = 10.0f;
 // ST.2084 constants.
-constexpr float m1 = 2610.0f / 16384.0f, m2 = 2523.0f / 32.0f, c1 = 3424.0f / 4096.0f, c2 = 2413.0f / 128.0f, c3 = 2392.0f / 128.0f;
+constexpr float m1 = 2610.0f / 16384.0f, m2 = 2523.0f / 32.0f, c1 = 3424.0f / 4096.0f, c2 = 2413.0f / 128.0f,
+                c3 = 2392.0f / 128.0f;
 inline float pq_encode(float normalized) noexcept {
     const float p = std::pow(std::clamp(normalized, 0.0f, 1.0f), m1);
     return std::min(std::pow((c1 + c2 * p) / (1.0f + c3 * p), m2), 1.0f);
 }
 // The shader's BT.709 -> BT.2020 rows.
-constexpr float rotation[3][3]{{0.627404f, 0.329282f, 0.043314f}, {0.069097f, 0.919540f, 0.011361f}, {0.016392f, 0.088013f, 0.895595f}};
+constexpr float rotation[3][3]{
+    {0.627404f, 0.329282f, 0.043314f}, {0.069097f, 0.919540f, 0.011361f}, {0.016392f, 0.088013f, 0.895595f}};
 inline std::array<float, 3> encode(std::array<float, 3> linear, const Parameters &p) noexcept {
     for (auto &v : linear) v = std::max(v, 0.0f);
     std::array<float, 3> out{};
@@ -68,6 +72,6 @@ inline std::array<float, 3> encode(std::array<float, 3> linear, const Parameters
     }
     return out;
 }
-}  // namespace hdr
+} // namespace hdr
 
-}  // namespace mhw::frame_generation::screen
+} // namespace mhw::frame_generation::screen

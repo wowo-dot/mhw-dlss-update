@@ -24,10 +24,21 @@ namespace mhw::frame_generation::game {
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr unsigned slot_count = 3, none = InputRing<slot_count>::none;
-constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;  // DLSS converter output state
+constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; // DLSS converter output state
 const sl::ViewportHandle viewport{0};
 
-enum class Off : unsigned { not_armed, no_token, no_ready, camera, constants, tags, options, disabled, unloaded, count };
+enum class Off : unsigned {
+    not_armed,
+    no_token,
+    no_ready,
+    camera,
+    constants,
+    tags,
+    options,
+    disabled,
+    unloaded,
+    count
+};
 constexpr std::array<const char *, static_cast<unsigned>(Off::count)> off_names{
     "not_armed", "no_token", "no_ready", "camera", "constants", "tags", "options", "disabled", "unloaded"};
 // The player's Off frees DLSS-G's resources this many Presents after it, when
@@ -38,7 +49,6 @@ constexpr unsigned free_after_presents = 4;
 // most the longest (v0.28.3, reconcile()).
 constexpr unsigned wind_down_presents = 24;
 constexpr std::uint64_t wind_down_min_ms = 150, wind_down_max_ms = 400;
-
 
 struct Images {
     ComPtr<ID3D12Resource> depth, motion, hudless;
@@ -53,7 +63,8 @@ constexpr unsigned system_parameter = 5;
 constexpr unsigned capture_limit = 4;
 // format: the back buffer is neither SDR 8-bit nor HDR10 (v0.24.8).
 enum class HudSkip : unsigned { disabled, no_restore, failed, format, count };
-constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{"disabled", "no_restore", "failed", "format"};
+constexpr std::array<const char *, static_cast<unsigned>(HudSkip::count)> hud_skip_names{"disabled", "no_restore",
+                                                                                         "failed", "format"};
 struct Staged {
     bool valid{};
     std::uint64_t frame{}, epoch{};
@@ -79,7 +90,7 @@ struct Session {
     std::mutex mutex;
     reflex::Streamline *sdk{};
     unsigned output_width{}, output_height{};
-    SceneRect scene;  // In the back buffer; the HUD-less image is scene-sized
+    SceneRect scene; // In the back buffer; the HUD-less image is scene-sized
     // Viewport (x, y, w, h) and scissor (l, t, r, b) of each capture candidate
     // in the latest frame that had captures; the screen write is one of them.
     std::array<std::array<int, 8>, capture_limit> candidates{};
@@ -101,7 +112,7 @@ struct Session {
     std::array<Images, slot_count> images;
     std::array<bool, slot_count> slot_hudless{};
     Staged staged;
-    StagingQueue<staging_count, SlotCamera> queue;  // perf::keyed_staging
+    StagingQueue<staging_count, SlotCamera> queue; // perf::keyed_staging
     std::array<StagingCopy, staging_count> staging{};
     bool staging_failed{};
     // final frame - newest staged frame at a mismatch: -2, -1, +1, +2, other.
@@ -109,8 +120,8 @@ struct Session {
     std::uint64_t keyed_hits{}, staging_copies{}, keyed_early{}, keyed_confirms{};
     std::unique_ptr<HudlessPass> hudless;
     bool hudless_failed{};
-    std::array<char, 160> hudless_error{};  // First HUD-less failure, JSON-safe
-    std::atomic<bool> capture_window{};  // A HUD-less pass was recorded since the last Present
+    std::array<char, 160> hudless_error{}; // First HUD-less failure, JSON-safe
+    std::atomic<bool> capture_window{};    // A HUD-less pass was recorded since the last Present
     unsigned captures_this_frame{}, hdr_lists_this_frame{};
     std::uint64_t captures{}, capture_no_cbv{}, capture_limited{}, capture_failed{};
     // v0.24.8: the back buffer's DXGI_FORMAT (back_buffer()); HDR10 captures
@@ -118,8 +129,8 @@ struct Session {
     // capture or the shader's defaults, and slot images made for a new format.
     std::atomic<unsigned> back_buffer_format{};
     std::uint64_t hdr_captures{}, hdr_probe_ok{}, hdr_probe_default{}, hudless_recreated{};
-    std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{}, hudless_tagged{},
-        probe_ok{}, probe_fallback{}, probe_invalid{};
+    std::uint64_t staged_count{}, staged_dropped{}, final_unstaged{}, final_mismatch{}, hudless_recorded{},
+        hudless_tagged{}, probe_ok{}, probe_fallback{}, probe_invalid{};
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
     // Why a HUD-less record found no restorable binding snapshot (no_restore):
     // not known, invalid, no generation, no pipeline, no graphics signature,
@@ -129,20 +140,20 @@ struct Session {
     std::array<SlotCamera, slot_count> cameras;
     D3D12_RESOURCE_DESC depth_desc{}, motion_desc{};
     bool created{}, create_failed{};
-    gpu_memory::Check memory;  // create()'s video memory check
+    gpu_memory::Check memory; // create()'s video memory check
     unsigned pending{none};
     Last last;
-    ID3D12Fence *fence{};  // Owned by the SDK; only GetCompletedValue is called.
+    ID3D12Fence *fence{}; // Owned by the SDK; only GetCompletedValue is called.
     sl::DLSSGState state{};
     bool state_valid{};
     std::uint64_t presents{}, tagged{}, recorded{}, record_failed{}, size_mismatch{}, state_failed{}, mode_changes{},
         null_tags{}, unpresented{}, exceptions{}, lifecycle_calls{}, lifecycle_offs{};
     std::atomic<unsigned> requested_multiplier{2};
     std::atomic<unsigned> requested_mode{static_cast<unsigned>(Mode::fixed)}, requested_target{};
-    unsigned applied_generated{};  // 0 while Off
+    unsigned applied_generated{}; // 0 while Off
     sl::DLSSGMode applied_mode{sl::DLSSGMode::eOff};
     unsigned applied_target{};
-    std::atomic<bool> dynamic_refused{};  // DLSS-G refused eDynamic: the fixed multiplier from then on
+    std::atomic<bool> dynamic_refused{}; // DLSS-G refused eDynamic: the fixed multiplier from then on
     // Mirrors for status() (any thread): applied_generated, the state's
     // numFramesToGenerateMax, and generated frames presented so far.
     std::atomic<unsigned> shown_generated{}, shown_maximum{};
@@ -159,27 +170,29 @@ struct Session {
     // long_present_us, and those within two Presents of a change.
     static constexpr std::uint64_t long_present_us = 16000;
     std::int64_t pacing_qpc{};
-    std::uint64_t pacing_present{};  // `presents` at the last finish_pending
-    unsigned pacing_count{};         // its numFramesActuallyPresented
+    std::uint64_t pacing_present{}; // `presents` at the last finish_pending
+    unsigned pacing_count{};        // its numFramesActuallyPresented
     unsigned since_switch{~0U}, since_long{~0U};
     bool long_matched{};
     std::uint64_t count_switches{}, long_presents{}, long_near_switch{};
-    std::uint64_t input_releases{};  // live preset changes (release_inputs())
+    std::uint64_t input_releases{}; // live preset changes (release_inputs())
     // Tagged frames with reset: all, and those whose DLSS history was reset
     // (the rest had no consecutive predecessor). DLSS-G presents no generated
     // frame for a reset.
     std::uint64_t reset_tags{}, history_reset_tags{};
-    std::array<std::uint64_t, 8> presented_frames{};  // numFramesActuallyPresented per Present: 0..6, other
+    std::array<std::uint64_t, 8> presented_frames{}; // numFramesActuallyPresented per Present: 0..6, other
     std::array<std::uint64_t, static_cast<unsigned>(Off::count)> off{};
     std::array<std::uint64_t, 7> camera_failures{};
-    std::array<std::uint64_t, 4> present_delta{};  // present frame - slot frame: 1, 2, 3, other
+    std::array<std::uint64_t, 4> present_delta{}; // present frame - slot frame: 1, 2, 3, other
     std::array<Sample, 8> samples{};
     unsigned sample_count{};
     sl::Result last_sdk_error{sl::Result::eOk};
 };
 Session session;
 // Inputs are prepared only while armed by the worker and on by the player.
-bool active(const Session &s) noexcept { return s.armed.load() && s.enabled.load(); }
+bool active(const Session &s) noexcept {
+    return s.armed.load() && s.enabled.load();
+}
 
 sl::float4x4 matrix(const std::array<float, 16> &m) {
     sl::float4x4 r;
@@ -240,7 +253,9 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
     {
         auto d = s.depth_desc, m = s.motion_desc;
         d.Flags = m.Flags = D3D12_RESOURCE_FLAG_NONE;
-        const auto bytes = [&](const D3D12_RESOURCE_DESC &x) { return device->GetResourceAllocationInfo(0, 1, &x).SizeInBytes; };
+        const auto bytes = [&](const D3D12_RESOURCE_DESC &x) {
+            return device->GetResourceAllocationInfo(0, 1, &x).SizeInBytes;
+        };
         const std::uint64_t depth_bytes = bytes(d), motion_bytes = bytes(m), hudless_bytes = bytes(h);
         if (depth_bytes == UINT64_MAX || motion_bytes == UINT64_MAX || hudless_bytes == UINT64_MAX) return false;
         const unsigned copies = slot_count + (perf::on(perf::keyed_staging) ? staging_count : 0);
@@ -251,26 +266,28 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
     // HUD-less is optional: any failure here leaves depth/motion-only FG. It is
     // scene-sized, so a live preset change keeps it (release_inputs()).
     if (!s.hudless && !s.hudless_failed) try {
-        if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
-            throw std::runtime_error("hudless scene extent");
-        s.hudless = std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
-        // In the back buffer's format (SDR or HDR10, the same size); for any
-        // other, none until it changes (record() makes a slot's image then).
-        const auto wanted = hudless_format(s.back_buffer_format.load(), s.hudless->hdr_supported());
-        const auto image = hudless_desc(scene_desc, wanted);
-        for (auto &i : s.images) {
-            if (wanted == DXGI_FORMAT_UNKNOWN) break;
-            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &image, tag_state, nullptr, IID_PPV_ARGS(&i.hudless))))
-                throw std::runtime_error("hudless image");
-            i.hudless->SetName(L"mhw-fg-hudless");
+            if (scene_desc.Width != s.scene.width || scene_desc.Height != s.scene.height)
+                throw std::runtime_error("hudless scene extent");
+            s.hudless =
+                std::make_unique<HudlessPass>(device.Get(), static_cast<unsigned>(scene_desc.Width), scene_desc.Height);
+            // In the back buffer's format (SDR or HDR10, the same size); for any
+            // other, none until it changes (record() makes a slot's image then).
+            const auto wanted = hudless_format(s.back_buffer_format.load(), s.hudless->hdr_supported());
+            const auto image = hudless_desc(scene_desc, wanted);
+            for (auto &i : s.images) {
+                if (wanted == DXGI_FORMAT_UNKNOWN) break;
+                if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &image, tag_state, nullptr,
+                                                           IID_PPV_ARGS(&i.hudless))))
+                    throw std::runtime_error("hudless image");
+                i.hudless->SetName(L"mhw-fg-hudless");
+            }
+        } catch (const std::exception &e) {
+            note_hudless_error(s, e.what());
+            s.hudless_failed = true;
+        } catch (...) {
+            note_hudless_error(s, "hudless creation");
+            s.hudless_failed = true;
         }
-    } catch (const std::exception &e) {
-        note_hudless_error(s, e.what());
-        s.hudless_failed = true;
-    } catch (...) {
-        note_hudless_error(s, "hudless creation");
-        s.hudless_failed = true;
-    }
     if (s.hudless_failed) {
         s.hudless.reset();
         for (auto &i : s.images) i.hudless.Reset();
@@ -291,7 +308,8 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
 
 bool same_image(const D3D12_RESOURCE_DESC &a, const D3D12_RESOURCE_DESC &b) {
     return a.Dimension == b.Dimension && a.Width == b.Width && a.Height == b.Height && a.Format == b.Format &&
-           a.MipLevels == b.MipLevels && a.DepthOrArraySize == b.DepthOrArraySize && a.SampleDesc.Count == b.SampleDesc.Count;
+           a.MipLevels == b.MipLevels && a.DepthOrArraySize == b.DepthOrArraySize &&
+           a.SampleDesc.Count == b.SampleDesc.Count;
 }
 
 // Owner thread, under the session lock. Null tags release SDK references.
@@ -335,7 +353,7 @@ void note_pacing(Session &s, unsigned count) {
         if (count >= 1 && s.pacing_count >= 1 && count != s.pacing_count) {
             ++s.count_switches;
             s.since_switch = 0;
-            if (s.since_long <= 2 && !s.long_matched) {  // a long interval just before
+            if (s.since_long <= 2 && !s.long_matched) { // a long interval just before
                 ++s.long_near_switch;
                 s.long_matched = true;
             }
@@ -344,7 +362,7 @@ void note_pacing(Session &s, unsigned count) {
         if (ticks * 1000000 / static_cast<std::uint64_t>(frequency.QuadPart) > Session::long_present_us) {
             ++s.long_presents;
             s.since_long = 0;
-            s.long_matched = s.since_switch <= 2;  // at or just after a change
+            s.long_matched = s.since_switch <= 2; // at or just after a change
             if (s.long_matched) ++s.long_near_switch;
         }
     }
@@ -384,7 +402,7 @@ unsigned wanted_generated(Session &s) {
 struct Wanted {
     sl::DLSSGMode mode{};
     unsigned generated{}, target{};
-    bool fallback{};  // dynamic asked for, the fixed multiplier used
+    bool fallback{}; // dynamic asked for, the fixed multiplier used
 };
 Wanted wanted_options(Session &s) {
     read_state_once(s);
@@ -394,10 +412,11 @@ Wanted wanted_options(Session &s) {
     if (mode == Mode::dynamic && !s.dynamic_refused.load() && s.state_valid &&
         s.state.bIsDynamicMFGSupported == sl::Boolean::eTrue && s.state.numFramesToGenerateMax)
         return {sl::DLSSGMode::eDynamic, s.state.numFramesToGenerateMax, s.requested_target.load(), false};
-    return {mode == Mode::automatic ? sl::DLSSGMode::eAuto : sl::DLSSGMode::eOn, wanted_generated(s), 0, mode == Mode::dynamic};
+    return {mode == Mode::automatic ? sl::DLSSGMode::eAuto : sl::DLSSGMode::eOn, wanted_generated(s), 0,
+            mode == Mode::dynamic};
 }
 
-}  // namespace
+} // namespace
 
 void configure(reflex::Streamline &sdk, unsigned output_width, unsigned output_height, SceneRect scene) noexcept {
     std::lock_guard lock(session.mutex);
@@ -418,8 +437,12 @@ void enable(bool enabled) noexcept {
     if (enabled || !session.on.load()) session.enabled.store(enabled);
 }
 
-void back_buffer(unsigned format) noexcept { session.back_buffer_format.store(format); }
-bool frame_generation_on() noexcept { return session.on.load(); }
+void back_buffer(unsigned format) noexcept {
+    session.back_buffer_format.store(format);
+}
+bool frame_generation_on() noexcept {
+    return session.on.load();
+}
 bool inputs_settled() noexcept {
     auto &s = session;
     try {
@@ -477,10 +500,20 @@ void mode(Mode mode, unsigned target_fps) noexcept {
 }
 Status status() noexcept {
     const auto &s = session;
-    return {s.armed.load(), s.on.load(), s.requested_multiplier.load(), s.shown_generated.load(), s.shown_maximum.load(),
-            s.presented_generated.load(), static_cast<Mode>(s.requested_mode.load()), s.requested_target.load(),
-            s.shown_dynamic.load(), s.shown_dynamic_support.load(), s.dynamic_refused.load(), s.shown_presented.load(),
-            s.single_streak.load(), s.enabled.load()};
+    return {s.armed.load(),
+            s.on.load(),
+            s.requested_multiplier.load(),
+            s.shown_generated.load(),
+            s.shown_maximum.load(),
+            s.presented_generated.load(),
+            static_cast<Mode>(s.requested_mode.load()),
+            s.requested_target.load(),
+            s.shown_dynamic.load(),
+            s.shown_dynamic_support.load(),
+            s.dynamic_refused.load(),
+            s.shown_presented.load(),
+            s.single_streak.load(),
+            s.enabled.load()};
 }
 
 void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
@@ -489,8 +522,9 @@ void note_mismatch(Session &s, std::uint64_t staged, std::uint64_t frame) {
 }
 bool staging_ready(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
     if (s.staging_failed) return false;
-    if (s.staging[0].depth) return same_image(depth->GetDesc(), s.staging[0].depth->GetDesc()) &&
-                                   same_image(motion->GetDesc(), s.staging[0].motion->GetDesc());
+    if (s.staging[0].depth)
+        return same_image(depth->GetDesc(), s.staging[0].depth->GetDesc()) &&
+               same_image(motion->GetDesc(), s.staging[0].motion->GetDesc());
     ComPtr<ID3D12Device> device;
     if (FAILED(depth->GetDevice(IID_PPV_ARGS(&device)))) return !(s.staging_failed = true);
     D3D12_HEAP_PROPERTIES heap{};
@@ -498,10 +532,10 @@ bool staging_ready(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
     auto d = depth->GetDesc(), m = motion->GetDesc();
     d.Flags = m.Flags = D3D12_RESOURCE_FLAG_NONE;
     for (auto &c : s.staging)
-        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
-                                                   IID_PPV_ARGS(&c.depth))) ||
-            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &m, D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
-                                                   IID_PPV_ARGS(&c.motion)))) {
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                                   nullptr, IID_PPV_ARGS(&c.depth))) ||
+            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &m, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                                   nullptr, IID_PPV_ARGS(&c.motion)))) {
             s.staging = {};
             return !(s.staging_failed = true);
         }
@@ -520,7 +554,7 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
         }
         if (!perf::on(perf::keyed_staging)) {
             s.queue.clear();
-            if (s.staged.valid) ++s.staged_dropped;  // previous frame's final draw never qualified
+            if (s.staged.valid) ++s.staged_dropped; // previous frame's final draw never qualified
             s.staged = {true, frame, epoch, depth, motion, camera};
             ++s.staged_count;
             return;
@@ -534,10 +568,11 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
         // the frame (its copy runs after this one on the GPU): confirm it.
         // Otherwise queue the frame for its final draw.
         auto &copy = s.staging[s.queue.push(frame, epoch, camera)];
-        std::array<D3D12_RESOURCE_BARRIER, 4> b{transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-                                               transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-                                               transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-                                               transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
+        std::array<D3D12_RESOURCE_BARRIER, 4> b{
+            transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+            transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+            transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
+            transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
         list->ResourceBarrier(4, b.data());
         list->CopyResource(copy.depth.Get(), depth);
         list->CopyResource(copy.motion.Get(), motion);
@@ -568,7 +603,7 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
         if (keyed) {
             const auto newest = s.queue.newest();
             const auto taken = s.queue.take(frame, epoch);
-            if (!s.staging[0].depth) {  // no frame staged yet
+            if (!s.staging[0].depth) { // no frame staged yet
                 ++s.final_unstaged;
                 return;
             }
@@ -629,18 +664,21 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             if (!probe.valid)
                 ++s.probe_invalid;
             else {
-                if (probe.hdr) ++(probe.hdr_ok ? s.hdr_probe_ok : s.hdr_probe_default);
-                else ++(probe.parameters_ok ? s.probe_ok : s.probe_fallback);
+                if (probe.hdr)
+                    ++(probe.hdr_ok ? s.hdr_probe_ok : s.hdr_probe_default);
+                else
+                    ++(probe.parameters_ok ? s.probe_ok : s.probe_fallback);
                 s.last_probe = probe;
             }
         }
         s.slot_hudless[slot] = false;
         auto &image = s.images[slot];
-        std::array<D3D12_RESOURCE_BARRIER, 4> b{transition(image.depth.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
-                                               transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
-                                               transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-                                               transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
-        const UINT barriers = source_state == tag_state ? 4U : 2U;  // staging copies are already sources
+        std::array<D3D12_RESOURCE_BARRIER, 4> b{
+            transition(image.depth.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
+            transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
+            transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
+            transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
+        const UINT barriers = source_state == tag_state ? 4U : 2U; // staging copies are already sources
         list->ResourceBarrier(barriers, b.data());
         list->CopyResource(image.depth.Get(), depth);
         list->CopyResource(image.motion.Get(), motion);
@@ -660,8 +698,10 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                 if (!roots.compute.signature) ++s.restore_reasons[5];
             } catch (...) {
                 ++s.hud_skips[static_cast<unsigned>(HudSkip::no_restore)];
-                const bool reasons[]{!roots.known, !roots.valid, !roots.generation, !roots.pipeline, !roots.graphics.signature};
-                for (unsigned i = 0; i < 5; ++i) if (reasons[i]) ++s.restore_reasons[i];
+                const bool reasons[]{!roots.known, !roots.valid, !roots.generation, !roots.pipeline,
+                                     !roots.graphics.signature};
+                for (unsigned i = 0; i < 5; ++i)
+                    if (reasons[i]) ++s.restore_reasons[i];
             }
             // v0.24.8: the slot's image follows the back buffer's format (the
             // game switches SDR/HDR10 with its own resizes). The slot is free
@@ -714,7 +754,9 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
     }
 }
 
-bool capture_wanted() noexcept { return active(session) && session.capture_window.load(); }
+bool capture_wanted() noexcept {
+    return active(session) && session.capture_window.load();
+}
 
 void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &roots) noexcept {
     auto &s = session;
@@ -758,10 +800,17 @@ void closing(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &
         c = {};
         if (temporal_present::observer::raster_current(list, raster)) {
             if (raster.viewport_known)
-                c = {static_cast<int>(raster.viewport.TopLeftX), static_cast<int>(raster.viewport.TopLeftY),
-                     static_cast<int>(raster.viewport.Width), static_cast<int>(raster.viewport.Height), 0, 0, 0, 0};
+                c = {static_cast<int>(raster.viewport.TopLeftX),
+                     static_cast<int>(raster.viewport.TopLeftY),
+                     static_cast<int>(raster.viewport.Width),
+                     static_cast<int>(raster.viewport.Height),
+                     0,
+                     0,
+                     0,
+                     0};
             if (raster.scissor_known)
-                c[4] = raster.scissor.left, c[5] = raster.scissor.top, c[6] = raster.scissor.right, c[7] = raster.scissor.bottom;
+                c[4] = raster.scissor.left, c[5] = raster.scissor.top, c[6] = raster.scissor.right,
+                c[7] = raster.scissor.bottom;
         }
         s.candidate_count = s.captures_this_frame + 1;
         try {
@@ -876,7 +925,8 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             // last On frames are surely done.
             if (!s.freed && ++s.disabled_presents >= free_after_presents) {
                 s.freed = true;
-                if (const auto r = s.sdk->frame_generation_free(viewport); r == sl::Result::eOk) ++s.frees;
+                if (const auto r = s.sdk->frame_generation_free(viewport); r == sl::Result::eOk)
+                    ++s.frees;
                 else {
                     ++s.free_failed;
                     s.last_sdk_error = r;
@@ -952,10 +1002,12 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
         sl::Extent render{0, 0, frame.render_width, frame.render_height};
         // The back buffer's scene rectangle ({top, left, width, height}); the
         // HUD-less image is that size, so its extent matches the subrect.
-        static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 && offsetof(sl::Extent, width) == 8 &&
-                      offsetof(sl::Extent, height) == 12, "sl::Extent field order");
+        static_assert(offsetof(sl::Extent, top) == 0 && offsetof(sl::Extent, left) == 4 &&
+                          offsetof(sl::Extent, width) == 8 && offsetof(sl::Extent, height) == 12,
+                      "sl::Extent field order");
         const auto fields = extent_fields(s.scene);
-        sl::Extent output{fields[0], fields[1], fields[2], fields[3]}, hudless_extent{0, 0, s.scene.width, s.scene.height};
+        sl::Extent output{fields[0], fields[1], fields[2], fields[3]},
+            hudless_extent{0, 0, s.scene.width, s.scene.height};
         // A slot without HUD-less clears that tag explicitly (null resource).
         const bool with_hudless = s.slot_hudless[slot] && image.hudless;
         sl::Resource hudless{sl::ResourceType::eTex2d, with_hudless ? image.hudless.Get() : nullptr,
@@ -964,15 +1016,17 @@ void present_begin(const sl::FrameToken *token, std::uint64_t present_frame) noe
             {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &render},
             {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &render},
             {nullptr, sl::kBufferTypeBackbuffer, sl::ResourceLifecycle::eValidUntilPresent, &output},
-            {with_hudless ? &hudless : nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &hudless_extent}};
+            {with_hudless ? &hudless : nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent,
+             &hudless_extent}};
         if (const auto r = s.sdk->tags(*token, viewport, tags, 4); r != sl::Result::eOk) {
             s.last_sdk_error = r;
             s.ring.untag(slot);
             return turn_off(s, token, Off::tags);
         }
-        if (const auto w = wanted_options(s); !s.on.load() || w.mode != s.applied_mode || w.generated != s.applied_generated ||
-                                               w.target != s.applied_target) {
-            if (const auto r = s.sdk->frame_generation_mode(viewport, w.mode, w.generated, static_cast<float>(w.target), true);
+        if (const auto w = wanted_options(s); !s.on.load() || w.mode != s.applied_mode ||
+                                              w.generated != s.applied_generated || w.target != s.applied_target) {
+            if (const auto r =
+                    s.sdk->frame_generation_mode(viewport, w.mode, w.generated, static_cast<float>(w.target), true);
                 r != sl::Result::eOk) {
                 s.last_sdk_error = r;
                 // eDynamic refused although reported supported: the fixed
@@ -1026,8 +1080,10 @@ static void finish_pending(Session &s, bool presented) {
         if (state.numFramesActuallyPresented > 1) s.presented_generated.fetch_add(state.numFramesActuallyPresented - 1);
         s.shown_presented.store(state.numFramesActuallyPresented);
         if (presented) note_pacing(s, state.numFramesActuallyPresented);
-        if (s.on.load() && state.numFramesActuallyPresented <= 1) s.single_streak.store(s.single_streak.load() + 1);
-        else s.single_streak.store(0);
+        if (s.on.load() && state.numFramesActuallyPresented <= 1)
+            s.single_streak.store(s.single_streak.load() + 1);
+        else
+            s.single_streak.store(0);
         s.fence = static_cast<ID3D12Fence *>(state.inputsProcessingCompletionFence);
         s.ring.presented(s.pending, state.lastPresentInputsProcessingCompletionFenceValue);
     } else {
@@ -1052,40 +1108,45 @@ void write(std::ostream &o) {
     auto &s = session;
     std::lock_guard lock(s.mutex);
     const auto &r = s.ring.counters();
-    o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load() << ",\"configured\":" << (s.sdk != nullptr)
-      << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees << ",\"free_failed\":" << s.free_failed
-      << ",\"winds\":" << s.winds << ",\"wound_presents\":" << s.wound_presents
-      << ",\"loaded\":" << (s.sdk && s.sdk->frame_generation())
-      << ",\"multiplier\":" << s.requested_multiplier.load() << ",\"generated\":" << s.applied_generated
-      << ",\"generated_changes\":" << s.generated_changes << ",\"generated_limited\":" << s.generated_limited
-      << ",\"mode\":{\"requested\":" << s.requested_mode.load() << ",\"target\":" << s.requested_target.load()
-      << ",\"applied\":" << static_cast<unsigned>(s.applied_mode) << ",\"applied_target\":" << s.applied_target
-      << ",\"changes\":" << s.mode_option_changes << ",\"dynamic_fallbacks\":" << s.dynamic_fallbacks
-      << ",\"dynamic_refused\":" << s.dynamic_refused.load() << ",\"single_streak\":" << s.single_streak.load() << '}'
+    o << "{\"schema\":2,\"armed\":" << s.armed.load() << ",\"on\":" << s.on.load()
+      << ",\"configured\":" << (s.sdk != nullptr) << ",\"enabled\":" << s.enabled.load() << ",\"frees\":" << s.frees
+      << ",\"free_failed\":" << s.free_failed << ",\"winds\":" << s.winds << ",\"wound_presents\":" << s.wound_presents
+      << ",\"loaded\":" << (s.sdk && s.sdk->frame_generation()) << ",\"multiplier\":" << s.requested_multiplier.load()
+      << ",\"generated\":" << s.applied_generated << ",\"generated_changes\":" << s.generated_changes
+      << ",\"generated_limited\":" << s.generated_limited << ",\"mode\":{\"requested\":" << s.requested_mode.load()
+      << ",\"target\":" << s.requested_target.load() << ",\"applied\":" << static_cast<unsigned>(s.applied_mode)
+      << ",\"applied_target\":" << s.applied_target << ",\"changes\":" << s.mode_option_changes
+      << ",\"dynamic_fallbacks\":" << s.dynamic_fallbacks << ",\"dynamic_refused\":" << s.dynamic_refused.load()
+      << ",\"single_streak\":" << s.single_streak.load() << '}'
       << ",\"pacing\":{\"count_switches\":" << s.count_switches << ",\"long\":" << s.long_presents
       << ",\"long_near_switch\":" << s.long_near_switch << ",\"long_us\":" << Session::long_present_us << '}'
       << ",\"hudless\":{\"available\":" << (s.hudless != nullptr) << ",\"failed\":" << s.hudless_failed
       << ",\"recorded\":" << s.hudless_recorded << ",\"tagged\":" << s.hudless_tagged << ",\"skips\":{";
-    for (unsigned i = 0; i < s.hud_skips.size(); ++i) o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
+    for (unsigned i = 0; i < s.hud_skips.size(); ++i)
+        o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
     o << "},\"restore_reasons\":{";
-    constexpr const char *restore_names[]{"unknown", "invalid", "no_generation", "no_pipeline", "no_graphics", "graphics_only"};
-    for (unsigned i = 0; i < s.restore_reasons.size(); ++i) o << (i ? "," : "") << '"' << restore_names[i] << "\":" << s.restore_reasons[i];
-    o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback << ",\"probe_invalid\":" << s.probe_invalid
-      << ",\"gamma_ex\":" << Number{s.last_probe.gamma_ex} << ",\"gamma\":" << Number{s.last_probe.gamma} << ",\"gpu_attempts\":"
-      << s.last_probe.attempts << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":["
-      << Number{s.last_probe.last_gamma} << ',' << Number{s.last_probe.last_gamma_ex} << "],\"screen_region\":[" << s.last_probe.region[0] << ','
-      << s.last_probe.region[1] << ',' << s.last_probe.region[2] << ',' << s.last_probe.region[3] << "],\"candidates\":[";
+    constexpr const char *restore_names[]{"unknown",     "invalid",     "no_generation",
+                                          "no_pipeline", "no_graphics", "graphics_only"};
+    for (unsigned i = 0; i < s.restore_reasons.size(); ++i)
+        o << (i ? "," : "") << '"' << restore_names[i] << "\":" << s.restore_reasons[i];
+    o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback
+      << ",\"probe_invalid\":" << s.probe_invalid << ",\"gamma_ex\":" << Number{s.last_probe.gamma_ex}
+      << ",\"gamma\":" << Number{s.last_probe.gamma} << ",\"gpu_attempts\":" << s.last_probe.attempts
+      << ",\"gpu_matches\":" << s.last_probe.matches << ",\"last_attempt\":[" << Number{s.last_probe.last_gamma} << ','
+      << Number{s.last_probe.last_gamma_ex} << "],\"screen_region\":[" << s.last_probe.region[0] << ','
+      << s.last_probe.region[1] << ',' << s.last_probe.region[2] << ',' << s.last_probe.region[3]
+      << "],\"candidates\":[";
     for (unsigned i = 0; i < s.candidate_count; ++i) {
         o << (i ? ",[" : "[");
         for (unsigned j = 0; j < 8; ++j) o << (j ? "," : "") << s.candidates[i][j];
         o << ']';
     }
-    o << "],\"captures\":" << s.captures
-      << ",\"capture_no_cbv\":" << s.capture_no_cbv << ",\"capture_limited\":" << s.capture_limited
-      << ",\"capture_failed\":" << s.capture_failed
+    o << "],\"captures\":" << s.captures << ",\"capture_no_cbv\":" << s.capture_no_cbv
+      << ",\"capture_limited\":" << s.capture_limited << ",\"capture_failed\":" << s.capture_failed
       << ",\"back_buffer_format\":" << s.back_buffer_format.load() << ",\"recreated\":" << s.hudless_recreated
-      << ",\"hdr\":{\"captures\":" << s.hdr_captures << ",\"probe_ok\":" << s.hdr_probe_ok << ",\"probe_default\":" << s.hdr_probe_default
-      << ",\"used\":" << s.last_probe.hdr << ",\"valid\":" << s.last_probe.hdr_ok << ",\"white\":" << Number{s.last_probe.white}
+      << ",\"hdr\":{\"captures\":" << s.hdr_captures << ",\"probe_ok\":" << s.hdr_probe_ok
+      << ",\"probe_default\":" << s.hdr_probe_default << ",\"used\":" << s.last_probe.hdr
+      << ",\"valid\":" << s.last_probe.hdr_ok << ",\"white\":" << Number{s.last_probe.white}
       << ",\"ratio\":" << Number{s.last_probe.ratio} << ",\"gamma\":" << Number{s.last_probe.hdr_gamma}
       << ",\"gui_gamma\":" << s.last_probe.gui_gamma << ",\"gpu_attempts\":" << s.last_probe.hdr_attempts
       << ",\"gpu_matches\":" << s.last_probe.hdr_matches << ",\"parameter\":" << s.last_probe.hdr_parameter
@@ -1097,48 +1158,55 @@ void write(std::ostream &o) {
       << s.mismatch_delta[1] << ',' << s.mismatch_delta[2] << ',' << s.mismatch_delta[3] << ',' << s.mismatch_delta[4]
       << "],\"keyed\":{\"on\":" << perf::on(perf::keyed_staging) << ",\"hits\":" << s.keyed_hits
       << ",\"copies\":" << s.staging_copies << ",\"early\":" << s.keyed_early << ",\"confirms\":" << s.keyed_confirms
-      << ",\"failed\":" << s.staging_failed << '}' 
-      << ",\"presented_frames\":[";
+      << ",\"failed\":" << s.staging_failed << '}' << ",\"presented_frames\":[";
     for (unsigned i = 0; i < s.presented_frames.size(); ++i) o << (i ? "," : "") << s.presented_frames[i];
     o << "]"
       << ",\"created\":" << s.created << ",\"create_failed\":" << s.create_failed
-      << ",\"video_memory\":{\"checked\":" << s.memory.done << ",\"read\":" << s.memory.read << ",\"passed\":" << s.memory.passed
-      << ",\"budget_mb\":" << (s.memory.budget >> 20) << ",\"usage_mb\":" << (s.memory.usage >> 20)
-      << ",\"needed_mb\":" << (s.memory.needed >> 20) << '}' << ",\"output\":[" << s.output_width << ','
-      << s.output_height << "],\"scene\":[" << s.scene.x << ',' << s.scene.y << ',' << s.scene.width << ',' << s.scene.height
-      << "],\"render\":[" << s.depth_desc.Width << ',' << s.depth_desc.Height << "],\"formats\":["
-      << s.depth_desc.Format << ',' << s.motion_desc.Format << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged
-      << ",\"recorded\":" << s.recorded << ",\"record_failed\":" << s.record_failed << ",\"size_mismatch\":" << s.size_mismatch
-      << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes << ",\"reset_tags\":" << s.reset_tags
-      << ",\"history_reset_tags\":" << s.history_reset_tags << ",\"null_tags\":" << s.null_tags
-      << ",\"unpresented\":" << s.unpresented << ",\"lifecycle_calls\":" << s.lifecycle_calls << ",\"lifecycle_offs\":" << s.lifecycle_offs << ",\"exceptions\":" << s.exceptions << ",\"last_sdk_error\":" << static_cast<unsigned>(s.last_sdk_error) << ",\"off\":{";
+      << ",\"video_memory\":{\"checked\":" << s.memory.done << ",\"read\":" << s.memory.read
+      << ",\"passed\":" << s.memory.passed << ",\"budget_mb\":" << (s.memory.budget >> 20)
+      << ",\"usage_mb\":" << (s.memory.usage >> 20) << ",\"needed_mb\":" << (s.memory.needed >> 20) << '}'
+      << ",\"output\":[" << s.output_width << ',' << s.output_height << "],\"scene\":[" << s.scene.x << ',' << s.scene.y
+      << ',' << s.scene.width << ',' << s.scene.height << "],\"render\":[" << s.depth_desc.Width << ','
+      << s.depth_desc.Height << "],\"formats\":[" << s.depth_desc.Format << ',' << s.motion_desc.Format
+      << "],\"presents\":" << s.presents << ",\"tagged\":" << s.tagged << ",\"recorded\":" << s.recorded
+      << ",\"record_failed\":" << s.record_failed << ",\"size_mismatch\":" << s.size_mismatch
+      << ",\"state_failed\":" << s.state_failed << ",\"mode_changes\":" << s.mode_changes
+      << ",\"reset_tags\":" << s.reset_tags << ",\"history_reset_tags\":" << s.history_reset_tags
+      << ",\"null_tags\":" << s.null_tags << ",\"unpresented\":" << s.unpresented
+      << ",\"lifecycle_calls\":" << s.lifecycle_calls << ",\"lifecycle_offs\":" << s.lifecycle_offs
+      << ",\"exceptions\":" << s.exceptions << ",\"last_sdk_error\":" << static_cast<unsigned>(s.last_sdk_error)
+      << ",\"off\":{";
     for (unsigned i = 0; i < s.off.size(); ++i) o << (i ? "," : "") << '"' << off_names[i] << "\":" << s.off[i];
     o << "},\"camera_failures\":[";
     for (unsigned i = 0; i < s.camera_failures.size(); ++i) o << (i ? "," : "") << s.camera_failures[i];
     o << "],\"present_delta\":[" << s.present_delta[0] << ',' << s.present_delta[1] << ',' << s.present_delta[2] << ','
-      << s.present_delta[3] << "],\"ring\":{\"acquired\":" << r.acquired << ",\"starved\":" << r.starved << ",\"duplicates\":"
-      << r.duplicates << ",\"abandoned\":" << r.abandoned << ",\"submitted\":" << r.submitted << ",\"discarded\":" << r.discarded
-      << ",\"taken\":" << r.taken << ",\"stale\":" << r.stale << ",\"no_ready\":" << r.no_ready << ",\"consumed\":" << r.consumed
-      << ",\"reclaimed\":" << r.reclaimed << ",\"unconfirmed\":" << r.unconfirmed << ",\"released\":" << r.released
-      << "},\"input_releases\":" << s.input_releases << ",\"state\":{\"valid\":" << s.state_valid << ",\"status\":"
-      << static_cast<unsigned>(s.state.status) << ",\"min_width_or_height\":" << s.state.minWidthOrHeight
-      << ",\"frames_presented\":" << s.state.numFramesActuallyPresented << ",\"max_generated\":" << s.state.numFramesToGenerateMax
+      << s.present_delta[3] << "],\"ring\":{\"acquired\":" << r.acquired << ",\"starved\":" << r.starved
+      << ",\"duplicates\":" << r.duplicates << ",\"abandoned\":" << r.abandoned << ",\"submitted\":" << r.submitted
+      << ",\"discarded\":" << r.discarded << ",\"taken\":" << r.taken << ",\"stale\":" << r.stale
+      << ",\"no_ready\":" << r.no_ready << ",\"consumed\":" << r.consumed << ",\"reclaimed\":" << r.reclaimed
+      << ",\"unconfirmed\":" << r.unconfirmed << ",\"released\":" << r.released
+      << "},\"input_releases\":" << s.input_releases << ",\"state\":{\"valid\":" << s.state_valid
+      << ",\"status\":" << static_cast<unsigned>(s.state.status)
+      << ",\"min_width_or_height\":" << s.state.minWidthOrHeight
+      << ",\"frames_presented\":" << s.state.numFramesActuallyPresented
+      << ",\"max_generated\":" << s.state.numFramesToGenerateMax
       << ",\"dynamic_supported\":" << static_cast<int>(s.state.bIsDynamicMFGSupported)
-      << ",\"vram\":" << s.state.estimatedVRAMUsageInBytes << ",\"fence_value\":"
-      << s.state.lastPresentInputsProcessingCompletionFenceValue << "},\"samples\":[";
+      << ",\"vram\":" << s.state.estimatedVRAMUsageInBytes
+      << ",\"fence_value\":" << s.state.lastPresentInputsProcessingCompletionFenceValue << "},\"samples\":[";
     for (unsigned i = 0; i < s.sample_count; ++i) {
         const auto &x = s.samples[i];
         const auto &c = x.constants;
-        o << (i ? "," : "") << "{\"present\":" << x.present_frame << ",\"slot\":" << x.slot_frame << ",\"near\":" << c.near_plane
-          << ",\"far\":" << c.far_plane << ",\"far_infinite\":" << c.far_infinite << ",\"fov\":" << c.fov << ",\"aspect\":"
-          << c.aspect << ",\"left_handed\":" << c.left_handed << ",\"reset\":" << c.reset << ",\"jitter\":[" << c.jitter[0] << ','
-          << c.jitter[1] << "],\"position\":[" << c.position[0] << ',' << c.position[1] << ',' << c.position[2]
-          << "],\"forward\":[" << c.forward[0] << ',' << c.forward[1] << ',' << c.forward[2] << "],\"up\":[" << c.up[0] << ','
-          << c.up[1] << ',' << c.up[2] << "],\"pinhole\":[" << c.pinhole[0] << ',' << c.pinhole[1] << "],\"clip_to_prev\":[";
+        o << (i ? "," : "") << "{\"present\":" << x.present_frame << ",\"slot\":" << x.slot_frame
+          << ",\"near\":" << c.near_plane << ",\"far\":" << c.far_plane << ",\"far_infinite\":" << c.far_infinite
+          << ",\"fov\":" << c.fov << ",\"aspect\":" << c.aspect << ",\"left_handed\":" << c.left_handed
+          << ",\"reset\":" << c.reset << ",\"jitter\":[" << c.jitter[0] << ',' << c.jitter[1] << "],\"position\":["
+          << c.position[0] << ',' << c.position[1] << ',' << c.position[2] << "],\"forward\":[" << c.forward[0] << ','
+          << c.forward[1] << ',' << c.forward[2] << "],\"up\":[" << c.up[0] << ',' << c.up[1] << ',' << c.up[2]
+          << "],\"pinhole\":[" << c.pinhole[0] << ',' << c.pinhole[1] << "],\"clip_to_prev\":[";
         for (unsigned k = 0; k < 16; ++k) o << (k ? "," : "") << c.clip_to_prev_clip[k];
         o << "]}";
     }
     o << "]}";
 }
 
-}  // namespace mhw::frame_generation::game
+} // namespace mhw::frame_generation::game

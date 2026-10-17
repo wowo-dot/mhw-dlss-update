@@ -19,4 +19,4 @@ inline bool silhouette_material(const std::array<unsigned, 5> &material) noexcep
     return material[2] == 1 && material[3] == 7680 && std::isfinite(intensity) && intensity >= 0.F;
 }
 
-}  // namespace mhw::scaled_temporal
+} // namespace mhw::scaled_temporal

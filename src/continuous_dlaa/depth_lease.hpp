@@ -17,8 +17,7 @@ namespace mhw::continuous_dlaa {
 // recording: DLSS skipped the frame (depth missing). In gameplay the extra
 // copies differ in their resources, so the stamp alone already selected the
 // request's copy (dlaa-identity-path.md).
-template <class Request, class Copy>
-constexpr bool depth_copy_belongs(const Request &t, const Copy &d) noexcept {
+template <class Request, class Copy> constexpr bool depth_copy_belongs(const Request &t, const Copy &d) noexcept {
     const auto &s = t.source;
     if (!t.live || t.forwarding || s.frame != d.stamp.frame || s.epoch != d.stamp.epoch || s.view != d.stamp.view ||
         s.bank != d.stamp.bank || s.async != d.stamp.async || t.depth.container != d.stamp.container ||
@@ -29,4 +28,4 @@ constexpr bool depth_copy_belongs(const Request &t, const Copy &d) noexcept {
     else
         return true;
 }
-}  // namespace mhw::continuous_dlaa
+} // namespace mhw::continuous_dlaa

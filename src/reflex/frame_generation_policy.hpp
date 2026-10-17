@@ -16,4 +16,4 @@ constexpr std::uint32_t parse_multiplier(std::string_view text) noexcept {
     if (text.size() != 2 || (text[1] != 'x' && text[1] != 'X') || text[0] < '2' || text[0] > '8') return 0;
     return static_cast<std::uint32_t>(text[0] - '0');
 }
-}
+} // namespace mhw::reflex

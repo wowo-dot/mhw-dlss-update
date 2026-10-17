@@ -12,4 +12,4 @@ inline bool resolution_active{};
 // render_resolution::input_stamp(): the stamp returned for `view`, if set.
 inline bool stamp_valid{};
 inline render_resolution::InputStamp stamp{};
-}
+} // namespace mhw::test::neighbours

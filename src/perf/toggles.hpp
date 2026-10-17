@@ -21,9 +21,11 @@ enum Toggle : unsigned {
     owner_lists = 1024U,      // binding observer: no per-list lock; D3D12 lets one thread at a time
                               // record a list, and every reader is a hook on that thread (v0.23.10)
 };
-inline constexpr unsigned all_toggles = 1919U;  // every lean path, keyed_staging and owner_lists
-inline constexpr unsigned toggle_mask = 2047U;  // every defined bit
+inline constexpr unsigned all_toggles = 1919U; // every lean path, keyed_staging and owner_lists
+inline constexpr unsigned toggle_mask = 2047U; // every defined bit
 
 inline std::atomic<unsigned> toggles{};
-inline bool on(Toggle t) noexcept { return (toggles.load(std::memory_order_relaxed) & t) != 0; }
-}  // namespace mhw::perf
+inline bool on(Toggle t) noexcept {
+    return (toggles.load(std::memory_order_relaxed) & t) != 0;
+}
+} // namespace mhw::perf

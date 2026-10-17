@@ -3,7 +3,10 @@
 
 namespace mhw::reflex {
 sl::Result FrameSession::fail(sl::Result result) noexcept {
-    policy_.abort(); token_ = nullptr; failure_ = result; return result;
+    policy_.abort();
+    token_ = nullptr;
+    failure_ = result;
+    return result;
 }
 sl::Result FrameSession::apply(FrameStep step) {
     if (failure_ != sl::Result::eOk) return failure_;
@@ -22,15 +25,13 @@ sl::Result FrameSession::apply(FrameStep step) {
         if (result != sl::Result::eOk) return fail(result);
         ++sleeps_;
     }
-    constexpr std::array markers{
-        std::pair{FrameAction::simulation_start, sl::PCLMarker::eSimulationStart},
-        std::pair{FrameAction::simulation_end, sl::PCLMarker::eSimulationEnd},
-        std::pair{FrameAction::render_submit_start, sl::PCLMarker::eRenderSubmitStart},
-        std::pair{FrameAction::render_submit_end, sl::PCLMarker::eRenderSubmitEnd},
-        std::pair{FrameAction::present_start, sl::PCLMarker::ePresentStart},
-        std::pair{FrameAction::present_end, sl::PCLMarker::ePresentEnd}
-    };
-    for (const auto& [action, marker] : markers) {
+    constexpr std::array markers{std::pair{FrameAction::simulation_start, sl::PCLMarker::eSimulationStart},
+                                 std::pair{FrameAction::simulation_end, sl::PCLMarker::eSimulationEnd},
+                                 std::pair{FrameAction::render_submit_start, sl::PCLMarker::eRenderSubmitStart},
+                                 std::pair{FrameAction::render_submit_end, sl::PCLMarker::eRenderSubmitEnd},
+                                 std::pair{FrameAction::present_start, sl::PCLMarker::ePresentStart},
+                                 std::pair{FrameAction::present_end, sl::PCLMarker::ePresentEnd}};
+    for (const auto &[action, marker] : markers) {
         if (!(step.actions & bits(action))) continue;
         const auto result = sdk_.marker(marker, *token_);
         if (result != sl::Result::eOk) return fail(result);
@@ -38,14 +39,24 @@ sl::Result FrameSession::apply(FrameStep step) {
     }
     return sl::Result::eOk;
 }
-sl::Result FrameSession::begin(unsigned thread, FrameStamp stamp) { return apply(policy_.begin(thread,stamp)); }
-sl::Result FrameSession::render_begin(unsigned thread, FrameStamp stamp) { return apply(policy_.render_begin(thread,stamp)); }
-sl::Result FrameSession::render_end(unsigned thread, FrameStamp stamp) { return apply(policy_.render_end(thread,stamp)); }
-sl::Result FrameSession::present_begin(unsigned thread, FrameStamp stamp, bool test) { return apply(policy_.present_begin(thread,stamp,test)); }
-sl::Result FrameSession::present_end(unsigned thread, FrameStamp stamp, bool test) { return apply(policy_.present_end(thread,stamp,test)); }
+sl::Result FrameSession::begin(unsigned thread, FrameStamp stamp) {
+    return apply(policy_.begin(thread, stamp));
+}
+sl::Result FrameSession::render_begin(unsigned thread, FrameStamp stamp) {
+    return apply(policy_.render_begin(thread, stamp));
+}
+sl::Result FrameSession::render_end(unsigned thread, FrameStamp stamp) {
+    return apply(policy_.render_end(thread, stamp));
+}
+sl::Result FrameSession::present_begin(unsigned thread, FrameStamp stamp, bool test) {
+    return apply(policy_.present_begin(thread, stamp, test));
+}
+sl::Result FrameSession::present_end(unsigned thread, FrameStamp stamp, bool test) {
+    return apply(policy_.present_end(thread, stamp, test));
+}
 sl::Result FrameSession::end(unsigned thread) {
     const auto result = apply(policy_.end(thread));
     if (result == sl::Result::eOk) token_ = nullptr;
     return result;
 }
-}
+} // namespace mhw::reflex

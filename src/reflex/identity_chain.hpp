@@ -18,28 +18,28 @@ namespace mhw::reflex {
 // implement as shared stubs (core window, mono, restrict output, background,
 // rotation, source size, matrix transform) are left native.
 inline constexpr std::array<unsigned, 22> identity_routed_slots{
-    8,   // Present
-    9,   // GetBuffer
-    10,  // SetFullscreenState
-    11,  // GetFullscreenState
-    12,  // GetDesc
-    13,  // ResizeBuffers
-    14,  // ResizeTarget
-    15,  // GetContainingOutput
-    16,  // GetFrameStatistics
-    17,  // GetLastPresentCount
-    18,  // GetDesc1
-    19,  // GetFullscreenDesc
-    20,  // GetHwnd
-    22,  // Present1
-    31,  // SetMaximumFrameLatency
-    32,  // GetMaximumFrameLatency
-    33,  // GetFrameLatencyWaitableObject
-    36,  // GetCurrentBackBufferIndex
-    37,  // CheckColorSpaceSupport
-    38,  // SetColorSpace1
-    39,  // ResizeBuffers1
-    40,  // SetHDRMetaData
+    8,  // Present
+    9,  // GetBuffer
+    10, // SetFullscreenState
+    11, // GetFullscreenState
+    12, // GetDesc
+    13, // ResizeBuffers
+    14, // ResizeTarget
+    15, // GetContainingOutput
+    16, // GetFrameStatistics
+    17, // GetLastPresentCount
+    18, // GetDesc1
+    19, // GetFullscreenDesc
+    20, // GetHwnd
+    22, // Present1
+    31, // SetMaximumFrameLatency
+    32, // GetMaximumFrameLatency
+    33, // GetFrameLatencyWaitableObject
+    36, // GetCurrentBackBufferIndex
+    37, // CheckColorSpaceSupport
+    38, // SetColorSpace1
+    39, // ResizeBuffers1
+    40, // SetHDRMetaData
 };
 
 // The identity chain's description for the game's chain `game` in `format`:
@@ -75,4 +75,4 @@ inline bool identity_same_class(IUnknown *a, IUnknown *b) noexcept {
     return true;
 }
 
-}  // namespace mhw::reflex
+} // namespace mhw::reflex

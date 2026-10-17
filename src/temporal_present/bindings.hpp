@@ -20,16 +20,22 @@ struct Argument {
         }
         return true;
     }
-    void clear() noexcept { kind = ArgumentKind::unset; address = 0; mask = 0; }
+    void clear() noexcept {
+        kind = ArgumentKind::unset;
+        address = 0;
+        mask = 0;
+    }
     ArgumentKind kind{};
     std::uint64_t address{}, mask{};
-    std::array<std::uint32_t,64> values{};
+    std::array<std::uint32_t, 64> values{};
 };
 // `set` marks the arguments that are not unset, so a root-signature change or
 // a Reset clears only those (v0.23.8; it cleared the whole 18 KB before, on
 // each of thousands of calls a frame, game-92). Equality does not rely on it.
 struct RootBindings {
-    bool operator==(const RootBindings &o) const noexcept { return signature == o.signature && arguments == o.arguments; }
+    bool operator==(const RootBindings &o) const noexcept {
+        return signature == o.signature && arguments == o.arguments;
+    }
     void clear(std::uintptr_t next_signature = 0) noexcept {
         for (auto m = set; m; m &= m - 1) arguments[static_cast<unsigned>(std::countr_zero(m))].clear();
         set = 0;
@@ -37,7 +43,7 @@ struct RootBindings {
     }
     std::uintptr_t signature{};
     std::uint64_t set{};
-    std::array<Argument,64> arguments{};
+    std::array<Argument, 64> arguments{};
 };
 // CPU-only mirror. Feed only successful native state-setting calls from the
 // beginning of this command-list generation. No pointer is dereferenced here.
@@ -46,7 +52,7 @@ struct Bindings {
     bool known{}, valid{true};
     std::uint64_t generation{};
     std::uintptr_t pipeline{};
-    std::array<std::uintptr_t,2> heaps{};
+    std::array<std::uintptr_t, 2> heaps{};
     unsigned heap_count{};
     RootBindings compute, graphics;
     void reset(std::uint64_t next_generation, std::uintptr_t initial_pipeline = 0) noexcept;
@@ -71,8 +77,9 @@ public:
     RestoreBindings(const RestoreBindings &) = delete;
     RestoreBindings &operator=(const RestoreBindings &) = delete;
     void apply() noexcept;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
-}
+} // namespace mhw::temporal_present

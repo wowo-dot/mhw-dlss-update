@@ -19,10 +19,10 @@ dlss_sdk::ReconstructionMode reconstruction_mode() noexcept;
 void request_mode(dlss_sdk::ReconstructionMode) noexcept;
 void request_off() noexcept;
 struct ModeRequest {
-    bool off{};                           // turn_off()
-    dlss_sdk::ReconstructionMode mode{};  // change_mode(); with off, the configured mode
+    bool off{};                          // turn_off()
+    dlss_sdk::ReconstructionMode mode{}; // change_mode(); with off, the configured mode
 };
-bool requested_mode(ModeRequest &) noexcept;  // takes the request
+bool requested_mode(ModeRequest &) noexcept; // takes the request
 // The mode DLSS runs, or will run (also while off: the one it comes back with).
 dlss_sdk::ReconstructionMode configured_mode_value() noexcept;
 // Whether change_mode() can run now: installed, healthy, scaled build.
@@ -44,16 +44,16 @@ bool live_modes() noexcept;
 // stops (fail closed: the game's own rendering at its own scale returns).
 struct ModeChange {
     bool ok{}, resumed{}, unchanged{};
-    bool scene{};   // change_scene()
-    bool off{};     // the player's Off holds afterwards (turn_off(), or a change from Off that changed nothing)
-    bool retry{};   // not ready yet (discovery, drain): the worker tries again
-    bool memory{};  // refused before anything changed: the new images would not
-                    // fit the video memory budget (no retry; the old mode runs)
-    unsigned phase{};  // the last phase reached (above)
+    bool scene{};     // change_scene()
+    bool off{};       // the player's Off holds afterwards (turn_off(), or a change from Off that changed nothing)
+    bool retry{};     // not ready yet (discovery, drain): the worker tries again
+    bool memory{};    // refused before anything changed: the new images would not
+                      // fit the video memory budget (no retry; the old mode runs)
+    unsigned phase{}; // the last phase reached (above)
     std::string reason;
-    std::array<std::uint64_t, 7> us{};  // microseconds from the start at the end of each phase
-    std::uint64_t barrier{};  // the queue barrier's fence value
-    dlss_sdk::ReconstructionMode mode{};  // the mode DLSS runs afterwards
+    std::array<std::uint64_t, 7> us{};   // microseconds from the start at the end of each phase
+    std::uint64_t barrier{};             // the queue barrier's fence value
+    dlss_sdk::ReconstructionMode mode{}; // the mode DLSS runs afterwards
     unsigned render_width{}, render_height{}, scene_width{}, scene_height{};
 };
 // From Off (below): the same rebuild, which takes the game's AA and render
@@ -85,24 +85,25 @@ void start_off(bool) noexcept;
 // installed; resume admits them again (refused after a fault). Worker only,
 // frame generation off.
 bool diagnostic_pause(bool pause) noexcept;
-bool install(std::uintptr_t,const std::filesystem::path &,std::string &);
+bool install(std::uintptr_t, const std::filesystem::path &, std::string &);
 // install()'s qualification of the game (renderer discovery, code gates and,
 // for the scaled build, the native sizing admission) without side effects.
-bool ready(std::uintptr_t,std::string &);
+bool ready(std::uintptr_t, std::string &);
 void stop() noexcept;
 bool healthy() noexcept;
 // Scene and window sizes from discovery (equal unless the aspect-ratio option
 // letterboxes or pillarboxes the scene). False before install.
-bool scene_extent(unsigned &scene_width,unsigned &scene_height,unsigned &window_width,unsigned &window_height) noexcept;
+bool scene_extent(unsigned &scene_width, unsigned &scene_height, unsigned &window_width,
+                  unsigned &window_height) noexcept;
 // DLSS's render size (half the scene at Performance in the scaled build). False before install.
-bool render_extent(unsigned &width,unsigned &height) noexcept;
+bool render_extent(unsigned &width, unsigned &height) noexcept;
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;
 // AL: the runtime's D3D12 detours with the storage AL fills (hooks 5..).
-void astera_hooks(std::vector<astera::Hook>&);
+void astera_hooks(std::vector<astera::Hook> &);
 void save_rejected_shader(const std::filesystem::path &) noexcept;
 void write(std::ostream &);
 // Counters only (frames, DLSS history resets by reason) for the alpha's minute log.
 void write_summary(std::ostream &);
-}
+} // namespace mhw::continuous_dlaa

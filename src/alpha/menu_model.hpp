@@ -31,12 +31,12 @@ namespace mhw::alpha::menu_model {
 
 struct Settings {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
-    bool dlss = true;  // false: the player's Off (dlss_mode is the mode it comes back with)
+    bool dlss = true; // false: the player's Off (dlss_mode is the mode it comes back with)
     bool frame_generation = true;
     unsigned multiplier = 2;
     ReflexMode reflex = ReflexMode::on;
     bool dynamic{};
-    unsigned dynamic_target{};  // 0: the display's refresh rate
+    unsigned dynamic_target{}; // 0: the display's refresh rate
     bool generation_auto{};
 };
 
@@ -78,8 +78,9 @@ constexpr bool reflex_at(int index, ReflexMode &mode) {
 // `generation` and DLSS-G is `loaded`; if not, the reason for the help line.
 inline bool reflex_allowed(ReflexMode mode, bool generation, bool loaded, std::string &why) {
     if (mode != ReflexMode::off || (!generation && !loaded)) return true;
-    why = generation ? "Frame generation needs Reflex; turn frame generation off first."
-                     : "Reflex stays on while DLSS Frame Generation is loaded (frame_generation_plugin in mhw_dlss.ini).";
+    why = generation
+              ? "Frame generation needs Reflex; turn frame generation off first."
+              : "Reflex stays on while DLSS Frame Generation is loaded (frame_generation_plugin in mhw_dlss.ini).";
     return false;
 }
 // The sl::ReflexMode value (reflex_mode.hpp): 0 off, 1 low latency, 2 boost.
@@ -98,7 +99,9 @@ inline std::vector<unsigned> multiplier_choices(unsigned max) {
     if (out.empty()) out.push_back(multipliers.front());
     return out;
 }
-inline std::string multiplier_name(unsigned m) { return std::to_string(m) + "x"; }
+inline std::string multiplier_name(unsigned m) {
+    return std::to_string(m) + "x";
+}
 // The CHOICE index of `m`: its own, else the largest choice below it, else 0.
 inline int multiplier_index(const std::vector<unsigned> &choices, unsigned m) {
     int best = 0;
@@ -110,7 +113,9 @@ inline int multiplier_index(const std::vector<unsigned> &choices, unsigned m) {
 // "Pacing" choices; Dynamic only where the card supports it (or it is not known).
 enum class Pacing : unsigned { fixed, auto_pause, dynamic };
 inline constexpr const char *pacing_names[]{"Fixed", "Auto pause", "Dynamic"};
-inline constexpr unsigned pacing_count(bool dynamic_offered) { return dynamic_offered ? 3U : 2U; }
+inline constexpr unsigned pacing_count(bool dynamic_offered) {
+    return dynamic_offered ? 3U : 2U;
+}
 constexpr Pacing pacing(const Settings &s, bool dynamic_offered) {
     return s.dynamic && dynamic_offered ? Pacing::dynamic : s.generation_auto ? Pacing::auto_pause : Pacing::fixed;
 }
@@ -120,11 +125,14 @@ constexpr void set_pacing(Settings &s, Pacing p) {
     if (p != Pacing::dynamic) s.generation_auto = p == Pacing::auto_pause;
 }
 // The session's mode (frame_generation::game::Mode order: fixed, automatic, dynamic).
-constexpr unsigned generation_mode(const Settings &s) { return s.dynamic ? 2U : s.generation_auto ? 1U : 0U; }
+constexpr unsigned generation_mode(const Settings &s) {
+    return s.dynamic ? 2U : s.generation_auto ? 1U : 0U;
+}
 
 // "Target frame rate" choices: the display's refresh rate (0), then common
 // rates; a value from the ini that is not one of them is added in order.
-inline constexpr std::array<unsigned, 18> targets{0, 60, 72, 75, 90, 100, 120, 144, 165, 180, 200, 240, 280, 300, 360, 480, 500, 540};
+inline constexpr std::array<unsigned, 18> targets{0,   60,  72,  75,  90,  100, 120, 144, 165,
+                                                  180, 200, 240, 280, 300, 360, 480, 500, 540};
 inline std::vector<unsigned> target_choices(unsigned configured) {
     std::vector<unsigned> out(targets.begin(), targets.end());
     if (std::find(out.begin(), out.end(), configured) == out.end()) {
@@ -164,18 +172,15 @@ inline std::string lock_reason(Row row, const Settings &s, const capabilities::C
     namespace caps = capabilities;
     std::string why;
     switch (row) {
-    case Row::dlss:
-        return caps::available(c, caps::Option::dlss, 0, why) ? std::string() : why;
+    case Row::dlss: return caps::available(c, caps::Option::dlss, 0, why) ? std::string() : why;
     case Row::mode:
         if (!caps::available(c, caps::Option::dlss, 0, why)) return why;
         return s.dlss ? std::string() : "Turn DLSS on first.";
-    case Row::reflex:
-        return caps::available(c, caps::Option::reflex, 0, why) ? std::string() : why;
+    case Row::reflex: return caps::available(c, caps::Option::reflex, 0, why) ? std::string() : why;
     case Row::frame_generation:
     case Row::multiplier:
     case Row::pacing:
-    case Row::target:
-        break;
+    case Row::target: break;
     }
     if (!fg_requested) return caps::frame_generation_reason({.missing = caps::Missing::plugin_off});
     if (!caps::available(c, caps::Option::frame_generation, 0, why)) return why;
@@ -186,9 +191,10 @@ inline std::string lock_reason(Row row, const Settings &s, const capabilities::C
     const bool dynamic = pacing(s, offer.dynamic) == Pacing::dynamic;
     if (row == Row::multiplier && dynamic) return "Dynamic pacing picks the number of frames itself.";
     if (row == Row::multiplier && offer.multipliers.size() == 1)
-        return "This graphics card shows " + multiplier_name(offer.multipliers.front()) + " at most; 3x and up need an RTX 50.";
+        return "This graphics card shows " + multiplier_name(offer.multipliers.front()) +
+               " at most; 3x and up need an RTX 50.";
     if (row == Row::target && !dynamic) return "Used only by Dynamic pacing.";
     return {};
 }
 
-}  // namespace mhw::alpha::menu_model
+} // namespace mhw::alpha::menu_model

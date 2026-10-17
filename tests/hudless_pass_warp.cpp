@@ -24,40 +24,44 @@ using mhw::frame_generation::HudlessPass;
 namespace screen = mhw::frame_generation::screen;
 
 namespace {
-void require(bool v, const std::string &why) { if (!v) throw std::runtime_error(why); }
-void hr(HRESULT v, const char *why) { require(SUCCEEDED(v), why); }
+void require(bool v, const std::string &why) {
+    if (!v) throw std::runtime_error(why);
+}
+void hr(HRESULT v, const char *why) {
+    require(SUCCEEDED(v), why);
+}
 
-constexpr unsigned width = 72, height = 40;  // Not a multiple of the 16x16 group.
+constexpr unsigned width = 72, height = 40; // Not a multiple of the 16x16 group.
 constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 constexpr float gamma_correct = 1.0f / 2.2f;
 
 // Values exact in R11G11B10_FLOAT; 2.0 checks the saturate, 1/512 the linear
 // sRGB segment. Columns of width / 4 pixels.
-constexpr float columns[4][3]{{0.5f, 0.25f, 0.125f}, {0.75f, 1.0f / 512, 0.0f}, {2.0f, 1.0f, 0.0625f}, {0.0f, 0.0f, 0.0f}};
+constexpr float columns[4][3]{
+    {0.5f, 0.25f, 0.125f}, {0.75f, 1.0f / 512, 0.0f}, {2.0f, 1.0f, 0.0625f}, {0.0f, 0.0f, 0.0f}};
 
 // Candidate CBSystem contents: fGammaCorrect, fGammaCorrectEx.x.
 constexpr float candidates[][2]{{gamma_correct, 2.0f}, {0.3f, 2.0f},          {gamma_correct, 0.5f},
                                 {gamma_correct, 8.0f}, {gamma_correct, 1.0f}, {0.3f, 0.7f},
-                                {gamma_correct, 0.1f}, {gamma_correct, 3.0f}};  // slider min, max
+                                {gamma_correct, 0.1f}, {gamma_correct, 3.0f}}; // slider min, max
 // Each step: captures in their own list (in order; -1 none), then the
 // transform in the next list, as in the game (screen write list, next frame).
 struct Step {
     int captures[2];
-    bool ok;                        // A valid capture exists
-    float gamma, gamma_ex;          // Last valid capture (probe), 0 before any
+    bool ok;               // A valid capture exists
+    float gamma, gamma_ex; // Last valid capture (probe), 0 before any
     std::uint32_t attempts, matches;
-    float last_gamma, last_gamma_ex;  // Raw values of the last attempt
-    int region;                       // Candidate whose iRegion the state keeps (-1 none)
+    float last_gamma, last_gamma_ex; // Raw values of the last attempt
+    int region;                      // Candidate whose iRegion the state keeps (-1 none)
 };
-constexpr Step steps[]{
-    {{-1, -1}, false, 0.0f, 0.0f, 0, 0, 0.0f, 0.0f, -1},
-    {{0, -1}, true, gamma_correct, 2.0f, 1, 1, gamma_correct, 2.0f, 0},
-    {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f, 0},  // bad layout: keep 2
-    {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f, 2},
-    {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f, 2},  // out of range: keep 0.5
-    {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f, 4},           // valid then invalid
-    {{6, -1}, true, gamma_correct, 0.1f, 7, 4, gamma_correct, 0.1f, 6},  // the game's minimum
-    {{7, -1}, true, gamma_correct, 3.0f, 8, 5, gamma_correct, 3.0f, 7}}; // and maximum
+constexpr Step steps[]{{{-1, -1}, false, 0.0f, 0.0f, 0, 0, 0.0f, 0.0f, -1},
+                       {{0, -1}, true, gamma_correct, 2.0f, 1, 1, gamma_correct, 2.0f, 0},
+                       {{1, -1}, true, gamma_correct, 2.0f, 2, 1, 0.3f, 2.0f, 0}, // bad layout: keep 2
+                       {{2, -1}, true, gamma_correct, 0.5f, 3, 2, gamma_correct, 0.5f, 2},
+                       {{3, -1}, true, gamma_correct, 0.5f, 4, 2, gamma_correct, 8.0f, 2},  // out of range: keep 0.5
+                       {{4, 5}, true, gamma_correct, 1.0f, 6, 3, 0.3f, 0.7f, 4},            // valid then invalid
+                       {{6, -1}, true, gamma_correct, 0.1f, 7, 4, gamma_correct, 0.1f, 6},  // the game's minimum
+                       {{7, -1}, true, gamma_correct, 3.0f, 8, 5, gamma_correct, 3.0f, 7}}; // and maximum
 
 struct Device {
     ComPtr<ID3D12Device> device;
@@ -87,10 +91,12 @@ struct Device {
         hr(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)), "allocator");
         hr(device->CreateCommandList(0, q.Type, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "list");
     }
-    ComPtr<ID3D12Resource> resource(const D3D12_RESOURCE_DESC &desc, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state) {
+    ComPtr<ID3D12Resource> resource(const D3D12_RESOURCE_DESC &desc, D3D12_HEAP_TYPE type,
+                                    D3D12_RESOURCE_STATES state) {
         D3D12_HEAP_PROPERTIES heap{type};
         ComPtr<ID3D12Resource> r;
-        hr(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&r)), "resource");
+        hr(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&r)),
+           "resource");
         return r;
     }
     void execute() {
@@ -130,7 +136,7 @@ struct Device {
 std::uint32_t small_float(float v, unsigned mantissa_bits) {
     if (v == 0.0f) return 0;
     int exponent{};
-    const float fraction = std::frexp(v, &exponent) * 2.0f - 1.0f;  // v = (1 + fraction) * 2^(exponent - 1)
+    const float fraction = std::frexp(v, &exponent) * 2.0f - 1.0f; // v = (1 + fraction) * 2^(exponent - 1)
     const float scaled = fraction * float(1u << mantissa_bits);
     require(scaled == std::floor(scaled) && exponent - 1 + 15 > 0 && exponent - 1 + 15 < 31, "exact R11G11B10 value");
     return (std::uint32_t(exponent - 1 + 15) << mantissa_bits) | std::uint32_t(scaled);
@@ -144,12 +150,13 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource *r, D3D12_RESOURCE_STATES from,
     b.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
     return b;
 }
-}  // namespace
+} // namespace
 
 int main() {
     try {
         require(HudlessPass::compile(HudlessPass::Shader::transform) != nullptr &&
-                    HudlessPass::compile(HudlessPass::Shader::capture) != nullptr, "offline compile");
+                    HudlessPass::compile(HudlessPass::Shader::capture) != nullptr,
+                "offline compile");
         Device f;
         HudlessPass pass(f.device.Get(), width, height);
 
@@ -211,7 +218,8 @@ int main() {
             const unsigned slot = i % HudlessPass::slots;
             if (c.captures[0] >= 0) {
                 for (const int k : c.captures)
-                    if (k >= 0) pass.capture(f.list.Get(), constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k));
+                    if (k >= 0)
+                        pass.capture(f.list.Get(), constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k));
                 f.execute();
             }
             // Refill the scene; GPU-based validation checks that the previous
@@ -242,9 +250,9 @@ int main() {
             f.execute();
 
             const auto probe = pass.probe(slot);
-            require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex && probe.parameters_ok == c.ok &&
-                        probe.attempts == c.attempts && probe.matches == c.matches && probe.last_gamma == c.last_gamma &&
-                        probe.last_gamma_ex == c.last_gamma_ex &&
+            require(probe.valid && probe.gamma == c.gamma && probe.gamma_ex == c.gamma_ex &&
+                        probe.parameters_ok == c.ok && probe.attempts == c.attempts && probe.matches == c.matches &&
+                        probe.last_gamma == c.last_gamma && probe.last_gamma_ex == c.last_gamma_ex &&
                         probe.region == (c.region < 0 ? std::array<std::uint32_t, 4>{}
                                                       : std::array<std::uint32_t, 4>{unsigned(c.region), 10u + c.region,
                                                                                      100u + c.region, 200u + c.region}),
@@ -261,9 +269,9 @@ int main() {
                     for (unsigned ch = 0; ch < 3; ++ch) {
                         const float expected = screen::srgb_encode(screen::brightness(v[ch], g)) * 255.0f;
                         require(std::abs(float(p[ch]) - expected) <= 1.0f,
-                                "pixel step " + std::to_string(i) + " at " + std::to_string(x) + "," + std::to_string(y) +
-                                    " channel " + std::to_string(ch) + ": " + std::to_string(p[ch]) + " vs " +
-                                    std::to_string(expected));
+                                "pixel step " + std::to_string(i) + " at " + std::to_string(x) + "," +
+                                    std::to_string(y) + " channel " + std::to_string(ch) + ": " +
+                                    std::to_string(p[ch]) + " vs " + std::to_string(expected));
                         ++checked;
                     }
                     require(p[3] == 255, "alpha");
@@ -279,12 +287,14 @@ int main() {
         // transform; CBRenderFrame captures (layout-checked) set its
         // parameters, the shader's defaults before any.
         require(HudlessPass::compile(HudlessPass::Shader::transform_hdr) != nullptr &&
-                    HudlessPass::compile(HudlessPass::Shader::capture_hdr) != nullptr, "offline HDR compile");
+                    HudlessPass::compile(HudlessPass::Shader::capture_hdr) != nullptr,
+                "offline HDR compile");
         require(pass.hdr_supported(), "R10G10B10A2 typed UAV store on WARP");
         d.Format = HudlessPass::hdr_format;
         auto hdr_target = f.resource(d, D3D12_HEAP_TYPE_DEFAULT, tag_state);
         // Brighter columns than SDR (exact in R11G11B10_FLOAT).
-        constexpr float hdr_columns[4][3]{{0.5f, 0.25f, 0.125f}, {8.0f, 1.0f, 0.0f}, {32.0f, 2.0f, 0.75f}, {0.0f, 0.0f, 0.0f}};
+        constexpr float hdr_columns[4][3]{
+            {0.5f, 0.25f, 0.125f}, {8.0f, 1.0f, 0.0f}, {32.0f, 2.0f, 0.75f}, {0.0f, 0.0f, 0.0f}};
         hr(upload->Map(0, &none, reinterpret_cast<void **>(&texels)), "map HDR scene upload");
         for (unsigned y = 0; y < height; ++y)
             for (unsigned x = 0; x < width; ++x) {
@@ -294,7 +304,12 @@ int main() {
         upload->Unmap(0, nullptr);
         // CBRenderFrame candidates at 256-byte strides: fDeltaTime@16,
         // bSSSEnable@24, bHdrOutput@48, white@52, ratio@56, gamma@60, GUI@64.
-        struct Frame { float delta; std::uint32_t sss, hdr; float white, ratio, gamma; std::uint32_t gui; };
+        struct Frame {
+            float delta;
+            std::uint32_t sss, hdr;
+            float white, ratio, gamma;
+            std::uint32_t gui;
+        };
         constexpr Frame frames[]{{0.016f, 1, 1, 200.0f, 0.25f, 1.2f, 1}, {0.016f, 0, 0, 200.0f, 0.0f, 1.0f, 0},
                                  {0.016f, 0, 1, 5.0f, 0.0f, 1.0f, 0},    {0.016f, 0, 1, 200.0f, 1.5f, 1.0f, 0},
                                  {0.016f, 7, 1, 200.0f, 0.0f, 1.0f, 0},  {0.016f, 0, 1, 80.0f, 0.0f, 1.0f, 0}};
@@ -314,13 +329,18 @@ int main() {
         }
         frame_constants->Unmap(0, nullptr);
         // Each step: captures (candidate, root parameter), then the transform.
-        struct HdrStep { int captures[2]; unsigned parameter; int kept; std::uint32_t attempts, matches; int last; };
-        constexpr HdrStep hdr_steps[]{
-            {{-1, -1}, 0, -1, 0, 0, -1},  // defaults before any capture
-            {{0, -1}, 4, 0, 1, 1, 0},     // valid, GUI gamma on
-            {{1, 2}, 4, 0, 3, 1, 2},      // SDR output, white level 5: keep 0
-            {{3, 4}, 4, 0, 5, 1, 4},      // ratio 1.5, a garbage boolean: keep 0
-            {{5, -1}, 2, 5, 6, 2, 5}};    // valid again, another parameter
+        struct HdrStep {
+            int captures[2];
+            unsigned parameter;
+            int kept;
+            std::uint32_t attempts, matches;
+            int last;
+        };
+        constexpr HdrStep hdr_steps[]{{{-1, -1}, 0, -1, 0, 0, -1}, // defaults before any capture
+                                      {{0, -1}, 4, 0, 1, 1, 0},    // valid, GUI gamma on
+                                      {{1, 2}, 4, 0, 3, 1, 2},     // SDR output, white level 5: keep 0
+                                      {{3, 4}, 4, 0, 5, 1, 4},     // ratio 1.5, a garbage boolean: keep 0
+                                      {{5, -1}, 2, 5, 6, 2, 5}};   // valid again, another parameter
         const auto readback_pixels = [&](ID3D12Resource *t) {
             const auto to_copy = transition(t, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
             f.list->ResourceBarrier(1, &to_copy);
@@ -345,7 +365,10 @@ int main() {
             const unsigned slot = i % HudlessPass::slots;
             if (c.captures[0] >= 0) {
                 for (const int k : c.captures)
-                    if (k >= 0) pass.capture_hdr(f.list.Get(), frame_constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k), c.parameter);
+                    if (k >= 0)
+                        pass.capture_hdr(f.list.Get(),
+                                         frame_constants->GetGPUVirtualAddress() + UINT64(256) * unsigned(k),
+                                         c.parameter);
                 f.execute();
             }
             auto fill = transition(scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -370,12 +393,12 @@ int main() {
                 used = {k.white, k.ratio, k.gamma, k.gui != 0};
             }
             require(probe.valid && probe.hdr && probe.hdr_ok == (c.kept >= 0) && probe.white == used.white &&
-                        probe.ratio == used.ratio && probe.hdr_gamma == used.gamma && probe.gui_gamma == used.gui_gamma &&
-                        probe.hdr_attempts == c.attempts && probe.hdr_matches == c.matches &&
-                        (c.kept < 0 || probe.hdr_parameter == (i == 4 ? 2u : 4u)) &&
+                        probe.ratio == used.ratio && probe.hdr_gamma == used.gamma &&
+                        probe.gui_gamma == used.gui_gamma && probe.hdr_attempts == c.attempts &&
+                        probe.hdr_matches == c.matches && (c.kept < 0 || probe.hdr_parameter == (i == 4 ? 2u : 4u)) &&
                         (c.last < 0 || probe.last_white == frames[c.last].white),
-                    "HDR probe step " + std::to_string(i) + ": attempts " + std::to_string(probe.hdr_attempts) + " matches " +
-                        std::to_string(probe.hdr_matches) + " white " + std::to_string(probe.white));
+                    "HDR probe step " + std::to_string(i) + ": attempts " + std::to_string(probe.hdr_attempts) +
+                        " matches " + std::to_string(probe.hdr_matches) + " white " + std::to_string(probe.white));
             void *mapped{};
             hr(readback->Map(0, nullptr, &mapped), "map HDR readback");
             const auto *pixels = static_cast<const std::uint8_t *>(mapped);
@@ -388,8 +411,9 @@ int main() {
                     for (unsigned ch = 0; ch < 3; ++ch) {
                         const float actual = float((packed >> (10 * ch)) & 1023u);
                         require(std::abs(actual - expected[ch] * 1023.0f) <= 1.5f,
-                                "HDR pixel step " + std::to_string(i) + " at " + std::to_string(x) + " channel " + std::to_string(ch) +
-                                    ": " + std::to_string(actual) + " vs " + std::to_string(expected[ch] * 1023.0f));
+                                "HDR pixel step " + std::to_string(i) + " at " + std::to_string(x) + " channel " +
+                                    std::to_string(ch) + ": " + std::to_string(actual) + " vs " +
+                                    std::to_string(expected[ch] * 1023.0f));
                         ++hdr_checked;
                     }
                     require((packed >> 30) == 3u, "HDR alpha");

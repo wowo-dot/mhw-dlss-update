@@ -44,4 +44,4 @@ inline unsigned display_refresh_hz() noexcept {
     return mode.dmDisplayFrequency > 1 ? mode.dmDisplayFrequency : 0;
 }
 
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

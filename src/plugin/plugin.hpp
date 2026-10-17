@@ -26,8 +26,8 @@
 
 namespace mhw::plugin {
 // --- The process --------------------------------------------------------------
-inline HMODULE module{};            // this DLL (DllMain)
-inline std::uintptr_t image{};      // the game's exe in memory
+inline HMODULE module{};       // this DLL (DllMain)
+inline std::uintptr_t image{}; // the game's exe in memory
 inline mhw::alpha::Config alpha_config;
 // The plugin's own folder (empty when the DLL sits in the game folder itself):
 // the only place inside the game folder the mod reads its runtime from and
@@ -37,7 +37,7 @@ inline mhw::alpha::Config alpha_config;
 inline std::wstring alpha_home;
 // Folder holding mhw_dlss.ini: a failure before the log opens is recorded there.
 inline std::filesystem::path alpha_base;
-inline std::filesystem::path runtime, output;  // the NVIDIA DLLs; the logs
+inline std::filesystem::path runtime, output; // the NVIDIA DLLs; the logs
 inline std::ofstream log;
 // AL's al.game reported this exe's SHA-256: the worker skips re-hashing it.
 inline bool exe_hash_verified{};
@@ -48,15 +48,20 @@ inline bool exe_hash_verified{};
 // for the NGX stage, which follows device creation.
 inline HANDLE startup_ready{};
 inline std::string startup_failure;
-inline void signal_startup() noexcept { if (startup_ready) SetEvent(startup_ready); }
+inline void signal_startup() noexcept {
+    if (startup_ready) SetEvent(startup_ready);
+}
 
 // --- The game's device (device.cpp) -------------------------------------------
 // AL's DEVICE_CREATED callbacks in flight (Call); the worker drains them.
 inline std::atomic<unsigned> active{};
 inline std::atomic<bool> accepting{}, completed{};
-struct Call { Call() { active.fetch_add(1); } ~Call() { active.fetch_sub(1); } };
-inline bool success{};       // the device attached
-inline std::string failure;  // why it did not
+struct Call {
+    Call() { active.fetch_add(1); }
+    ~Call() { active.fetch_sub(1); }
+};
+inline bool success{};      // the device attached
+inline std::string failure; // why it did not
 // AL: the swap-chain chains were missing when the game created its swap chain.
 inline std::atomic<bool> swapchain_chains_missing{};
 // SDK calls from the device callback and the worker are serialized.
@@ -65,10 +70,10 @@ inline std::mutex sdk_mutex;
 // no borrowed object is destroyed while the SDK could still refer to it.
 // Explicit worker cleanup only. Never call vendor shutdown from CRT/DllMain
 // teardown.
-inline auto& device_pin = *new Microsoft::WRL::ComPtr<ID3D12Device>;
-inline auto& sdk = *new mhw::reflex::Streamline;
-inline mhw::reflex::Presentation* presentation{};
-inline mhw::reflex::LiveFrames* live_frames{};
+inline auto &device_pin = *new Microsoft::WRL::ComPtr<ID3D12Device>;
+inline auto &sdk = *new mhw::reflex::Streamline;
+inline mhw::reflex::Presentation *presentation{};
+inline mhw::reflex::LiveFrames *live_frames{};
 
 // --- Reflex (reflex_control.cpp) ----------------------------------------------
 constexpr auto capture_mode = sl::ReflexMode::eLowLatency;
@@ -105,25 +110,27 @@ inline int switch_unreached = -1;
 inline bool game_chain_ready{};
 
 // --- Helpers --------------------------------------------------------------------
-inline void require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
-inline void api(sl::Result result, const char* reason) {
+inline void require(bool ok, const char *reason) {
+    if (!ok) throw std::runtime_error(reason);
+}
+inline void api(sl::Result result, const char *reason) {
     if (result != sl::Result::eOk)
         throw std::runtime_error(std::string(reason) + ":" + std::to_string(static_cast<unsigned>(result)));
 }
 // The plugin log and status in AL (plugin.cpp).
-void loader_log(al_log_level_t level, const std::string& text) noexcept;
+void loader_log(al_log_level_t level, const std::string &text) noexcept;
 
 // device.cpp
-void attach_device(IUnknown* adapter, D3D_FEATURE_LEVEL level, IUnknown* created_device);
-void failed(const std::exception& error) noexcept;
+void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created_device);
+void failed(const std::exception &error) noexcept;
 bool stop_device_attach() noexcept;
 bool describe_swap();
 bool close_sdk() noexcept;
 
 // reflex_control.cpp
-bool driver_mode(const char* phase, bool expected, bool enforce = true);
-void mode_options(const char* phase, sl::ReflexMode mode, sl::Result result);
-const char* reflex_mode_name(unsigned mode) noexcept;
+bool driver_mode(const char *phase, bool expected, bool enforce = true);
+void mode_options(const char *phase, sl::ReflexMode mode, sl::Result result);
+const char *reflex_mode_name(unsigned mode) noexcept;
 bool apply_reflex_mode(bool loaded);
 
 // generation.cpp
@@ -132,33 +139,47 @@ std::uintptr_t game_waitable_slot() noexcept;
 bool game_resize_request() noexcept;
 // A switch in progress: asked at, game requests made, the presentation's
 // outcome count before it, and what was asked.
-struct GenerationSwitch { std::uint64_t asked_at{}; unsigned tries{}; std::uint64_t outcomes{}; bool want{}, active{}; };
-void sync_generation(GenerationSwitch& g);
-void presentation_fault(const mhw::reflex::PresentationStats& v);
+struct GenerationSwitch {
+    std::uint64_t asked_at{};
+    unsigned tries{};
+    std::uint64_t outcomes{};
+    bool want{}, active{};
+};
+void sync_generation(GenerationSwitch &g);
+void presentation_fault(const mhw::reflex::PresentationStats &v);
 bool configure_generation_scene();
 
 // dlss_control.cpp
 // A live preset change the game did not render through (paused, minimized):
 // retried every 2 s, up to 15 times, unless the menu asks for another mode.
-struct DlssRetry { std::uint64_t at{}; mhw::continuous_dlaa::ModeRequest request{}; unsigned count{}; };
+struct DlssRetry {
+    std::uint64_t at{};
+    mhw::continuous_dlaa::ModeRequest request{};
+    unsigned count{};
+};
 // The live aspect change: tried every 500 ms while not ready (the game
 // mid-resize, a drain), up to 40 times.
-struct SceneRetry { std::uint64_t at{}; unsigned count{}; std::string reason; };
+struct SceneRetry {
+    std::uint64_t at{};
+    unsigned count{};
+    std::string reason;
+};
 void dlss_status();
-void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest& wanted, DlssRetry& retry);
-void change_dlss_scene(SceneRetry& retry);
+void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry &retry);
+void change_dlss_scene(SceneRetry &retry);
 
 // log_events.cpp
-std::string quoted(const std::string& value);
+std::string quoted(const std::string &value);
 std::string code_site(std::uintptr_t address);
-int fg_buffers_json(char* out, int size) noexcept;
-void log_fg_buffers(std::ostream& out, const char* phase);
-void log_lifecycle(std::ostream& out);
-void log_frames(std::ostream& out, const char* phase);
-void write_reflex_fault(std::ostream& out, const mhw::reflex::LiveFrameStats& frames);
-void log_latency(std::ostream& out);
-void poll_perf(std::ostream& out, const std::filesystem::path& folder, const std::string& stem, std::uint64_t creation, unsigned& requests);
+int fg_buffers_json(char *out, int size) noexcept;
+void log_fg_buffers(std::ostream &out, const char *phase);
+void log_lifecycle(std::ostream &out);
+void log_frames(std::ostream &out, const char *phase);
+void write_reflex_fault(std::ostream &out, const mhw::reflex::LiveFrameStats &frames);
+void log_latency(std::ostream &out);
+void poll_perf(std::ostream &out, const std::filesystem::path &folder, const std::string &stem, std::uint64_t creation,
+               unsigned &requests);
 
 // worker.cpp
-DWORD WINAPI worker(void*) noexcept;
-}  // namespace mhw::plugin
+DWORD WINAPI worker(void *) noexcept;
+} // namespace mhw::plugin

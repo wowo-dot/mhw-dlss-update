@@ -15,8 +15,7 @@ std::uintptr_t readable_end(std::uintptr_t address) noexcept;
 // (two when it is first found and reaches back to its allocation base), not
 // one per block. An expired region is refreshed by one query from its base.
 struct ReadCacheStats {
-  std::uint64_t level1_misses{}, region_hits{}, refreshes{}, queries{},
-      background_queries{};
+    std::uint64_t level1_misses{}, region_hits{}, refreshes{}, queries{}, background_queries{};
 };
 ReadCacheStats read_cache_stats() noexcept;
 // The refresher (v0.23.6): renews, from its base, every region a reader took
@@ -27,4 +26,4 @@ ReadCacheStats read_cache_stats() noexcept;
 // thread (idempotent); the 100 ms contract is unchanged.
 unsigned refresh_regions(std::uint32_t now_tick) noexcept;
 void start_region_refresher() noexcept;
-}  // namespace mhw::bridge_probe
+} // namespace mhw::bridge_probe

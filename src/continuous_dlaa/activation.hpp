@@ -7,7 +7,7 @@ namespace mhw::continuous_dlaa::activation {
 // Scoped native-stage activation, not the final exclusive resolve/failure mode.
 // No saved settings, shared option bytes or native layer enable flags are written.
 // Native registration updates the transient postqueue and its layer descriptor.
-bool prepare(std::uintptr_t image,std::uintptr_t renderer,std::string &reason);
+bool prepare(std::uintptr_t image, std::uintptr_t renderer, std::string &reason);
 void stop() noexcept;
 // The player's DLSS Off (reversible, unlike stop): from the next camera frame
 // nothing is taken over; the game's own AA option, its units and their jitter
@@ -26,4 +26,4 @@ void write(std::ostream &);
 // The game's AA choice (Off, TAA, FXAA, TAA+FXAA) in each owned frame, as a
 // JSON array.
 void write_choices(std::ostream &);
-}
+} // namespace mhw::continuous_dlaa::activation

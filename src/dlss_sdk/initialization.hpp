@@ -7,6 +7,6 @@ namespace mhw::dlss_sdk {
 // (NGX start-up). Validation returns its pinned provider, or null; it never
 // initializes NGX.
 struct BorrowedInitialization {
-    HMODULE (*validate)(ID3D12Device *,const std::filesystem::path &) noexcept{};
+    HMODULE (*validate)(ID3D12Device *, const std::filesystem::path &) noexcept {};
 };
-}
+} // namespace mhw::dlss_sdk

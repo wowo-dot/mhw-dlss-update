@@ -30,11 +30,12 @@ namespace mhw::scaled_temporal {
 // that reads no scene (UINT_MAX) gets only rule 1.
 // How each texture register is read: 1 sampled at a coordinate (UV), 2 loaded
 // at the raster position, 4 any other access. Diagnostic and for fixtures.
-enum ScreenAccess : unsigned char {access_sample=1,access_raster=2,access_other=4};
+enum ScreenAccess : unsigned char { access_sample = 1, access_raster = 2, access_other = 4 };
 struct ScreenShaderEdits {
-    unsigned position_reads{},scene_samples{},scene_loads{};
-    std::array<unsigned char,128> access{};
-    bool operator==(const ScreenShaderEdits &)const=default;
+    unsigned position_reads{}, scene_samples{}, scene_loads{};
+    std::array<unsigned char, 128> access{};
+    bool operator==(const ScreenShaderEdits &) const = default;
 };
-std::vector<std::byte> make_screen_shader(std::span<const std::byte> native,FilterGeometry,unsigned scene_register,ScreenShaderEdits &);
-}
+std::vector<std::byte> make_screen_shader(std::span<const std::byte> native, FilterGeometry, unsigned scene_register,
+                                          ScreenShaderEdits &);
+} // namespace mhw::scaled_temporal

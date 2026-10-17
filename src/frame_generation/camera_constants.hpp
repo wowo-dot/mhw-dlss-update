@@ -14,10 +14,10 @@ namespace mhw::frame_generation {
 using Matrix = std::array<double, 16>;
 
 struct CameraFrame {
-    std::array<float, 16> view{}, projection{};  // current fView, fNoJitterProj
+    std::array<float, 16> view{}, projection{}; // current fView, fNoJitterProj
     std::array<float, 16> previous_view{}, previous_projection{};
     bool has_previous{};
-    float jitter_x{}, jitter_y{};  // render pixels, +X right, +Y down (NGX convention)
+    float jitter_x{}, jitter_y{}; // render pixels, +X right, +Y down (NGX convention)
     unsigned render_width{}, render_height{};
     bool reset{};
 };
@@ -133,7 +133,7 @@ inline double depth_at(const Matrix &m, double d) {
     return denominator == 0 ? INFINITY : (d * m[15] - m[14]) / denominator;
 }
 
-}  // namespace camera_detail
+} // namespace camera_detail
 
 // Fails closed: on any inconsistency the caller sends no FG constants.
 inline CameraFailure derive_camera_constants(const CameraFrame &in, CameraConstants &out) {
@@ -179,8 +179,7 @@ inline CameraFailure derive_camera_constants(const CameraFrame &in, CameraConsta
 
     Matrix clip_to_prev = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     if (in.has_previous && !in.reset) {
-        if (!decode_view(in.previous_view, previous) || !finite(in.previous_projection))
-            return CameraFailure::previous;
+        if (!decode_view(in.previous_view, previous) || !finite(in.previous_projection)) return CameraFailure::previous;
         // Camera-centred view-to-previous-view: [R^T Rp, 0; (C - Cp) Rp, 1].
         // Subtracting centres in double keeps large world coordinates exact.
         Matrix view_to_prev{};
@@ -212,4 +211,4 @@ inline CameraFailure derive_camera_constants(const CameraFrame &in, CameraConsta
     return CameraFailure::none;
 }
 
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

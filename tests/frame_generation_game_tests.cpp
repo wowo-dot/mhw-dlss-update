@@ -15,7 +15,9 @@ namespace {
 void require(bool ok, const char *what) {
     if (!ok) throw std::runtime_error(what);
 }
-bool near(double a, double b, double tolerance) { return std::abs(a - b) <= tolerance * (1 + std::abs(b)); }
+bool near(double a, double b, double tolerance) {
+    return std::abs(a - b) <= tolerance * (1 + std::abs(b));
+}
 
 // DirectX-style perspective P followed by MHW's reversed-Z remap D (z' = w - z,
 // row vectors): fNoJitterProj = P*D, written analytically in double because
@@ -123,7 +125,7 @@ void camera_tests() {
     bad = in;
     bad.previous_view[5] = 2;
     require(fg::derive_camera_constants(bad, out) == fg::CameraFailure::previous, "bad previous");
-    bad.reset = true;  // A reset frame does not need a usable previous camera.
+    bad.reset = true; // A reset frame does not need a usable previous camera.
     require(fg::derive_camera_constants(bad, out) == fg::CameraFailure::none && out.reset, "reset ignores previous");
 }
 
@@ -152,7 +154,7 @@ void ring_tests() {
     require(ring.take(13, 8) == c && ring.slot(b).state == Ring::State::free && ring.counters().stale == 1, "stale");
     ring.untag(c);
     require(ring.slot(c).state == Ring::State::free, "untag");
-    const auto d = ring.acquire(14, 24, 42);  // Fence 42 completed: slot a reclaimed.
+    const auto d = ring.acquire(14, 24, 42); // Fence 42 completed: slot a reclaimed.
     require(d != Ring::none && ring.counters().reclaimed == 1, "reclaim");
     ring.recorded(d, 103, 2);
     ring.reset(103, 2);
@@ -187,7 +189,8 @@ void ring_tests() {
     live.submitted(200, 1, 11);
     require(live.settled(), "a submitted, untagged slot is");
     live.release_all();
-    require(live.slot(r).state == Ring::State::free && live.counters().released == 1 && live.settled(), "release frees ready slots");
+    require(live.slot(r).state == Ring::State::free && live.counters().released == 1 && live.settled(),
+            "release frees ready slots");
 }
 
 void screen_tests() {
@@ -209,7 +212,8 @@ void screen_tests() {
     }
     // Implausible parameters fall back to the neutral curve.
     require(!sc::gamma_plausible(0.0f) && !sc::gamma_plausible(std::nanf("")) && !sc::gamma_plausible(100.0f) &&
-                sc::gamma_plausible(1.0f), "gamma window");
+                sc::gamma_plausible(1.0f),
+            "gamma window");
     // Every Brightness step measured in game (min 0.1 .. max 3.0) is accepted.
     for (const float g : {0.1f, 0.259212f, 0.519212f, 0.999211f, 1.0f, 1.84f, 2.44f, 3.0f})
         require(sc::gamma_plausible(g), "game brightness steps");
@@ -225,8 +229,10 @@ void subrect_tests() {
     constexpr g::SceneRect pillar16{1280, 0, 2560, 1440}, pillar21{853, 0, 3413, 1440}, letter21{0, 180, 2560, 1080};
     static_assert(g::extent_fields(pillar16) == std::array<unsigned, 4>{0, 1280, 2560, 1440});
     static_assert(g::extent_fields(letter21) == std::array<unsigned, 4>{180, 0, 2560, 1080});
-    require(g::inside(pillar16, 5120, 1440) && g::inside(pillar21, 5120, 1440) && g::inside(letter21, 2560, 1440), "scene rectangles inside");
-    require(!g::inside({1281, 0, 3840, 1440}, 5120, 1440) && !g::inside({0, 1280, 2560, 1440}, 5120, 1440) && !g::inside({0, 0, 0, 1440}, 5120, 1440),
+    require(g::inside(pillar16, 5120, 1440) && g::inside(pillar21, 5120, 1440) && g::inside(letter21, 2560, 1440),
+            "scene rectangles inside");
+    require(!g::inside({1281, 0, 3840, 1440}, 5120, 1440) && !g::inside({0, 1280, 2560, 1440}, 5120, 1440) &&
+                !g::inside({0, 0, 0, 1440}, 5120, 1440),
             "rectangles outside or empty");
 }
 // perf::keyed_staging (v0.12.5). game-35, training grounds: MHW recorded
@@ -234,7 +240,7 @@ void subrect_tests() {
 // always held the wrong frame and FG switched off on most frames.
 void staging_tests() {
     using Queue = fg::StagingQueue<3, int>;
-    {   // Hub order: stage f, final f.
+    { // Hub order: stage f, final f.
         Queue q;
         for (std::uint64_t f = 10; f < 20; ++f) {
             require(q.push(f, 1, int(f)) == f % 3, "copy index is frame % 3");
@@ -243,18 +249,19 @@ void staging_tests() {
         }
         require(q.dropped == 0 && !q.newest(), "nothing dropped or left");
     }
-    {   // Training grounds order: stage f, final f-1.
+    { // Training grounds order: stage f, final f-1.
         Queue q;
         q.push(10, 1, 10);
         for (std::uint64_t f = 11; f < 30; ++f) {
             q.push(f, 1, int(f));
             const auto t = q.take(f - 1, 1);
-            require(t && t->entry.payload == int(f - 1) && t->copy == (f - 1) % 3, "pipelined final takes its own frame");
+            require(t && t->entry.payload == int(f - 1) && t->copy == (f - 1) % 3,
+                    "pipelined final takes its own frame");
             require(q.newest() == f, "the next frame stays staged");
         }
         require(q.dropped == 0, "pipelining drops nothing");
     }
-    {   // A frame whose final draw never comes is dropped by a later final draw.
+    { // A frame whose final draw never comes is dropped by a later final draw.
         Queue q;
         q.push(5, 1, 5);
         q.push(6, 1, 6);
@@ -262,7 +269,7 @@ void staging_tests() {
         require(t && t->entry.frame == 6 && q.dropped == 1 && !q.newest(), "older entry released");
         require(!q.take(5, 1), "a released frame is not found");
     }
-    {   // Two frames of lag would reuse frame f's copy at f+3: f is dropped first.
+    { // Two frames of lag would reuse frame f's copy at f+3: f is dropped first.
         Queue q;
         q.push(3, 1, 3);
         q.push(4, 1, 4);
@@ -270,7 +277,7 @@ void staging_tests() {
         require(q.push(6, 1, 6) == 0 && q.dropped == 1, "frame 3's copy is reused by frame 6");
         require(!q.take(3, 1) && q.take(4, 1), "frame 3 gone, frame 4 still staged");
     }
-    {   // Epoch must match; a restaged (older or equal) frame replaces newer entries.
+    { // Epoch must match; a restaged (older or equal) frame replaces newer entries.
         Queue q;
         q.push(7, 1, 7);
         require(!q.take(7, 2), "different epoch");
@@ -289,7 +296,8 @@ void unconfirmed_ring_tests() {
     require(early != ring.none && ring.recorded(early, 100, 1), "early slot recorded");
     ring.submitted(100, 1, 1);
     require(ring.take(21, 7) == ring.none, "unconfirmed slot not presented");
-    require(ring.counters().unconfirmed == 1 && ring.slot(early).state == decltype(ring)::State::free, "released as unconfirmed");
+    require(ring.counters().unconfirmed == 1 && ring.slot(early).state == decltype(ring)::State::free,
+            "released as unconfirmed");
     const auto late = ring.acquire(22, 1, 0, false);
     require(ring.recorded(late, 101, 1), "second early slot");
     require(ring.confirm(22, 2) == ring.none, "confirm needs the epoch");
@@ -300,7 +308,7 @@ void unconfirmed_ring_tests() {
     const auto normal = ring.acquire(24, 1, 0);
     require(ring.slot(normal).confirmed, "acquire defaults to confirmed");
 }
-}  // namespace
+} // namespace
 
 int main() {
     try {

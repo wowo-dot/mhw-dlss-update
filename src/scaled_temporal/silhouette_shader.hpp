@@ -16,11 +16,11 @@ namespace mhw::scaled_temporal {
 // depth and light-tile lookups stay in render space while coverage spans the
 // output. No game bytecode is embedded or changed in place. The caller admits
 // the draw, its bindings/resources and its enlarged viewport separately.
-using ShaderHash=std::array<unsigned char,32>;
-bool shader_sha256(std::span<const std::byte>,ShaderHash &) noexcept;
+using ShaderHash = std::array<unsigned char, 32>;
+bool shader_sha256(std::span<const std::byte>, ShaderHash &) noexcept;
 bool known_silhouette_shader(std::span<const std::byte>) noexcept;
 std::size_t known_silhouette_shader_count() noexcept;
 // Generator only, without the allowlist: the fixture's candidate runs.
-std::vector<std::byte> adapt_silhouette_shader(std::span<const std::byte>,FilterGeometry);
-std::vector<std::byte> make_silhouette_shader(std::span<const std::byte>,FilterGeometry);
-}
+std::vector<std::byte> adapt_silhouette_shader(std::span<const std::byte>, FilterGeometry);
+std::vector<std::byte> make_silhouette_shader(std::span<const std::byte>, FilterGeometry);
+} // namespace mhw::scaled_temporal

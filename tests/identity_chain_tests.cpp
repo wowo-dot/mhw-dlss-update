@@ -22,8 +22,10 @@ void check(bool ok, const char *what) {
         std::printf("FAIL %s\n", what);
     }
 }
-void *slot(IUnknown *object, unsigned index) { return (*reinterpret_cast<void ***>(object))[index]; }
-}  // namespace
+void *slot(IUnknown *object, unsigned index) {
+    return (*reinterpret_cast<void ***>(object))[index];
+}
+} // namespace
 
 int main() {
     ComPtr<IDXGIFactory4> factory;
@@ -67,7 +69,8 @@ int main() {
         auto d = mhw::reflex::identity_description(desc, format);
         identity.Reset();
         const auto hr = f2->CreateSwapChainForComposition(queue.Get(), &d, nullptr, &identity);
-        std::printf("composition chain format %u: 0x%08lx\n", static_cast<unsigned>(format), static_cast<unsigned long>(hr));
+        std::printf("composition chain format %u: 0x%08lx\n", static_cast<unsigned>(format),
+                    static_cast<unsigned long>(hr));
         check(SUCCEEDED(hr) || format == DXGI_FORMAT_R10G10B10A2_UNORM, "identity chain in the game's SDR formats");
     }
     if (!window_chain || !identity) return std::printf("chains missing\n"), 1;
@@ -87,7 +90,8 @@ int main() {
     auto d = mhw::reflex::identity_description(desc, desc.Format);
     d.Width = 800;
     d.Height = 450;
-    check(SUCCEEDED(identity->ResizeBuffers(d.BufferCount, d.Width, d.Height, d.Format, d.Flags)), "identity chain resizes");
+    check(SUCCEEDED(identity->ResizeBuffers(d.BufferCount, d.Width, d.Height, d.Format, d.Flags)),
+          "identity chain resizes");
     DXGI_SWAP_CHAIN_DESC1 now{};
     check(SUCCEEDED(identity->GetDesc1(&now)) && now.Width == 800 && now.Height == 450, "identity chain size follows");
 
@@ -99,9 +103,11 @@ int main() {
     std::printf("identity chain Present(0, ALLOW_TEARING): 0x%08lx\n", static_cast<unsigned long>(own_present));
     check(FAILED(own_present), "the identity chain's own Present with the game's flags fails");
     const auto game_flags = identity->ResizeBuffers(3, 640, 360, desc.Format, desc.Flags);
-    std::printf("identity chain ResizeBuffers with the game's flags: 0x%08lx\n", static_cast<unsigned long>(game_flags));
+    std::printf("identity chain ResizeBuffers with the game's flags: 0x%08lx\n",
+                static_cast<unsigned long>(game_flags));
     check(FAILED(game_flags), "the identity chain refuses the game's resize flags");
-    check(SUCCEEDED(identity->ResizeBuffers(3, 640, 360, desc.Format, 0)), "unroutable resize: the game's count and size, no flags");
+    check(SUCCEEDED(identity->ResizeBuffers(3, 640, 360, desc.Format, 0)),
+          "unroutable resize: the game's count and size, no flags");
     // The last resort: a window chain made again on the same window once the
     // previous one is released, with the game's description.
     window_chain.Reset();

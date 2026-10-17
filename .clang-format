@@ -1,0 +1,34 @@
+# The project's C++ layout (clang-format 22, shipped with Visual Studio:
+# VC\Tools\Llvm\x64\bin\clang-format.exe). Formatting never reorders code:
+# includes and using-declarations stay as written, and string literals are not
+# split (log keys stay greppable).
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+PointerAlignment: Right
+ReferenceAlignment: Right
+NamespaceIndentation: None
+FixNamespaceComments: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+AllowShortEnumsOnASingleLine: true
+KeepEmptyLines:
+  AtStartOfBlock: false
+MaxEmptyLinesToKeep: 1
+SortIncludes: Never
+IncludeBlocks: Preserve
+SortUsingDeclarations: Never
+BreakStringLiterals: false
+ReflowComments: false
+InsertBraces: false
+RemoveBracesLLVM: false
+QualifierAlignment: Leave
+LineEnding: LF
+InsertNewlineAtEOF: true

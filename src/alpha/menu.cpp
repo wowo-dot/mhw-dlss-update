@@ -81,15 +81,15 @@ struct State {
     al_plugin_t *self{};
     const cmfm_menu_t *menu{};
     std::filesystem::path folder, ini;
-    mm::Settings settings;  // what the ini holds, or will hold once saved
-    bool dirty{};           // changed since the last save
-    bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{};  // which keys
-    bool fg_requested{};    // DLSS-G loads at start where supported: frame generation applies live
+    mm::Settings settings; // what the ini holds, or will hold once saved
+    bool dirty{};          // changed since the last save
+    bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{}; // which keys
+    bool fg_requested{}; // DLSS-G loads at start where supported: frame generation applies live
     // Fixed when the pages are added (CMFM keeps the choices): what this card
     // offers, the target frame rates, and the texts built from them.
     mm::Offer offer;
     std::vector<unsigned> targets;
-    std::vector<std::string> names;  // multiplier and target names
+    std::vector<std::string> names; // multiplier and target names
     std::vector<const char *> multiplier_pointers, target_pointers;
     std::string multiplier_help, pacing_help;
     // The pages wait for the card (card_ready(), which may come first) or
@@ -117,7 +117,9 @@ bool read_file(const std::filesystem::path &file, std::string &text) {
     return !in.bad();
 }
 
-std::string windows_error(DWORD error) { return "Windows error " + std::to_string(error); }
+std::string windows_error(DWORD error) {
+    return "Windows error " + std::to_string(error);
+}
 
 // Replaces the ini where the file really is. Under Mod Organizer 2 that is the
 // mod's own folder; a new file created through the game folder's path would
@@ -125,8 +127,9 @@ std::string windows_error(DWORD error) { return "Windows error " + std::to_strin
 // it, is flushed, then moved over the old one.
 bool write_file(const std::filesystem::path &file, const std::string &text, std::string &why) {
     std::wstring target = file.wstring();
-    if (const HANDLE h = CreateFileW(file.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                     nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (const HANDLE h =
+            CreateFileW(file.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         h != INVALID_HANDLE_VALUE) {
         std::wstring real(32768, L'\0');
         const auto n = GetFinalPathNameByHandleW(h, real.data(), static_cast<DWORD>(real.size()), FILE_NAME_NORMALIZED);
@@ -140,7 +143,8 @@ bool write_file(const std::filesystem::path &file, const std::string &text, std:
         target = real;
     }
     const auto fresh = target + L".new";
-    const HANDLE out = CreateFileW(fresh.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE out =
+        CreateFileW(fresh.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (out == INVALID_HANDLE_VALUE) {
         why = "cannot write next to mhw_dlss.ini (" + windows_error(GetLastError()) + ")";
         return false;
@@ -169,7 +173,7 @@ bool write_file(const std::filesystem::path &file, const std::string &text, std:
 void save() {
     if (!state.dirty) return;
     std::string text;
-    read_file(state.ini, text);  // a missing file starts empty
+    read_file(state.ini, text); // a missing file starts empty
     const auto &s = state.settings;
     const auto value = frame_generation_value(s.frame_generation, s.multiplier, s.dynamic);
     const std::string mode = dlss_setting_value(s.dlss, s.dlss_mode);
@@ -189,10 +193,11 @@ void save() {
     if ((state.mode_dirty && (check.dlss != s.dlss || (s.dlss && check.dlss_mode != s.dlss_mode))) ||
         (state.generation_dirty && generation_differs) ||
         (state.target_dirty && check.dynamic_target != s.dynamic_target) ||
-        (state.auto_dirty && check.generation_auto != s.generation_auto) || (state.reflex_dirty && check.reflex != s.reflex)) {
+        (state.auto_dirty && check.generation_auto != s.generation_auto) ||
+        (state.reflex_dirty && check.reflex != s.reflex)) {
         log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", frame_generation = " + value +
-                              ", dynamic_target = " + target + ", frame_generation_auto = " + automatic + ", reflex = " + reflex +
-                              " would not read back; not written");
+                              ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
+                              ", reflex = " + reflex + " would not read back; not written");
         return;
     }
     std::string why;
@@ -200,9 +205,11 @@ void save() {
         log(AL_LOG_WARNING, "menu: mhw_dlss.ini not written: " + why);
         return;
     }
-    state.dirty = state.mode_dirty = state.generation_dirty = state.reflex_dirty = state.target_dirty = state.auto_dirty = false;
+    state.dirty = state.mode_dirty = state.generation_dirty = state.reflex_dirty = state.target_dirty =
+        state.auto_dirty = false;
     log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", frame_generation = " + value +
-                         ", dynamic_target = " + target + ", frame_generation_auto = " + automatic + ", reflex = " + reflex);
+                         ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
+                         ", reflex = " + reflex);
 }
 
 // Page opened: the ini as it is now (players may edit it while the game runs),
@@ -223,7 +230,8 @@ void reload() {
     state.settings.reflex = c.reflex;
     // The target choices are fixed for the page's life: another value applies
     // from the next start, when it joins them.
-    if (mm::target_index(state.targets, c.dynamic_target) >= 0) state.settings.dynamic_target = c.dynamic_target;
+    if (mm::target_index(state.targets, c.dynamic_target) >= 0)
+        state.settings.dynamic_target = c.dynamic_target;
     else if (c.dynamic_target != state.settings.dynamic_target)
         log(AL_LOG_INFO, "menu: dynamic_target = " + dynamic_target_value(c.dynamic_target) +
                              " in mhw_dlss.ini is not in the menu's list; it applies from the next start");
@@ -240,8 +248,10 @@ void apply_generation_live(const mm::Settings &s) {
 void apply_dlss(const mm::Settings &s) {
     state.dirty = state.mode_dirty = true;
     const bool now = continuous_dlaa::live_modes();
-    if (now && s.dlss) continuous_dlaa::request_mode(s.dlss_mode);
-    else if (now) continuous_dlaa::request_off();
+    if (now && s.dlss)
+        continuous_dlaa::request_mode(s.dlss_mode);
+    else if (now)
+        continuous_dlaa::request_off();
     log(AL_LOG_INFO, std::string("menu: dlss_mode = ") + dlss_setting_value(s.dlss, s.dlss_mode) +
                          (now ? " (applied now)" : " (from the next start)"));
 }
@@ -279,7 +289,8 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
 
 // Also guards CMFM's "Reset to defaults", which sets locked rows too: a value
 // the row could not take now is refused with the row's reason.
-cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *value, char *why, std::uint32_t why_size) {
+cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *value, char *why,
+                                 std::uint32_t why_size) {
     try {
         std::string reason;
         const auto c = card();
@@ -292,29 +303,37 @@ cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *v
         switch (id) {
         case dlss_row:
         case mode_row:
-            if ((id == mode_row || value->i) && !caps::available(c, caps::Option::dlss, 0, reason)) return refuse(reason);
-            return id == mode_row && (value->i < 0 || value->i >= static_cast<int>(mm::modes.size())) ? refuse("Unknown mode.") : CMFM_OK;
+            if ((id == mode_row || value->i) && !caps::available(c, caps::Option::dlss, 0, reason))
+                return refuse(reason);
+            return id == mode_row && (value->i < 0 || value->i >= static_cast<int>(mm::modes.size()))
+                       ? refuse("Unknown mode.")
+                       : CMFM_OK;
         case frame_generation_row:
             if (!value->i) return CMFM_OK;
             reason = mm::lock_reason(mm::Row::frame_generation, s, c, state.offer, state.fg_requested);
             return reason.empty() ? CMFM_OK : refuse(reason);
         case multiplier_row: {
-            if (value->i < 0 || value->i >= static_cast<int>(state.offer.multipliers.size())) return refuse("Unknown multiplier.");
+            if (value->i < 0 || value->i >= static_cast<int>(state.offer.multipliers.size()))
+                return refuse("Unknown multiplier.");
             // A limit DLSS-G reported after the page was added.
             const auto m = state.offer.multipliers[static_cast<unsigned>(value->i)];
             return caps::available(c, caps::Option::multiplier, m, reason) ? CMFM_OK : refuse(reason);
         }
         case pacing_row:
-            if (value->i < 0 || value->i >= static_cast<int>(mm::pacing_count(state.offer.dynamic))) return refuse("Unknown pacing.");
-            if (static_cast<mm::Pacing>(value->i) == mm::Pacing::dynamic && !caps::available(c, caps::Option::dynamic, 0, reason))
+            if (value->i < 0 || value->i >= static_cast<int>(mm::pacing_count(state.offer.dynamic)))
+                return refuse("Unknown pacing.");
+            if (static_cast<mm::Pacing>(value->i) == mm::Pacing::dynamic &&
+                !caps::available(c, caps::Option::dynamic, 0, reason))
                 return refuse(reason);
             return CMFM_OK;
         case target_row:
-            return value->i >= 0 && value->i < static_cast<int>(state.targets.size()) ? CMFM_OK : refuse("Unknown frame rate.");
+            return value->i >= 0 && value->i < static_cast<int>(state.targets.size()) ? CMFM_OK
+                                                                                      : refuse("Unknown frame rate.");
         case reflex_row: {
             ReflexMode mode{};
             reason = "Unknown Reflex mode.";
-            if (mm::reflex_at(value->i, mode) && mm::reflex_allowed(mode, s.frame_generation, reflex::frame_generation_loaded(), reason))
+            if (mm::reflex_at(value->i, mode) &&
+                mm::reflex_allowed(mode, s.frame_generation, reflex::frame_generation_loaded(), reason))
                 return CMFM_OK;
             return refuse(reason);
         }
@@ -352,7 +371,8 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
             if (state.fg_requested && s.frame_generation) apply_generation_live(s);
             if (state.fg_requested) fg::enable(s.frame_generation);
             state.dirty = state.generation_dirty = true;
-            log(AL_LOG_INFO, std::string("menu: frame_generation = ") + frame_generation_value(s.frame_generation, s.multiplier, s.dynamic) +
+            log(AL_LOG_INFO, std::string("menu: frame_generation = ") +
+                                 frame_generation_value(s.frame_generation, s.multiplier, s.dynamic) +
                                  (state.fg_requested ? " (applied now)" : " (from the next start)"));
             return CMFM_OK;
         case multiplier_row:
@@ -378,7 +398,8 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
             ReflexMode mode{};
             std::string why;
             const bool loaded = reflex::frame_generation_loaded();
-            if (!mm::reflex_at(value->i, mode) || !mm::reflex_allowed(mode, s.frame_generation, loaded, why)) return CMFM_ERROR;
+            if (!mm::reflex_at(value->i, mode) || !mm::reflex_allowed(mode, s.frame_generation, loaded, why))
+                return CMFM_ERROR;
             s.reflex = mode;
             state.dirty = state.reflex_dirty = true;
             // A loaded DLSS-G needs Reflex until the game closes.
@@ -452,10 +473,11 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
 void CMFM_CALL on_event(void *, cmfm_event_t event) {
     try {
         std::lock_guard lock(state.mutex);
-        if (event == CMFM_EVENT_OPENED) reload();
-        else if (event == CMFM_EVENT_CLOSED) save();
-    } catch (...) {
-    }
+        if (event == CMFM_EVENT_OPENED)
+            reload();
+        else if (event == CMFM_EVENT_CLOSED)
+            save();
+    } catch (...) {}
 }
 
 // CMFM refuses a whole page when a text is over its limit (CMFM
@@ -485,14 +507,16 @@ constexpr std::string_view pacing_help_dynamic =
     "that reaches the target frame rate. Applies at once.";
 constexpr std::string_view pacing_help_fixed =
     "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when the game runs faster without it. Applies at once.";
-static_assert(pacing_help_dynamic.size() <= 200 && pacing_help_fixed.size() <= 200, "CMFM: a help line is at most 200 bytes");
+static_assert(pacing_help_dynamic.size() <= 200 && pacing_help_fixed.size() <= 200,
+              "CMFM: a help line is at most 200 bytes");
 // CHOICE names: at most 32 bytes each.
 constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i)
         if (!names[i] || std::char_traits<char>::length(names[i]) > 32) return false;
     return true;
 }
-static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) && choice_names_fit(mm::pacing_names, std::size(mm::pacing_names)) &&
+static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) &&
+                  choice_names_fit(mm::pacing_names, std::size(mm::pacing_names)) &&
                   choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
               "CMFM: a choice name is at most 32 bytes");
 // CMFM refuses a whole page whose CHOICE default is not one of its choices
@@ -531,34 +555,41 @@ void add_now(unsigned waited_ms) noexcept {
             state.multiplier_pointers.clear();
             state.target_pointers.clear();
             for (std::size_t i = 0; i < state.names.size(); ++i)
-                (i < state.offer.multipliers.size() ? state.multiplier_pointers : state.target_pointers).push_back(state.names[i].c_str());
+                (i < state.offer.multipliers.size() ? state.multiplier_pointers : state.target_pointers)
+                    .push_back(state.names[i].c_str());
             const auto most = state.offer.multipliers.back();
             state.multiplier_help = help_built(
                 "Frames shown for each rendered frame" +
-                (c.max_multiplier ? "; this graphics card shows up to " + mm::multiplier_name(most) : std::string()) + ". Applies at once.");
+                (c.max_multiplier ? "; this graphics card shows up to " + mm::multiplier_name(most) : std::string()) +
+                ". Applies at once.");
             state.pacing_help = std::string(state.offer.dynamic ? pacing_help_dynamic : pacing_help_fixed);
         }
         cmfm_setting_t settings[]{
             row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
             row(dlss_row, CMFM_TYPE_BOOL, label_text("DLSS"),
-                help_text("NVIDIA DLSS Super Resolution and DLAA. Off gives the game back: its own anti-aliasing and resolution, as "
-                          "without the mod. Applies at once.")),
+                help_text(
+                    "NVIDIA DLSS Super Resolution and DLAA. Off gives the game back: its own anti-aliasing and resolution, as "
+                    "without the mod. Applies at once.")),
             row(mode_row, CMFM_TYPE_CHOICE, label_text("Mode"),
-                help_text("DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, upscaled by DLSS. "
-                          "Applies at once.")),
+                help_text(
+                    "DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, upscaled by DLSS. "
+                    "Applies at once.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
-                help_text("DLSS Frame Generation shows generated frames between the rendered ones (RTX 40 and 50 series). Needs "
-                          "DLSS on. Applies at once.")),
+                help_text(
+                    "DLSS Frame Generation shows generated frames between the rendered ones (RTX 40 and 50 series). Needs "
+                    "DLSS on. Applies at once.")),
             row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"), nullptr),
             row(pacing_row, CMFM_TYPE_CHOICE, label_text("Pacing"), nullptr),
             row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
-                help_text("The frame rate Dynamic pacing aims for: the display's refresh rate or a set rate. It never goes past it. "
-                          "Applies at once.")),
+                help_text(
+                    "The frame rate Dynamic pacing aims for: the display's refresh rate or a set rate. It never goes past it. "
+                    "Applies at once.")),
             row(latency_section, CMFM_TYPE_SECTION, label_text("Latency"), nullptr),
             row(reflex_row, CMFM_TYPE_CHOICE, label_text("Reflex"),
-                help_text("NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. Off "
-                          "only while frame generation is off (it needs Reflex). Applies at once.")),
+                help_text(
+                    "NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. Off "
+                    "only while frame generation is off (it needs Reflex). Applies at once.")),
         };
         const auto setting = [&settings](std::uint32_t id) -> cmfm_setting_t & {
             for (auto &s : settings)
@@ -582,7 +613,8 @@ void add_now(unsigned waited_ms) noexcept {
             setting(multiplier_row).help = state.multiplier_help.c_str();
             setting(multiplier_row).choices = state.multiplier_pointers.data();
             setting(multiplier_row).choice_count = static_cast<std::uint32_t>(state.multiplier_pointers.size());
-            setting(multiplier_row).default_value.i = mm::multiplier_index(state.offer.multipliers, defaults.multiplier);
+            setting(multiplier_row).default_value.i =
+                mm::multiplier_index(state.offer.multipliers, defaults.multiplier);
             setting(pacing_row).help = state.pacing_help.c_str();
             setting(pacing_row).choice_count = mm::pacing_count(state.offer.dynamic);
             setting(pacing_row).default_value.i = static_cast<int>(mm::Pacing::fixed);
@@ -592,26 +624,31 @@ void add_now(unsigned waited_ms) noexcept {
         }
         const cmfm_setting_t lines[]{
             row(now_section, CMFM_TYPE_SECTION, label_text("Now"), nullptr),
-            row(mod_line_row, CMFM_TYPE_TEXT, label_text("Mod"), help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
+            row(mod_line_row, CMFM_TYPE_TEXT, label_text("Mod"),
+                help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
             row(dlss_line_row, CMFM_TYPE_TEXT, label_text("DLSS"),
                 help_text("The DLSS mode. Off: the game's own anti-aliasing and resolution."), CMFM_FLAG_LIVE),
             row(resolution_line_row, CMFM_TYPE_TEXT, label_text("Resolution"),
                 help_text("The resolution the game renders at, and the one DLSS outputs."), CMFM_FLAG_LIVE),
             row(generation_line_row, CMFM_TYPE_TEXT, label_text("Frame generation"),
-                help_text("Frames shown for each rendered frame now. DLSS Frame Generation generates only while the game window "
-                          "has focus."),
+                help_text(
+                    "Frames shown for each rendered frame now. DLSS Frame Generation generates only while the game window "
+                    "has focus."),
                 CMFM_FLAG_LIVE),
             row(generated_line_row, CMFM_TYPE_TEXT, label_text("Generated frames"),
                 help_text("Generated frames shown since the game started."), CMFM_FLAG_LIVE),
             row(reflex_line_row, CMFM_TYPE_TEXT, label_text("Reflex"),
                 help_text("NVIDIA Reflex: On (low latency), Boost (also keeps the clocks up) or Off."), CMFM_FLAG_LIVE),
             row(system_section, CMFM_TYPE_SECTION, label_text("System"), nullptr),
-            row(card_line_row, CMFM_TYPE_TEXT, label_text("Graphics card"), help_text("The graphics card the game uses.")),
-            row(memory_line_row, CMFM_TYPE_TEXT, label_text("Video memory"), help_text("The graphics card's own memory.")),
+            row(card_line_row, CMFM_TYPE_TEXT, label_text("Graphics card"),
+                help_text("The graphics card the game uses.")),
+            row(memory_line_row, CMFM_TYPE_TEXT, label_text("Video memory"),
+                help_text("The graphics card's own memory.")),
             row(driver_line_row, CMFM_TYPE_TEXT, label_text("Driver"), help_text("The NVIDIA driver version.")),
             row(support_line_row, CMFM_TYPE_TEXT, label_text("Frame generation support"),
-                help_text("What DLSS Frame Generation can do with this graphics card, driver and Windows: the most frames per "
-                          "rendered frame, and Dynamic pacing."),
+                help_text(
+                    "What DLSS Frame Generation can do with this graphics card, driver and Windows: the most frames per "
+                    "rendered frame, and Dynamic pacing."),
                 CMFM_FLAG_LIVE),
         };
 
@@ -626,8 +663,10 @@ void add_now(unsigned waited_ms) noexcept {
         unsigned added = 0;
         char why[256]{};
         const auto add = [&](const char *title) {
-            if (state.menu->add_page(&page, why, sizeof why)) ++added;
-            else log(AL_LOG_WARNING, std::string("menu: CMFM refused the page ") + title + ": " + why);
+            if (state.menu->add_page(&page, why, sizeof why))
+                ++added;
+            else
+                log(AL_LOG_WARNING, std::string("menu: CMFM refused the page ") + title + ": " + why);
         };
 
         page.title = title_text("Settings");
@@ -652,9 +691,9 @@ void add_now(unsigned waited_ms) noexcept {
 
         std::string offered;
         for (const auto m : state.offer.multipliers) offered += (offered.empty() ? "" : "/") + mm::multiplier_name(m);
-        log(AL_LOG_INFO, "menu: " + std::to_string(added) + " of 2 pages added to CMFM after " + std::to_string(waited_ms) +
-                             " ms (card " + (c.known ? "known" : "not known yet") + "; multipliers " + offered +
-                             (state.offer.dynamic ? ", Dynamic" : ", no Dynamic") + ")");
+        log(AL_LOG_INFO, "menu: " + std::to_string(added) + " of 2 pages added to CMFM after " +
+                             std::to_string(waited_ms) + " ms (card " + (c.known ? "known" : "not known yet") +
+                             "; multipliers " + offered + (state.offer.dynamic ? ", Dynamic" : ", no Dynamic") + ")");
     } catch (...) {
         log(AL_LOG_WARNING, "menu: the CMFM pages could not be added");
     }
@@ -670,12 +709,13 @@ DWORD WINAPI page_thread(void *) {
     return 0;
 }
 
-}  // namespace
+} // namespace
 
 void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, const std::filesystem::path &folder,
                bool fg_requested) noexcept {
     try {
-        const auto *menu = static_cast<const cmfm_menu_t *>(api->get_interface(self, CMFM_MENU_INTERFACE, CMFM_MENU_VERSION));
+        const auto *menu =
+            static_cast<const cmfm_menu_t *>(api->get_interface(self, CMFM_MENU_INTERFACE, CMFM_MENU_VERSION));
         if (!menu || menu->size < sizeof(cmfm_menu_t) || !menu->add_page) {
             api->log(self, AL_LOG_INFO, "CMFM 1.2 is not installed; the settings stay in mhw_dlss.ini");
             return;
@@ -687,15 +727,17 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.menu = menu;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.dlss_mode, config.dlss,           config.frame_generation, config.multiplier,
-                              config.reflex,    config.dynamic,        config.dynamic_target,   config.generation_auto};
+            state.settings = {config.dlss_mode, config.dlss,    config.frame_generation, config.multiplier,
+                              config.reflex,    config.dynamic, config.dynamic_target,   config.generation_auto};
             state.fg_requested = fg_requested;
             state.targets = mm::target_choices(config.dynamic_target);
         }
         state.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         const HANDLE thread = state.ready.load() ? CreateThread(nullptr, 0, page_thread, nullptr, 0, nullptr) : nullptr;
-        if (thread) CloseHandle(thread);
-        else add_now(0);  // no thread: at once, before the card is known
+        if (thread)
+            CloseHandle(thread);
+        else
+            add_now(0); // no thread: at once, before the card is known
     } catch (...) {
         if (api) api->log(self, AL_LOG_WARNING, "menu: the CMFM pages could not be added");
     }
@@ -706,4 +748,4 @@ void card_ready() noexcept {
     if (const auto ready = state.ready.load()) SetEvent(ready);
 }
 
-}  // namespace mhw::alpha::menu
+} // namespace mhw::alpha::menu

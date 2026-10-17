@@ -13,12 +13,17 @@
 #include "../src/perf/hook_timing.hpp"
 #include "../src/perf/in_flight.hpp"
 #include "../src/scaled_temporal/watch_filter.hpp"
-namespace mhw::projection_binding { std::string bytes_sha256(const void *, unsigned); }
+namespace mhw::projection_binding {
+std::string bytes_sha256(const void *, unsigned);
+}
 
 namespace {
 int failures{};
-void check(bool ok, const char* what) {
-    if (!ok) { std::printf("FAIL: %s\n", what); ++failures; }
+void check(bool ok, const char *what) {
+    if (!ok) {
+        std::printf("FAIL: %s\n", what);
+        ++failures;
+    }
 }
 
 void frame_stats_tests() {
@@ -41,7 +46,7 @@ void frame_stats_tests() {
     // present(): the first call only sets the reference; 10 MHz QPC.
     s.present(1000000, 10000000);
     s.present(1000000 + 166667, 10000000);
-    s.present(1000000 + 166667, 10000000);  // no time passed: ignored
+    s.present(1000000 + 166667, 10000000); // no time passed: ignored
     w = s.take();
     check(w.frames == 1 && w.total_us == 16666, "QPC interval in microseconds");
     s.restart();
@@ -54,7 +59,7 @@ void region_tests() {
     SYSTEM_INFO info{};
     GetSystemInfo(&info);
     const auto page = info.dwPageSize;
-    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, page * 3, MEM_RESERVE, PAGE_NOACCESS));
+    auto *block = static_cast<unsigned char *>(VirtualAlloc(nullptr, page * 3, MEM_RESERVE, PAGE_NOACCESS));
     check(block != nullptr, "reserve");
     if (!block) return;
     // Commit the first two pages read/write; the third stays reserved.
@@ -81,9 +86,10 @@ void region_tests() {
     check(VirtualProtect(block, page * 2, PAGE_NOACCESS, &old) != FALSE, "protect");
     const auto cached = bp::readable_end(base + 8);
     const auto result = read(base + 8);
-    check(cached == base + page * 2 ? result == bp::ScalarReadResult::fault : result == bp::ScalarReadResult::unreadable,
+    check(cached == base + page * 2 ? result == bp::ScalarReadResult::fault
+                                    : result == bp::ScalarReadResult::unreadable,
           "stale cache entry: guarded read fails");
-    Sleep(150);  // past the cache window
+    Sleep(150); // past the cache window
     check(bp::readable_end(base + 8) == 0 && read(base + 8) == bp::ScalarReadResult::unreadable, "cache entry expires");
     // Without the cache the protection change is seen at once.
     mhw::perf::toggles.store(0);
@@ -96,7 +102,7 @@ void region_tests() {
 void shared_cache_tests() {
     namespace bp = mhw::bridge_probe;
     mhw::perf::toggles.store(mhw::perf::cached_reads);
-    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    auto *block = static_cast<unsigned char *>(VirtualAlloc(nullptr, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(block != nullptr, "block");
     if (!block) return;
     for (unsigned i = 1; i < 16; i += 2) {
@@ -106,21 +112,29 @@ void shared_cache_tests() {
     const auto base = reinterpret_cast<std::uintptr_t>(block);
     std::atomic<unsigned> wrong{}, done{};
     std::array<HANDLE, 8> threads{};
-    struct Job { std::uintptr_t base; std::atomic<unsigned>* wrong; std::atomic<unsigned>* done; unsigned seed; };
+    struct Job {
+        std::uintptr_t base;
+        std::atomic<unsigned> *wrong;
+        std::atomic<unsigned> *done;
+        unsigned seed;
+    };
     std::array<Job, 8> jobs{};
     for (unsigned t = 0; t < threads.size(); ++t) {
         jobs[t] = {base, &wrong, &done, t * 7919U + 1U};
-        threads[t] = CreateThread(nullptr, 0, [](void* p) -> DWORD {
-            auto& j = *static_cast<Job*>(p);
-            unsigned x = j.seed;
-            for (unsigned n = 0; n < 200000; ++n) {
-                x = x * 1103515245U + 12345U;
-                const unsigned page = (x >> 16) & 15U, offset = (x >> 4) & 4095U;
-                if (bp::readable_end(j.base + page * 4096 + offset) != j.base + (page + 1) * 4096) ++*j.wrong;
-            }
-            ++*j.done;
-            return 0;
-        }, &jobs[t], 0, nullptr);
+        threads[t] = CreateThread(
+            nullptr, 0,
+            [](void *p) -> DWORD {
+                auto &j = *static_cast<Job *>(p);
+                unsigned x = j.seed;
+                for (unsigned n = 0; n < 200000; ++n) {
+                    x = x * 1103515245U + 12345U;
+                    const unsigned page = (x >> 16) & 15U, offset = (x >> 4) & 4095U;
+                    if (bp::readable_end(j.base + page * 4096 + offset) != j.base + (page + 1) * 4096) ++*j.wrong;
+                }
+                ++*j.done;
+                return 0;
+            },
+            &jobs[t], 0, nullptr);
     }
     WaitForMultipleObjects(static_cast<DWORD>(threads.size()), threads.data(), TRUE, 60000);
     for (auto h : threads) CloseHandle(h);
@@ -134,9 +148,9 @@ void shared_cache_tests() {
 void region_level_tests() {
     namespace bp = mhw::bridge_probe;
     mhw::perf::toggles.store(mhw::perf::cached_reads);
-    Sleep(150);  // earlier answers (possibly for this address range) expire
-    constexpr std::size_t size = std::size_t{4} << 20;  // 64 blocks
-    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    Sleep(150);                                        // earlier answers (possibly for this address range) expire
+    constexpr std::size_t size = std::size_t{4} << 20; // 64 blocks
+    auto *block = static_cast<unsigned char *>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(block != nullptr, "4 MB region");
     if (!block) return;
     const auto base = reinterpret_cast<std::uintptr_t>(block);
@@ -155,7 +169,8 @@ void region_level_tests() {
     before = after;
     check(touch(), "first level hits");
     after = bp::read_cache_stats();
-    check(after.level1_misses == before.level1_misses && after.queries == before.queries, "no misses within the window");
+    check(after.level1_misses == before.level1_misses && after.queries == before.queries,
+          "no misses within the window");
     Sleep(150);
     before = bp::read_cache_stats();
     check(touch(), "after the window");
@@ -166,7 +181,8 @@ void region_level_tests() {
     DWORD old{};
     check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");
     Sleep(150);
-    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + size - 100) == 0, "expired region is queried again");
+    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + size - 100) == 0,
+          "expired region is queried again");
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);
 }
@@ -179,7 +195,7 @@ void refresher_tests() {
     mhw::perf::toggles.store(mhw::perf::cached_reads);
     Sleep(150);
     constexpr std::size_t size = std::size_t{1} << 20;
-    auto* block = static_cast<unsigned char*>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    auto *block = static_cast<unsigned char *>(VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(block != nullptr, "1 MB region");
     if (!block) return;
     const auto base = reinterpret_cast<std::uintptr_t>(block);
@@ -218,15 +234,19 @@ void refresher_tests() {
 void sha_memo_tests() {
     std::array<unsigned char, 1024> data{};
     for (unsigned i = 0; i < data.size(); ++i) data[i] = static_cast<unsigned char>(i);
-    const auto hash = [&] { return mhw::projection_binding::bytes_sha256(data.data(), static_cast<unsigned>(data.size())); };
+    const auto hash = [&] {
+        return mhw::projection_binding::bytes_sha256(data.data(), static_cast<unsigned>(data.size()));
+    };
     const std::string expected = "785b0751fc2c53dc14a4ce3d800e69ef9ce1009eb327ccf458afe09c242c26c9";
     check(hash() == expected, "SHA-256 of 0..255 four times");
     check(hash() == expected, "the memo returns the same hash for the same bytes");
     data[700] ^= 1;
-    check(hash() == "de9209846e2e263052a811d6b682a8654e4dbb1a2bfce5ed95d992bd8fa48bee", "one byte changed: its own hash");
+    check(hash() == "de9209846e2e263052a811d6b682a8654e4dbb1a2bfce5ed95d992bd8fa48bee",
+          "one byte changed: its own hash");
     data[700] ^= 1;
     check(hash() == expected, "back to the first bytes");
-    check(mhw::projection_binding::bytes_sha256("abc", 3) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    check(mhw::projection_binding::bytes_sha256("abc", 3) ==
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
           "short input (not memoized)");
 }
 // v0.23.7: hook timing. 6,400 calls on one thread time 100 of them; the
@@ -248,12 +268,14 @@ void hook_timing_tests() {
     std::ostringstream out;
     ht::write(out, 64);
     const auto text = out.str();
-    check(text.find("\"event\":\"hook_timing\"") != std::string::npos && text.find("\"draw\":{\"calls_per_frame\":100") != std::string::npos,
+    check(text.find("\"event\":\"hook_timing\"") != std::string::npos &&
+              text.find("\"draw\":{\"calls_per_frame\":100") != std::string::npos,
           "6,400 calls over 64 frames: 100 a frame");
     // v0.24.2: every category is named, the game-function hooks included.
     bool named = true;
     for (const auto *n : ht::names) named = named && n && *n;
-    check(named && text.find("\"route_indexed\":{") != std::string::npos && text.find("\"native_frame\":{") != std::string::npos,
+    check(named && text.find("\"route_indexed\":{") != std::string::npos &&
+              text.find("\"native_frame\":{") != std::string::npos,
           "every category has a name in the event");
     ht::enabled.store(false);
 }
@@ -268,7 +290,10 @@ void watch_filter_tests() {
     static PlanFilter one;
     static UnionFilter all, rebuilt;
     std::uint64_t state = 0x243F6A8885A308D3ULL;
-    const auto next = [&] { state = state * 6364136223846793005ULL + 1442695040888963407ULL; return (state >> 8) & ~std::uint64_t(15); };
+    const auto next = [&] {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (state >> 8) & ~std::uint64_t(15);
+    };
     std::array<std::uintptr_t, 1300> added{};
     std::array<std::uint64_t, UnionFilter::words> local{};
     for (unsigned i = 0; i < added.size(); ++i) {
@@ -280,7 +305,8 @@ void watch_filter_tests() {
     rebuilt.assign(local);
     bool found = true;
     for (unsigned i = 0; i < added.size(); ++i)
-        found = found && all.may_contain(added[i]) && rebuilt.may_contain(added[i]) && (i >= 40 || one.may_contain(added[i]));
+        found = found && all.may_contain(added[i]) && rebuilt.may_contain(added[i]) &&
+                (i >= 40 || one.may_contain(added[i]));
     check(found, "every added address is found");
     unsigned one_hits{}, all_hits{};
     for (unsigned i = 0; i < 100000; ++i) {
@@ -297,7 +323,8 @@ void watch_filter_tests() {
     for (unsigned i = 40; i < 10040; ++i) run_hits += run.may_contain(0x7ff600000000ULL + 0x50 * i);
     check(run_hits < 300, "neighbouring packets are mostly rejected");
     one.fill();
-    check(one.may_contain(0x1230) && one.may_contain(static_cast<std::uintptr_t>(next())), "a filled filter admits everything");
+    check(one.may_contain(0x1230) && one.may_contain(static_cast<std::uintptr_t>(next())),
+          "a filled filter admits everything");
     one.clear();
     check(!one.may_contain(added[0]), "a cleared filter admits nothing");
 }
@@ -309,17 +336,24 @@ void in_flight_tests() {
     static mhw::perf::InFlightCount count;
     check(count.zero() && count.load() == 0, "starts at zero");
     std::array<HANDLE, 8> threads{};
-    for (auto& t : threads)
-        t = CreateThread(nullptr, 0, [](void*) -> DWORD {
-            for (unsigned i = 0; i < 100000; ++i) { count.add(); count.sub(); }
-            return 0;
-        }, nullptr, 0, nullptr);
+    for (auto &t : threads)
+        t = CreateThread(
+            nullptr, 0,
+            [](void *) -> DWORD {
+                for (unsigned i = 0; i < 100000; ++i) {
+                    count.add();
+                    count.sub();
+                }
+                return 0;
+            },
+            nullptr, 0, nullptr);
     WaitForMultipleObjects(static_cast<DWORD>(threads.size()), threads.data(), TRUE, 60000);
     for (auto h : threads) CloseHandle(h);
     check(count.zero() && count.load() == 0, "balanced adds and subtracts end at zero");
     count.add();
     check(!count.zero() && count.load() == 1, "a held count is seen");
-    HANDLE other = CreateThread(nullptr, 0, [](void*) -> DWORD { return count.zero() ? 1U : 0U; }, nullptr, 0, nullptr);
+    HANDLE other =
+        CreateThread(nullptr, 0, [](void *) -> DWORD { return count.zero() ? 1U : 0U; }, nullptr, 0, nullptr);
     WaitForSingleObject(other, 10000);
     DWORD seen_zero{};
     GetExitCodeThread(other, &seen_zero);
@@ -335,20 +369,23 @@ void in_flight_tests() {
     };
     static Race race;
     std::array<HANDLE, 8> workers{};
-    for (auto& w : workers)
-        w = CreateThread(nullptr, 0, [](void*) -> DWORD {
-            while (!race.stop.load()) {
-                race.count.add();
-                if (race.flag.load(std::memory_order_relaxed)) {
-                    race.inside.fetch_add(1);
-                    ++race.admitted;
-                    for (volatile unsigned k = 0; k < 20; ++k) {}
-                    race.inside.fetch_sub(1);
+    for (auto &w : workers)
+        w = CreateThread(
+            nullptr, 0,
+            [](void *) -> DWORD {
+                while (!race.stop.load()) {
+                    race.count.add();
+                    if (race.flag.load(std::memory_order_relaxed)) {
+                        race.inside.fetch_add(1);
+                        ++race.admitted;
+                        for (volatile unsigned k = 0; k < 20; ++k) {}
+                        race.inside.fetch_sub(1);
+                    }
+                    race.count.sub();
                 }
-                race.count.sub();
-            }
-            return 0;
-        }, nullptr, 0, nullptr);
+                return 0;
+            },
+            nullptr, 0, nullptr);
     for (unsigned round = 0; round < 200; ++round) {
         race.flag.store(true);
         Sleep(1);
@@ -364,7 +401,7 @@ void in_flight_tests() {
     check(race.admitted.load() > 0, "the race admitted callbacks");
     check(race.violations.load() == 0, "after the drain no admitted callback is still inside");
 }
-}  // namespace
+} // namespace
 
 int main() {
     in_flight_tests();

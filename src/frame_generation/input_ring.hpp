@@ -13,8 +13,7 @@
 // simply gets no FG inputs.
 namespace mhw::frame_generation {
 
-template <unsigned N>
-class InputRing final {
+template <unsigned N> class InputRing final {
 public:
     static constexpr unsigned none = UINT32_MAX, capacity = N;
     enum class State : unsigned { free, recording, recorded, ready, tagged, consuming };
@@ -24,8 +23,8 @@ public:
         bool confirmed{true};
     };
     struct Counters {
-        std::uint64_t acquired{}, starved{}, duplicates{}, abandoned{}, submitted{}, discarded{}, taken{},
-            stale{}, no_ready{}, consumed{}, reclaimed{}, unconfirmed{}, released{};
+        std::uint64_t acquired{}, starved{}, duplicates{}, abandoned{}, submitted{}, discarded{}, taken{}, stale{},
+            no_ready{}, consumed{}, reclaimed{}, unconfirmed{}, released{};
     };
 
 private:
@@ -34,7 +33,8 @@ private:
 
 public:
     // Render side, before recording copies for a producer frame.
-    unsigned acquire(std::uint64_t frame, std::uint64_t epoch, std::uint64_t completed_fence, bool confirmed = true) noexcept {
+    unsigned acquire(std::uint64_t frame, std::uint64_t epoch, std::uint64_t completed_fence,
+                     bool confirmed = true) noexcept {
         reclaim(completed_fence);
         for (const auto &s : slots_)
             if (s.state != State::free && s.state != State::consuming && s.frame == frame && s.epoch == epoch) {
@@ -165,4 +165,4 @@ public:
     const Counters &counters() const noexcept { return counters_; }
 };
 
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

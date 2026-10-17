@@ -11,8 +11,8 @@ namespace mhw::scaled_temporal {
 // The caller serializes GPU execution, owns all native recordings/resources,
 // and retires both pass and recovery after Reset AND GPU completion. Raster
 // jitter cannot be undone by spatial recovery. No native AA is invoked here.
-continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &,
-    temporal_present::Output &recovery, ID3D12GraphicsCommandList *, ID3D12Resource *output,
-    const temporal_present::Bindings &, dlss_sdk::HistoryFrame, bool reset, float frame_ms,
-    bool evaluate=true) noexcept;
-}
+continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &, temporal_present::Output &recovery,
+                                              ID3D12GraphicsCommandList *, ID3D12Resource *output,
+                                              const temporal_present::Bindings &, dlss_sdk::HistoryFrame, bool reset,
+                                              float frame_ms, bool evaluate = true) noexcept;
+} // namespace mhw::scaled_temporal

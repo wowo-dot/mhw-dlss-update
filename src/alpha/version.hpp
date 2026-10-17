@@ -8,4 +8,4 @@
 
 namespace mhw::alpha {
 inline constexpr char version[] = MHW_ALPHA_VERSION;
-}  // namespace mhw::alpha
+} // namespace mhw::alpha

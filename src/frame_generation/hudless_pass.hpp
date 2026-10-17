@@ -22,21 +22,21 @@ namespace mhw::frame_generation {
 class HudlessPass {
 public:
     static constexpr unsigned slots = 3;
-    static constexpr DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;         // SDR
-    static constexpr DXGI_FORMAT hdr_format = DXGI_FORMAT_R10G10B10A2_UNORM;  // HDR10
+    static constexpr DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;        // SDR
+    static constexpr DXGI_FORMAT hdr_format = DXGI_FORMAT_R10G10B10A2_UNORM; // HDR10
     enum class Shader { transform, capture, transform_hdr, capture_hdr };
     struct Probe {
-        float gamma_ex{}, gamma{};    // Last valid SDR capture (0 before the first)
-        bool parameters_ok{}, valid{};  // A valid SDR capture was used; probe written
-        std::uint32_t attempts{}, matches{};  // SDR captures executed / accepted, lifetime
-        float last_gamma{}, last_gamma_ex{};  // Raw values of the last SDR attempt
-        std::array<std::uint32_t, 4> region{};  // CBSystem iRegion of the last valid capture
+        float gamma_ex{}, gamma{};             // Last valid SDR capture (0 before the first)
+        bool parameters_ok{}, valid{};         // A valid SDR capture was used; probe written
+        std::uint32_t attempts{}, matches{};   // SDR captures executed / accepted, lifetime
+        float last_gamma{}, last_gamma_ex{};   // Raw values of the last SDR attempt
+        std::array<std::uint32_t, 4> region{}; // CBSystem iRegion of the last valid capture
         // HDR (v0.24.8): the transform ran in HDR; a valid capture was used
         // (else the shader's defaults); the parameters it used.
         bool hdr{}, hdr_ok{}, gui_gamma{};
         float white{}, ratio{}, hdr_gamma{};
-        std::uint32_t hdr_attempts{}, hdr_matches{}, hdr_parameter{};  // lifetime; root parameter of the last match
-        float last_white{}, last_ratio{}, last_hdr_gamma{};  // raw values of the last HDR attempt
+        std::uint32_t hdr_attempts{}, hdr_matches{}, hdr_parameter{}; // lifetime; root parameter of the last match
+        float last_white{}, last_ratio{}, last_hdr_gamma{};           // raw values of the last HDR attempt
         std::uint32_t last_gui{};
     };
     // A shader as the constructor builds it; throws with the compiler's
@@ -52,7 +52,8 @@ public:
     // format (format or hdr_format) selects the transform. Changes compute
     // root, PSO and heaps.
     void record(ID3D12GraphicsCommandList *list, unsigned slot, ID3D12Resource *scene, ID3D12Resource *target,
-                D3D12_RESOURCE_STATES target_state, D3D12_RESOURCE_STATES scene_state = D3D12_RESOURCE_STATE_RENDER_TARGET);
+                D3D12_RESOURCE_STATES target_state,
+                D3D12_RESOURCE_STATES scene_state = D3D12_RESOURCE_STATE_RENDER_TARGET);
     // Records the capture of a candidate CBSystem address. Changes the compute
     // root and PSO (no heaps), so only as the list's last commands.
     void capture(ID3D12GraphicsCommandList *list, D3D12_GPU_VIRTUAL_ADDRESS system_constants);
@@ -78,4 +79,4 @@ private:
     bool hdr_supported_{};
 };
 
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

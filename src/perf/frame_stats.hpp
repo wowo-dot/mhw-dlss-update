@@ -40,7 +40,8 @@ public:
         Window w;
         std::array<std::uint64_t, bucket_count + 1> counts{};
         std::uint64_t counted{};
-        for (unsigned i = 0; i <= bucket_count; ++i) counted += counts[i] = buckets_[i].exchange(0, std::memory_order_relaxed);
+        for (unsigned i = 0; i <= bucket_count; ++i)
+            counted += counts[i] = buckets_[i].exchange(0, std::memory_order_relaxed);
         w.frames = frames_.exchange(0, std::memory_order_relaxed);
         w.total_us = total_us_.exchange(0, std::memory_order_relaxed);
         w.max_us = max_us_.exchange(0, std::memory_order_relaxed);
@@ -69,4 +70,4 @@ private:
 inline FrameStats host_frames;
 // Thread of the latest host Present (the game's render-submission thread).
 inline std::atomic<unsigned long> present_thread{};
-}  // namespace mhw::perf
+} // namespace mhw::perf

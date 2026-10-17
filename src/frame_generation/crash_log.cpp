@@ -46,13 +46,12 @@ int walk_stack(CONTEXT walk, char *out, int size) {
                 DWORD64 establisher{};
                 RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, walk.Rip, const_cast<PRUNTIME_FUNCTION>(function), &walk,
                                  &handler_data, &establisher, nullptr);
-            } else {  // Leaf function: the return address is at RSP.
+            } else { // Leaf function: the return address is at RSP.
                 walk.Rip = *reinterpret_cast<const DWORD64 *>(walk.Rsp);
                 walk.Rsp += 8;
             }
         }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {}
     return n;
 }
 
@@ -64,18 +63,20 @@ void write_record(const char *event, const EXCEPTION_POINTERS *info, bool with_c
     const auto *c = info->ContextRecord;
     int n = std::snprintf(line, sizeof line, "{\"event\":\"%s\",\"at\":", event);
     n += describe(line + n, static_cast<int>(sizeof line) - n, rip);
-    n += std::snprintf(line + n, sizeof line - static_cast<size_t>(n),
+    n += std::snprintf(
+        line + n, sizeof line - static_cast<size_t>(n),
         ",\"code\":%lu,\"rva\":%llu,\"thread\":%lu,\"access\":[%llu,%llu],"
         "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
         "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,\"stack\":[",
         record->ExceptionCode, static_cast<unsigned long long>(rip - host_begin), GetCurrentThreadId(),
         record->NumberParameters > 0 ? static_cast<unsigned long long>(record->ExceptionInformation[0]) : 0ULL,
-        record->NumberParameters > 1 ? static_cast<unsigned long long>(record->ExceptionInformation[1]) : 0ULL,
-        c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rbp, c->Rsp, c->R8, c->R9, c->R10, c->R11, c->R12, c->R13,
-        c->R14, c->R15);
+        record->NumberParameters > 1 ? static_cast<unsigned long long>(record->ExceptionInformation[1]) : 0ULL, c->Rax,
+        c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rbp, c->Rsp, c->R8, c->R9, c->R10, c->R11, c->R12, c->R13, c->R14,
+        c->R15);
     n += walk_stack(*c, line + n, static_cast<int>(sizeof line) - n);
     n += std::snprintf(line + n, sizeof line - static_cast<size_t>(n), "],\"context\":");
-    const int extra = with_context && context_writer ? context_writer(line + n, static_cast<int>(sizeof line) - n - 8) : 0;
+    const int extra =
+        with_context && context_writer ? context_writer(line + n, static_cast<int>(sizeof line) - n - 8) : 0;
     n += extra > 0 ? extra : std::snprintf(line + n, sizeof line - static_cast<size_t>(n), "null");
     n += std::snprintf(line + n, sizeof line - static_cast<size_t>(n), "}\n");
     DWORD written{};
@@ -89,7 +90,8 @@ LONG CALLBACK handler(EXCEPTION_POINTERS *info) {
     const auto rip = reinterpret_cast<std::uintptr_t>(info->ExceptionRecord->ExceptionAddress);
     // Only fatal-class exceptions raised in host code; our own guarded reads
     // fault inside this DLL and are handled by their __except blocks.
-    if (fatal(info->ExceptionRecord->ExceptionCode) && rip >= host_begin && rip < host_end && file != INVALID_HANDLE_VALUE)
+    if (fatal(info->ExceptionRecord->ExceptionCode) && rip >= host_begin && rip < host_end &&
+        file != INVALID_HANDLE_VALUE)
         write_record("host_exception", info, true);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -103,7 +105,7 @@ LONG WINAPI unhandled(EXCEPTION_POINTERS *info) {
     if (file != INVALID_HANDLE_VALUE) write_record("unhandled_exception", info, false);
     return previous_filter ? previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
 }
-}  // namespace
+} // namespace
 
 bool install(const std::filesystem::path &path, ContextWriter context) noexcept {
     const auto host = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
@@ -112,9 +114,10 @@ bool install(const std::filesystem::path &path, ContextWriter context) noexcept 
     host_begin = host;
     host_end = host + nt->OptionalHeader.SizeOfImage;
     context_writer = context;
-    file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    file =
+        CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE || !AddVectoredExceptionHandler(1, handler)) return false;
     previous_filter = SetUnhandledExceptionFilter(unhandled);
     return true;
 }
-}  // namespace mhw::frame_generation::crash_log
+} // namespace mhw::frame_generation::crash_log

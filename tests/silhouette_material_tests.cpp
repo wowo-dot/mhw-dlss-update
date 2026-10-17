@@ -8,12 +8,15 @@
 namespace {
 int failures = 0;
 void check(bool ok, const char *what) {
-    if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++failures; }
+    if (!ok) {
+        std::fprintf(stderr, "FAIL: %s\n", what);
+        ++failures;
+    }
 }
 std::array<unsigned, 5> material(unsigned lighting, unsigned mask, float intensity) {
     return {0, 0, lighting, mask, std::bit_cast<unsigned>(intensity)};
 }
-}  // namespace
+} // namespace
 
 int main() {
     using mhw::scaled_temporal::silhouette_material;

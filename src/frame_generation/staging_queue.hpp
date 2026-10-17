@@ -8,8 +8,7 @@ namespace mhw::frame_generation {
 // recorded yet (perf::keyed_staging, v0.12.5). Frame f uses staging copy
 // f % N. In heavy scenes MHW records frame f's DLSS before frame f-1's final
 // draw, so two frames can be staged at once; each final draw takes its own.
-template <unsigned N, class Payload>
-class StagingQueue final {
+template <unsigned N, class Payload> class StagingQueue final {
 public:
     struct Entry {
         bool valid{};
@@ -69,4 +68,4 @@ public:
 private:
     std::array<Entry, N> entries_{};
 };
-}  // namespace mhw::frame_generation
+} // namespace mhw::frame_generation

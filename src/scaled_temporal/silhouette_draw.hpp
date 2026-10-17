@@ -18,14 +18,14 @@ class SilhouetteDraw {
     Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> root_;
     FilterGeometry geometry_;
+
 public:
-    SilhouetteDraw(ID3D12Device *,const SilhouetteRecipe &);
-    ID3D12PipelineState *pipeline() const noexcept {return pipeline_.Get();}
-    ID3D12RootSignature *root() const noexcept {return root_.Get();}
+    SilhouetteDraw(ID3D12Device *, const SilhouetteRecipe &);
+    ID3D12PipelineState *pipeline() const noexcept { return pipeline_.Get(); }
+    ID3D12RootSignature *root() const noexcept { return root_.Get(); }
     // Caller has already qualified/pinned the native indexed draw and disabled
     // predicate. A surrounding selector may predicate this replacement.
-    bool record(ID3D12GraphicsCommandList *,ID3D12PipelineState *native,
-                const D3D12_VIEWPORT &,const D3D12_RECT &,
-                unsigned count,unsigned first,int base) const noexcept;
+    bool record(ID3D12GraphicsCommandList *, ID3D12PipelineState *native, const D3D12_VIEWPORT &, const D3D12_RECT &,
+                unsigned count, unsigned first, int base) const noexcept;
 };
-}
+} // namespace mhw::scaled_temporal

@@ -23,4 +23,4 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
 // before add_pages().
 void card_ready() noexcept;
 
-}  // namespace mhw::alpha::menu
+} // namespace mhw::alpha::menu

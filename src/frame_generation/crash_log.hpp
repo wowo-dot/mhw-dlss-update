@@ -12,4 +12,4 @@
 namespace mhw::frame_generation::crash_log {
 using ContextWriter = int (*)(char *buffer, int size) noexcept;
 bool install(const std::filesystem::path &file, ContextWriter context = nullptr) noexcept;
-}
+} // namespace mhw::frame_generation::crash_log

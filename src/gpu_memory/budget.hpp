@@ -15,8 +15,12 @@ namespace mhw::gpu_memory {
 struct Local {
     std::uint64_t budget{}, usage{};
 };
-constexpr std::uint64_t room(const Local &m) noexcept { return m.usage < m.budget ? m.budget - m.usage : 0; }
-constexpr bool fits(const Local &m, std::uint64_t needed) noexcept { return needed <= room(m); }
+constexpr std::uint64_t room(const Local &m) noexcept {
+    return m.usage < m.budget ? m.budget - m.usage : 0;
+}
+constexpr bool fits(const Local &m, std::uint64_t needed) noexcept {
+    return needed <= room(m);
+}
 
 // One texture, rounded up to the 64 KiB placement alignment. Layout padding
 // can add a little more; the DLSS images are also measured exactly when
@@ -74,4 +78,4 @@ inline Check check(std::uint64_t needed) noexcept {
     }
     return c;
 }
-}  // namespace mhw::gpu_memory
+} // namespace mhw::gpu_memory

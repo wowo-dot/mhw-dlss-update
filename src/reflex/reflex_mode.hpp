@@ -10,4 +10,4 @@ void request_mode(unsigned mode) noexcept;
 // DLSS-G is loaded: Reflex stays on until the game closes (Streamline paces
 // the swap chain; without Reflex the frame rate halves).
 bool frame_generation_loaded() noexcept;
-}  // namespace mhw::reflex
+} // namespace mhw::reflex

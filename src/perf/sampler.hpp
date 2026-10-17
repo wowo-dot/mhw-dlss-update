@@ -14,5 +14,5 @@ namespace mhw::perf::sampler {
 // counts are where its frame time goes. Symbols: tools/profile_report.py.
 void start() noexcept;
 // One "profile" event with the samples since the last call, if there are any.
-void write(std::ostream& out);
-}  // namespace mhw::perf::sampler
+void write(std::ostream &out);
+} // namespace mhw::perf::sampler

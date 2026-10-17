@@ -15,13 +15,10 @@
 namespace mhw::bridge_probe {
 namespace {
 bool readable(const MEMORY_BASIC_INFORMATION &memory) noexcept {
-  if (memory.State != MEM_COMMIT ||
-      (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0U)
-    return false;
-  const DWORD access = memory.Protect & 0xFFU;
-  return access == PAGE_READONLY || access == PAGE_READWRITE ||
-         access == PAGE_WRITECOPY || access == PAGE_EXECUTE_READ ||
-         access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
+    if (memory.State != MEM_COMMIT || (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0U) return false;
+    const DWORD access = memory.Protect & 0xFFU;
+    return access == PAGE_READONLY || access == PAGE_READWRITE || access == PAGE_WRITECOPY ||
+           access == PAGE_EXECUTE_READ || access == PAGE_EXECUTE_READWRITE || access == PAGE_EXECUTE_WRITECOPY;
 }
 // One shared entry per 64 KB block of address space, direct-mapped over 1 GB
 // (16,384 entries, 384 KB) and read by every thread without a lock. A
@@ -31,36 +28,30 @@ bool readable(const MEMORY_BASIC_INFORMATION &memory) noexcept {
 // odd, stores, and makes it even; a reader that sees an odd or changed version
 // treats the entry as a miss. A writer that loses the race skips caching.
 struct SharedRegion {
-  std::atomic<std::uint32_t> version{}, tick{};
-  std::atomic<std::uintptr_t> base{}, end{};
+    std::atomic<std::uint32_t> version{}, tick{};
+    std::atomic<std::uintptr_t> base{}, end{};
 };
 constexpr unsigned cache_slots = 1U << 14, cache_ms = 100U;
 std::array<SharedRegion, cache_slots> regions{};
 
-std::uintptr_t cached_end(SharedRegion &slot, std::uintptr_t address,
-                          std::uint32_t now) noexcept {
-  const auto before = slot.version.load(std::memory_order_acquire);
-  if (before & 1U)
-    return 0U;
-  const auto base = slot.base.load(std::memory_order_relaxed);
-  const auto end = slot.end.load(std::memory_order_relaxed);
-  const auto tick = slot.tick.load(std::memory_order_relaxed);
-  std::atomic_thread_fence(std::memory_order_acquire);
-  if (slot.version.load(std::memory_order_relaxed) != before)
-    return 0U;
-  return address >= base && address < end && now - tick < cache_ms ? end : 0U;
+std::uintptr_t cached_end(SharedRegion &slot, std::uintptr_t address, std::uint32_t now) noexcept {
+    const auto before = slot.version.load(std::memory_order_acquire);
+    if (before & 1U) return 0U;
+    const auto base = slot.base.load(std::memory_order_relaxed);
+    const auto end = slot.end.load(std::memory_order_relaxed);
+    const auto tick = slot.tick.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (slot.version.load(std::memory_order_relaxed) != before) return 0U;
+    return address >= base && address < end && now - tick < cache_ms ? end : 0U;
 }
-void remember(SharedRegion &slot, std::uintptr_t base, std::uintptr_t end,
-              std::uint32_t now) noexcept {
-  auto version = slot.version.load(std::memory_order_relaxed);
-  if ((version & 1U) ||
-      !slot.version.compare_exchange_strong(version, version + 1U,
-                                            std::memory_order_acquire))
-    return;
-  slot.base.store(base, std::memory_order_relaxed);
-  slot.end.store(end, std::memory_order_relaxed);
-  slot.tick.store(now, std::memory_order_relaxed);
-  slot.version.store(version + 2U, std::memory_order_release);
+void remember(SharedRegion &slot, std::uintptr_t base, std::uintptr_t end, std::uint32_t now) noexcept {
+    auto version = slot.version.load(std::memory_order_relaxed);
+    if ((version & 1U) || !slot.version.compare_exchange_strong(version, version + 1U, std::memory_order_acquire))
+        return;
+    slot.base.store(base, std::memory_order_relaxed);
+    slot.end.store(end, std::memory_order_relaxed);
+    slot.tick.store(now, std::memory_order_relaxed);
+    slot.version.store(version + 2U, std::memory_order_release);
 }
 // Second level (v0.23.4): whole regions. A block that misses the first level
 // (expired, never seen, or another block in its slot) looks here first, so
@@ -74,8 +65,8 @@ void remember(SharedRegion &slot, std::uintptr_t base, std::uintptr_t end,
 // expired region is now refreshed with one query from its base, and 256 are
 // kept.
 struct Region {
-  std::uintptr_t base{}, end{};
-  std::uint32_t tick{};
+    std::uintptr_t base{}, end{};
+    std::uint32_t tick{};
 };
 constexpr unsigned region_count = 256U;
 std::array<Region, region_count> region_list{};
@@ -84,194 +75,169 @@ std::array<Region, region_count> region_list{};
 std::array<std::atomic<std::uint32_t>, region_count> region_used{};
 unsigned region_next{};
 SRWLOCK region_lock = SRWLOCK_INIT;
-std::atomic<std::uint64_t> level1_misses{}, region_hits{}, refreshes{},
-    queries{}, background_queries{};
+std::atomic<std::uint64_t> level1_misses{}, region_hits{}, refreshes{}, queries{}, background_queries{};
 constexpr std::uint32_t refresh_age_ms = 40U, hot_ms = 1000U;
 
 // The region holding address: `known` within the window, `expired` (out is
 // the expired entry, to refresh) or `none`.
 enum class Known { none, expired, known };
-Known known_region(std::uintptr_t address, std::uint32_t now,
-                   Region &out) noexcept {
-  Known found = Known::none;
-  AcquireSRWLockShared(&region_lock);
-  for (unsigned i = 0; i < region_count; ++i) {
-    const auto &r = region_list[i];
-    if (address >= r.base && address < r.end) {
-      if (now - r.tick < cache_ms) {
-        out = r;
-        found = Known::known;
-        region_used[i].store(now, std::memory_order_relaxed);
-        break;
-      }
-      if (found == Known::none) {
-        out = r;
-        found = Known::expired;
-      }
+Known known_region(std::uintptr_t address, std::uint32_t now, Region &out) noexcept {
+    Known found = Known::none;
+    AcquireSRWLockShared(&region_lock);
+    for (unsigned i = 0; i < region_count; ++i) {
+        const auto &r = region_list[i];
+        if (address >= r.base && address < r.end) {
+            if (now - r.tick < cache_ms) {
+                out = r;
+                found = Known::known;
+                region_used[i].store(now, std::memory_order_relaxed);
+                break;
+            }
+            if (found == Known::none) {
+                out = r;
+                found = Known::expired;
+            }
+        }
     }
-  }
-  ReleaseSRWLockShared(&region_lock);
-  return found;
+    ReleaseSRWLockShared(&region_lock);
+    return found;
 }
 void add_region(const Region &r) noexcept {
-  AcquireSRWLockExclusive(&region_lock);
-  // An entry overlapping the new region is replaced, else the next in turn.
-  unsigned at = region_count;
-  for (unsigned i = 0; i < region_count && at == region_count; ++i)
-    if (region_list[i].base < r.end && r.base < region_list[i].end)
-      at = i;
-  if (at == region_count) {
-    at = region_next;
-    region_next = (region_next + 1U) % region_count;
-  }
-  region_list[at] = r;
-  region_used[at].store(r.tick, std::memory_order_relaxed);
-  ReleaseSRWLockExclusive(&region_lock);
+    AcquireSRWLockExclusive(&region_lock);
+    // An entry overlapping the new region is replaced, else the next in turn.
+    unsigned at = region_count;
+    for (unsigned i = 0; i < region_count && at == region_count; ++i)
+        if (region_list[i].base < r.end && r.base < region_list[i].end) at = i;
+    if (at == region_count) {
+        at = region_next;
+        region_next = (region_next + 1U) % region_count;
+    }
+    region_list[at] = r;
+    region_used[at].store(r.tick, std::memory_order_relaxed);
+    ReleaseSRWLockExclusive(&region_lock);
 }
 // The run of pages with one state and protection from the page holding
 // address. With `whole`, when the run reaches back to the allocation base (a
 // query from there ends at the same place with the same state and
 // protection), the region starts at the allocation base. Each VirtualQuery
 // counts in `counter` (the read path's, or the refresher's).
-bool query(std::uintptr_t address, bool whole, Region &out,
-           std::atomic<std::uint64_t> &counter = queries) noexcept {
-  MEMORY_BASIC_INFORMATION memory{};
-  counter.fetch_add(1, std::memory_order_relaxed);
-  if (VirtualQuery(reinterpret_cast<const void *>(address), &memory,
-                   sizeof(memory)) != sizeof(memory) ||
-      !readable(memory))
-    return false;
-  const auto base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
-  if (address < base || memory.RegionSize > UINTPTR_MAX - base ||
-      address - base >= memory.RegionSize)
-    return false;
-  out.base = base;
-  out.end = base + memory.RegionSize;
-  const auto allocation =
-      reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
-  if (whole && allocation != 0U && allocation < base) {
-    MEMORY_BASIC_INFORMATION first{};
+bool query(std::uintptr_t address, bool whole, Region &out, std::atomic<std::uint64_t> &counter = queries) noexcept {
+    MEMORY_BASIC_INFORMATION memory{};
     counter.fetch_add(1, std::memory_order_relaxed);
-    if (VirtualQuery(memory.AllocationBase, &first, sizeof(first)) ==
-            sizeof(first) &&
-        readable(first) &&
-        reinterpret_cast<std::uintptr_t>(first.BaseAddress) == allocation &&
-        first.RegionSize <= UINTPTR_MAX - allocation &&
-        allocation + first.RegionSize == out.end &&
-        first.State == memory.State && first.Protect == memory.Protect)
-      out.base = allocation;
-  }
-  return true;
+    if (VirtualQuery(reinterpret_cast<const void *>(address), &memory, sizeof(memory)) != sizeof(memory) ||
+        !readable(memory))
+        return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+    if (address < base || memory.RegionSize > UINTPTR_MAX - base || address - base >= memory.RegionSize) return false;
+    out.base = base;
+    out.end = base + memory.RegionSize;
+    const auto allocation = reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
+    if (whole && allocation != 0U && allocation < base) {
+        MEMORY_BASIC_INFORMATION first{};
+        counter.fetch_add(1, std::memory_order_relaxed);
+        if (VirtualQuery(memory.AllocationBase, &first, sizeof(first)) == sizeof(first) && readable(first) &&
+            reinterpret_cast<std::uintptr_t>(first.BaseAddress) == allocation &&
+            first.RegionSize <= UINTPTR_MAX - allocation && allocation + first.RegionSize == out.end &&
+            first.State == memory.State && first.Protect == memory.Protect)
+            out.base = allocation;
+    }
+    return true;
 }
 } // namespace
 
 std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
-  Region r;
-  if (!perf::on(perf::cached_reads))
-    return query(address, false, r) ? r.end : 0U;
-  const auto now = static_cast<std::uint32_t>(GetTickCount64());
-  auto &slot = regions[(address >> 16) & (cache_slots - 1U)];
-  if (const auto end = cached_end(slot, address, now))
-    return end;
-  level1_misses.fetch_add(1, std::memory_order_relaxed);
-  const auto known = known_region(address, now, r);
-  Region fresh;
-  if (known == Known::known) {
-    region_hits.fetch_add(1, std::memory_order_relaxed);
-  } else if (known == Known::expired && query(r.base, false, fresh) &&
-             fresh.base == r.base && fresh.end == r.end) {
-    // The same run from the same base: one query refreshes the region.
-    refreshes.fetch_add(1, std::memory_order_relaxed);
-    r.tick = now;
-    add_region(r);
-  } else {
-    if (!query(address, true, r))
-      return 0U;
-    r.tick = now;
-    add_region(r);
-  }
-  remember(slot, r.base, r.end, r.tick);
-  return r.end;
+    Region r;
+    if (!perf::on(perf::cached_reads)) return query(address, false, r) ? r.end : 0U;
+    const auto now = static_cast<std::uint32_t>(GetTickCount64());
+    auto &slot = regions[(address >> 16) & (cache_slots - 1U)];
+    if (const auto end = cached_end(slot, address, now)) return end;
+    level1_misses.fetch_add(1, std::memory_order_relaxed);
+    const auto known = known_region(address, now, r);
+    Region fresh;
+    if (known == Known::known) {
+        region_hits.fetch_add(1, std::memory_order_relaxed);
+    } else if (known == Known::expired && query(r.base, false, fresh) && fresh.base == r.base && fresh.end == r.end) {
+        // The same run from the same base: one query refreshes the region.
+        refreshes.fetch_add(1, std::memory_order_relaxed);
+        r.tick = now;
+        add_region(r);
+    } else {
+        if (!query(address, true, r)) return 0U;
+        r.tick = now;
+        add_region(r);
+    }
+    remember(slot, r.base, r.end, r.tick);
+    return r.end;
 }
 
 unsigned refresh_regions(const std::uint32_t now) noexcept {
-  if (!perf::on(perf::cached_reads))
-    return 0U;
-  // Candidates under the shared lock; the queries run without a lock.
-  std::array<Region, region_count> due{};
-  unsigned count = 0;
-  AcquireSRWLockShared(&region_lock);
-  for (unsigned i = 0; i < region_count; ++i) {
-    const auto &r = region_list[i];
-    if (r.end && now - region_used[i].load(std::memory_order_relaxed) < hot_ms &&
-        now - r.tick >= refresh_age_ms)
-      due[count++] = r;
-  }
-  ReleaseSRWLockShared(&region_lock);
-  unsigned renewed = 0;
-  for (unsigned k = 0; k < count; ++k) {
-    Region fresh;
-    const bool same = query(due[k].base, false, fresh, background_queries) &&
-                      fresh.base == due[k].base && fresh.end == due[k].end;
-    AcquireSRWLockExclusive(&region_lock);
-    for (auto &r : region_list)
-      if (r.base == due[k].base && r.end == due[k].end) {
-        // Changed or no longer readable: dropped; its next reader queries.
-        if (same)
-          r.tick = now;
-        else
-          r = Region{};
-        break;
-      }
-    ReleaseSRWLockExclusive(&region_lock);
-    renewed += same ? 1U : 0U;
-  }
-  return renewed;
+    if (!perf::on(perf::cached_reads)) return 0U;
+    // Candidates under the shared lock; the queries run without a lock.
+    std::array<Region, region_count> due{};
+    unsigned count = 0;
+    AcquireSRWLockShared(&region_lock);
+    for (unsigned i = 0; i < region_count; ++i) {
+        const auto &r = region_list[i];
+        if (r.end && now - region_used[i].load(std::memory_order_relaxed) < hot_ms && now - r.tick >= refresh_age_ms)
+            due[count++] = r;
+    }
+    ReleaseSRWLockShared(&region_lock);
+    unsigned renewed = 0;
+    for (unsigned k = 0; k < count; ++k) {
+        Region fresh;
+        const bool same = query(due[k].base, false, fresh, background_queries) && fresh.base == due[k].base &&
+                          fresh.end == due[k].end;
+        AcquireSRWLockExclusive(&region_lock);
+        for (auto &r : region_list)
+            if (r.base == due[k].base && r.end == due[k].end) {
+                // Changed or no longer readable: dropped; its next reader queries.
+                if (same)
+                    r.tick = now;
+                else
+                    r = Region{};
+                break;
+            }
+        ReleaseSRWLockExclusive(&region_lock);
+        renewed += same ? 1U : 0U;
+    }
+    return renewed;
 }
 
 namespace {
 std::atomic<bool> refresher_started{};
 DWORD WINAPI refresher(void *) noexcept {
-  for (;;) {
-    refresh_regions(static_cast<std::uint32_t>(GetTickCount64()));
-    Sleep(20);
-  }
+    for (;;) {
+        refresh_regions(static_cast<std::uint32_t>(GetTickCount64()));
+        Sleep(20);
+    }
 }
 } // namespace
 
 void start_region_refresher() noexcept {
-  if (refresher_started.exchange(true))
-    return;
-  if (const auto thread = CreateThread(nullptr, 0, refresher, nullptr, 0, nullptr))
-    CloseHandle(thread);
-  else
-    refresher_started.store(false);
+    if (refresher_started.exchange(true)) return;
+    if (const auto thread = CreateThread(nullptr, 0, refresher, nullptr, 0, nullptr))
+        CloseHandle(thread);
+    else
+        refresher_started.store(false);
 }
 
 ReadCacheStats read_cache_stats() noexcept {
-  return {level1_misses.load(std::memory_order_relaxed),
-          region_hits.load(std::memory_order_relaxed),
-          refreshes.load(std::memory_order_relaxed),
-          queries.load(std::memory_order_relaxed),
-          background_queries.load(std::memory_order_relaxed)};
+    return {level1_misses.load(std::memory_order_relaxed), region_hits.load(std::memory_order_relaxed),
+            refreshes.load(std::memory_order_relaxed), queries.load(std::memory_order_relaxed),
+            background_queries.load(std::memory_order_relaxed)};
 }
 
-ScalarReadResult
-read_bounded_scalar(void *, const std::uintptr_t address,
-                    const std::span<std::byte> output) noexcept {
-  if (address == 0U || output.empty() || output.size() > 8U ||
-      output.data() == nullptr)
-    return ScalarReadResult::unreadable;
-  const auto end = readable_end(address);
-  if (end == 0U || end - address < output.size())
-    return ScalarReadResult::unreadable;
-  __try {
-    std::memcpy(output.data(), reinterpret_cast<const void *>(address),
-                output.size());
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return ScalarReadResult::fault;
-  }
-  return ScalarReadResult::success;
+ScalarReadResult read_bounded_scalar(void *, const std::uintptr_t address, const std::span<std::byte> output) noexcept {
+    if (address == 0U || output.empty() || output.size() > 8U || output.data() == nullptr)
+        return ScalarReadResult::unreadable;
+    const auto end = readable_end(address);
+    if (end == 0U || end - address < output.size()) return ScalarReadResult::unreadable;
+    __try {
+        std::memcpy(output.data(), reinterpret_cast<const void *>(address), output.size());
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return ScalarReadResult::fault;
+    }
+    return ScalarReadResult::success;
 }
 
 } // namespace mhw::bridge_probe
