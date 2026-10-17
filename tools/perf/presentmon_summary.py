@@ -135,8 +135,9 @@ def load(path: Path) -> list[dict]:
     # The game's swap chains, one after another: frame generation switched live
     # (v0.27.4) rebuilds the chain, so a launch has several. A chain that
     # presents at the same time as a bigger one (an overlay's) is left out:
-    # chains are taken by present count while their time span overlaps no
-    # chain taken before (half a second of slack for a switch).
+    # chains are taken by present count while each lies before or after every
+    # chain taken before (half a second of overlap allowed for a switch); one
+    # inside another's span is concurrent.
     for r in rows:
         r['_t'] = timestamp(r.get('CPUStartDateTime'))
     chains = Counter(r.get('SwapChainAddress', '') for r in rows)
@@ -154,12 +155,17 @@ def load(path: Path) -> list[dict]:
             if not taken:
                 taken.append(chain)
             continue
-        if all(span[1] <= spans[t][0] + slack or span[0] >= spans[t][1] - slack for t in taken if t in spans):
+        def sequential(other):
+            before = span[0] < other[0] and span[1] <= other[0] + slack
+            after = span[1] > other[1] and span[0] >= other[1] - slack
+            return before or after
+        if all(sequential(spans[t]) for t in taken if t in spans):
             taken.append(chain)
     kept = set(taken)
     rows = [r for r in rows if r.get('SwapChainAddress', '') in kept]
     for r in rows:
-        r['_chains'] = len(kept)
+        r['_chains'] = len(chains)  # seen, the overlays' included
+        r['_chains_used'] = len(kept)
     stamped = [r['_t'] for r in rows if r['_t']]
     if stamped:
         offset = clock_offset(path, stamped[-1])
@@ -178,6 +184,7 @@ def stats(label: str, rows: list[dict]) -> dict:
     displayed = [v for v in column(rows, 'MsBetweenDisplayChange', 'DisplayedTime') if v > 0]
     result.update(
         swap_chains=rows[0].get('_chains'),
+        swap_chains_used=rows[0].get('_chains_used'),
         duration_s=sum(presents) / 1000 if presents else None,
         presented_fps=frame_rate(presents),
         displayed_fps=frame_rate(displayed),

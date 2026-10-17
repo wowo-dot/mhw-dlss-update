@@ -59,6 +59,16 @@ class Summary(unittest.TestCase):
         self.assertEqual(r['first'], '2026-10-13 05:00:00.000')
         self.assertIn('capture-MonsterHunterWorld-1', pm.table([r]))
 
+    def test_sequential_chains(self):
+        # A live frame generation switch: the old chain ends, the new one
+        # starts 0.2 s before (both present for a moment); both count. An
+        # overlay chain inside the new one's span does not.
+        text = V2 + frames(START, 100, 4.0) + frames(START + dt.timedelta(milliseconds=196), 200, 4.0).replace(',0x1,', ',0x2,')
+        text += row(START + dt.timedelta(milliseconds=500), '50.0', '50.0', chain='0x3')
+        folder, _ = self.write(text)
+        [r] = [x for p in pm.captures([str(folder)]) for x in pm.summarise(p)]
+        self.assertEqual((r['presents'], r['swap_chains'], r['swap_chains_used']), (300, 3, 2))
+
     def test_dropped_and_na(self):
         text = V2 + row(START, '4.0', '4.0') + row(START, '4.0', 'NA', until='NA', latency='NA') + row(START, '4.0', '8.0')
         _, path = self.write(text)
