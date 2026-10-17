@@ -1,4 +1,5 @@
 #include "inline.hpp"
+#include "../common/require.hpp"
 #include "../temporal_present/output.hpp"
 #include "../temporal_gpu_inputs/shader.hpp"
 #include "../perf/toggles.hpp"
@@ -13,12 +14,6 @@
 namespace mhw::dlss_sdk {
 namespace {
 using Microsoft::WRL::ComPtr;
-void require(bool ok, const char *why) {
-    if (!ok) throw std::runtime_error(why);
-}
-void hr(HRESULT code, const char *why) {
-    require(SUCCEEDED(code), why);
-}
 void same_device(ID3D12DeviceChild *object, ID3D12Device *device) {
     require(object && device, "inline null device child");
     ComPtr<ID3D12Device> d;

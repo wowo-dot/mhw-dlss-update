@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "../common/require.hpp"
 #include "readiness.hpp"
 #include "../projection_binding/memory.hpp"
 #include <windows.h>
@@ -12,9 +13,7 @@ namespace {
 namespace fs = std::filesystem;
 namespace pb = mhw::projection_binding;
 namespace startup = mhw::ngx_startup;
-void require(bool ok, const char *why) {
-    if (!ok) throw std::runtime_error(why);
-}
+using mhw::require;
 // Each startup hook's removal (startup.hpp). Up to v0.28.6 also MinHook's
 // thread lists ("thread_lists") and hook_service "minhook" without AL.
 std::ostream &removal(std::ostream &log) {

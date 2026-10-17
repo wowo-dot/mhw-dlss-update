@@ -1,4 +1,5 @@
 #include "silhouette_shader.hpp"
+#include "../common/require.hpp"
 #include "screen_shader.hpp"
 #include <windows.h>
 #include <bcrypt.h>
@@ -7,9 +8,6 @@
 
 namespace mhw::scaled_temporal {
 namespace {
-void require(bool value, const char *why) {
-    if (!value) throw std::runtime_error(why);
-}
 struct Allowed {
     ShaderHash hash;
     unsigned bytes;

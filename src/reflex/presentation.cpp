@@ -1,4 +1,5 @@
 #include "presentation.hpp"
+#include "../common/require.hpp"
 #include "../perf/frame_stats.hpp"
 #include "owned_interface.hpp"
 #include "resize_contract.hpp"
@@ -79,9 +80,6 @@ bool replace_slot_handle(std::uintptr_t slot, HANDLE expected, HANDLE value) noe
 std::atomic<Presentation::State *> dispatch{};
 // AL: where AL stores each detour's continuation (see astera_hooks.hpp).
 std::array<void *, Presentation::hook_capacity> chain_next{};
-void require(bool ok, const char *why) {
-    if (!ok) throw std::runtime_error(why);
-}
 void api(sl::Result value, const char *why) {
     require(value == sl::Result::eOk, why);
 }

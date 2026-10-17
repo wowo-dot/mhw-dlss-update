@@ -1,4 +1,6 @@
 #include "temporal_coexistence.hpp"
+#include "../common/json.hpp"
+#include "../common/require.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../ngx_startup/startup.hpp"
 #include "../perf/toggles.hpp"
@@ -19,22 +21,6 @@ std::string name;
 std::uintptr_t image{};
 bool prepared{}, attempted{}, installed{}, finished{}, clean{};
 unsigned samples{};
-void require(bool ok, const char *reason) {
-    if (!ok) throw std::runtime_error(reason);
-}
-std::string quote(const std::string &value) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : value) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 32)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    return out.str() + '"';
-}
 std::wstring wide(const std::string &value) {
     const auto size =
         MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
@@ -71,9 +57,9 @@ void prepare(HMODULE module, const std::filesystem::path &output, std::uintptr_t
     events
         << std::boolalpha << "{\"event\":\"start\",\"schema\":1,\"version\":\"" << temporal_version
         << "\",\"pid\":" << pid << ",\"creation\":" << creation << ",\"base\":" << base
-        << ",\"host_sha256\":" << quote(pb::host_sha)
-        << ",\"host_version\":\"0.0.0.0\",\"dll_sha256\":" << quote(pb::file_sha256(path))
-        << ",\"experiment\":" << quote(experiment)
+        << ",\"host_sha256\":" << quoted(pb::host_sha)
+        << ",\"host_version\":\"0.0.0.0\",\"dll_sha256\":" << quoted(pb::file_sha256(path))
+        << ",\"experiment\":" << quoted(experiment)
         << ",\"graphics_api\":\"D3D12\",\"frame_limit\":null,\"replacement_scope\":\"qualified-native-resolve\",\"exclusive_mode\":false,\"retention\":\"reset-and-fence-v1\",\"request_retirement\":\"validated-native-return-v1\",\"activation\":\"native-postqueue-preparation-v2\",\"reconstruction\":\"suspend-or-latch-unfiltered-v1\",\"state_trace\":\"consumer-local-state-v1\",\"native_state_trace\":\"scheduled-state-evidence-v1\",\"state_admission\":\"native-current-use-v1\",\"copy_telemetry\":\"single-fence-observation-v1\",\"depth_eligibility\":\"depth-eligibility-observation-v1\",\"depth_destination\":\"depth-destination-identity-v1\"}\n"
         << std::flush;
     if (!ngx_runtime.empty())
@@ -109,7 +95,7 @@ void arm(ID3D12Device *device) {
     attempted = true;
     std::string reason;
     installed = cd::install(image, runtime, reason);
-    events << "{\"event\":\"armed\",\"installed\":" << installed << ",\"reason\":" << quote(reason) << "}\n"
+    events << "{\"event\":\"armed\",\"installed\":" << installed << ",\"reason\":" << quoted(reason) << "}\n"
            << std::flush;
     cd::write(events);
     require(installed, reason.c_str());
@@ -182,9 +168,9 @@ bool finish() noexcept {
     }
 }
 void receipt(std::ostream &log, const char *phase, ID3D12Device *device) {
-    log << "{\"event\":\"temporal_coexistence\",\"phase\":" << quote(phase)
-        << ",\"version\":" << quote(temporal_version) << ",\"input_log\":" << quote(name + ".jsonl")
-        << ",\"startup_log\":" << quote("startup-" + name.substr(7) + ".jsonl")
+    log << "{\"event\":\"temporal_coexistence\",\"phase\":" << quoted(phase)
+        << ",\"version\":" << quoted(temporal_version) << ",\"input_log\":" << quoted(name + ".jsonl")
+        << ",\"startup_log\":" << quoted("startup-" + name.substr(7) + ".jsonl")
         << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device) << ",\"prepared\":" << prepared
         << ",\"installed\":" << installed << ",\"finished\":" << finished << ",\"quiescent\":" << clean
         << ",\"NGX_shutdown_deferred\":true}\n"

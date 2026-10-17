@@ -1,4 +1,5 @@
 #include "live_frames.hpp"
+#include "../common/require.hpp"
 #include "frame_session.hpp"
 #include "frame_stamp.hpp"
 #include "frame_boundaries.hpp"
@@ -90,9 +91,6 @@ bool verify_exit(std::uintptr_t image) noexcept {
     return true;
 }
 std::atomic<LiveFrames::State *> dispatch{};
-void require(bool ok, const char *why) {
-    if (!ok) throw std::runtime_error(why);
-}
 } // namespace
 struct LiveFrames::State {
     explicit State(Streamline &sdk) : frames(sdk) {}

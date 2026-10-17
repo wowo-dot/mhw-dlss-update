@@ -16,19 +16,11 @@ bool fatal(DWORD code) {
            code == EXCEPTION_INT_DIVIDE_BY_ZERO || code == EXCEPTION_ARRAY_BOUNDS_EXCEEDED || code == 0xC0000409;
 }
 
-// module basename + RVA, or the raw address when it is in no module.
+// The code site as a JSON string.
 int describe(char *out, int size, DWORD64 address) {
-    HMODULE module{};
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(address), &module))
-        return std::snprintf(out, static_cast<size_t>(size), "\"0x%llx\"", static_cast<unsigned long long>(address));
-    wchar_t path[MAX_PATH]{};
-    const auto length = GetModuleFileNameW(module, path, MAX_PATH);
-    const wchar_t *name = path;
-    for (DWORD i = 0; i < length; ++i)
-        if (path[i] == L'\\' || path[i] == L'/') name = path + i + 1;
-    return std::snprintf(out, static_cast<size_t>(size), "\"%ls+0x%llx\"", name,
-                         static_cast<unsigned long long>(address - reinterpret_cast<DWORD64>(module)));
+    char site[320]{};
+    code_site(site, static_cast<int>(sizeof site), address);
+    return std::snprintf(out, static_cast<size_t>(size), "\"%s\"", site);
 }
 
 // Unwinds a copy of the faulting context; a bad frame ends the walk instead of
@@ -106,6 +98,20 @@ LONG WINAPI unhandled(EXCEPTION_POINTERS *info) {
     return previous_filter ? previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
 }
 } // namespace
+
+int code_site(char *out, int size, std::uintptr_t address) noexcept {
+    HMODULE module{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(address), &module))
+        return std::snprintf(out, static_cast<size_t>(size), "0x%llx", static_cast<unsigned long long>(address));
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t *name = path;
+    for (DWORD i = 0; i < length; ++i)
+        if (path[i] == L'\\' || path[i] == L'/') name = path + i + 1;
+    return std::snprintf(out, static_cast<size_t>(size), "%ls+0x%llx", name,
+                         static_cast<unsigned long long>(address - reinterpret_cast<std::uintptr_t>(module)));
+}
 
 bool install(const std::filesystem::path &path, ContextWriter context) noexcept {
     const auto host = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));

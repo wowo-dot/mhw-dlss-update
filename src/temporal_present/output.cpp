@@ -1,4 +1,5 @@
 #include "output.hpp"
+#include "../common/require.hpp"
 #include "../dlss_sdk/geometry.hpp"
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -9,12 +10,6 @@
 namespace mhw::temporal_present {
 namespace {
 using Microsoft::WRL::ComPtr;
-void require(bool v, const char *why) {
-    if (!v) throw std::runtime_error(why);
-}
-void hr(HRESULT v, const char *why) {
-    require(SUCCEEDED(v), why);
-}
 constexpr char shader[] = R"(
 cbuffer Extent : register(b0) { uint width; uint height; uint activeWidth; uint activeHeight; };
 Texture2D<float4> source : register(t0);

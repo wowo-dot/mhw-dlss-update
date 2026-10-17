@@ -1,4 +1,5 @@
 #include "hudless_pass.hpp"
+#include "../common/require.hpp"
 #include "screen_transform.hpp"
 #include <d3dcompiler.h>
 #include <bit>
@@ -9,12 +10,6 @@
 namespace mhw::frame_generation {
 namespace {
 using Microsoft::WRL::ComPtr;
-void require(bool v, const char *why) {
-    if (!v) throw std::runtime_error(why);
-}
-void hr(HRESULT v, const char *why) {
-    require(SUCCEEDED(v), why);
-}
 constexpr std::uint32_t probe_magic = 0x48554431;  // "HUD1"
 constexpr std::uint32_t screen_magic = 0x53435231; // "SCR1"
 constexpr std::uint32_t hdr_magic = 0x48445231;    // "HDR1"

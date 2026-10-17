@@ -7,6 +7,8 @@
 // arms DLSS, Reflex and frame generation once the game qualifies, runs the
 // session loop until the game exits, and writes the log (log_events.cpp).
 #include "../reflex/streamline.hpp"
+#include "../common/json.hpp"
+#include "../common/require.hpp"
 #include "../reflex/presentation.hpp"
 #include "../reflex/live_frames.hpp"
 #include "../alpha/config.hpp"
@@ -110,9 +112,6 @@ inline int switch_unreached = -1;
 inline bool game_chain_ready{};
 
 // --- Helpers --------------------------------------------------------------------
-inline void require(bool ok, const char *reason) {
-    if (!ok) throw std::runtime_error(reason);
-}
 inline void api(sl::Result result, const char *reason) {
     if (result != sl::Result::eOk)
         throw std::runtime_error(std::string(reason) + ":" + std::to_string(static_cast<unsigned>(result)));
@@ -169,7 +168,7 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry
 void change_dlss_scene(SceneRetry &retry);
 
 // log_events.cpp
-std::string quoted(const std::string &value);
+// crash_log::code_site as a string.
 std::string code_site(std::uintptr_t address);
 int fg_buffers_json(char *out, int size) noexcept;
 void log_fg_buffers(std::ostream &out, const char *phase);

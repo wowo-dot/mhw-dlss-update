@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "../common/require.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <nvsdk_ngx.h>
@@ -24,9 +25,6 @@ bool installed{}, initialized{};
 HMODULE pinned_provider{};
 ComPtr<ID3D12Device> device; // retained by the pinned diagnostic until process exit
 constexpr char provider_sha[] = "be6e434a94ca32499515eb62ca0e6c274526055d568d0426e4c652dcdfb6ee6e";
-void require(bool ok, const char *why) {
-    if (!ok) throw std::runtime_error(why);
-}
 // The game's own DLSS 1 (decline_game_dlss()). 0x23842a0 calls the game's NGX
 // init (hook() below), checks SuperSampling and ImageSignalProcessing and
 // builds a 72-byte wrapper (0x2383760: NGX parameters, a critical section at

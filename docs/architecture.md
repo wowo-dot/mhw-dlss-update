@@ -411,3 +411,9 @@ Behaviour stays the same; the log fields stay.
     would stop those calls inlining. Its head now maps the parts; two
     stale part headers (full_post "prototype", the silhouette probe
     "diagnostic only") are corrected.
+  - Duplicates, first pass: `src/common/` holds one `require()`/`hr()`
+    (fourteen file-local copies) and one JSON `quoted()` (two);
+    `crash_log::code_site()` is the one module+offset formatter (the crash
+    log quotes it, the plugin's `code_site()` wraps it). The three
+    `same_device` checks stay: the two throwing ones name the step that
+    failed, and those strings reach the players' logs.

@@ -2,6 +2,7 @@
 // timing, Reflex latency, the presentation buffers the crash log also writes,
 // and the text helpers they share.
 #include "plugin.hpp"
+#include "../frame_generation/crash_log.hpp"
 #include "../perf/frame_stats.hpp"
 #include "../perf/toggles.hpp"
 #include <algorithm>
@@ -13,36 +14,9 @@
 #include <sstream>
 
 namespace mhw::plugin {
-std::string quoted(const std::string &value) {
-    std::ostringstream out;
-    out << '"';
-    for (unsigned char c : value) {
-        if (c == '"' || c == '\\')
-            out << '\\' << c;
-        else if (c < 32)
-            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << unsigned(c);
-        else
-            out << c;
-    }
-    return out.str() + '"';
-}
-// A code address as module basename + offset (no path), or the address.
 std::string code_site(std::uintptr_t address) {
     char text[320]{};
-    HMODULE image_of{};
-    if (!address ||
-        !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(address), &image_of)) {
-        std::snprintf(text, sizeof(text), "0x%llx", static_cast<unsigned long long>(address));
-        return text;
-    }
-    wchar_t path[MAX_PATH]{};
-    const auto length = GetModuleFileNameW(image_of, path, MAX_PATH);
-    const wchar_t *name = path;
-    for (DWORD i = 0; i < length; ++i)
-        if (path[i] == L'\\' || path[i] == L'/') name = path + i + 1;
-    std::snprintf(text, sizeof(text), "%ls+0x%llx", name,
-                  static_cast<unsigned long long>(address - reinterpret_cast<std::uintptr_t>(image_of)));
+    mhw::frame_generation::crash_log::code_site(text, static_cast<int>(sizeof text), address);
     return text;
 }
 // Swap-chain view the host received through the routed calls (diagnostic).

@@ -1,4 +1,5 @@
 #include "screen_shader.hpp"
+#include "../common/require.hpp"
 #include <windows.h>
 #include "../../third_party/dxc_hash/DxilHash.h"
 #include <algorithm>
@@ -13,9 +14,6 @@ namespace {
 using Word = std::uint32_t;
 constexpr Word fourcc(char a, char b, char c, char d) noexcept {
     return Word(a) | (Word(b) << 8) | (Word(c) << 16) | (Word(d) << 24);
-}
-void require(bool value, const char *why) {
-    if (!value) throw std::runtime_error(why);
 }
 Word word(std::span<const std::byte> bytes, std::size_t at) {
     require(at <= bytes.size() && bytes.size() - at >= 4, "screen shader word bounds");
