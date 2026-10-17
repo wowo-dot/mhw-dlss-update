@@ -10,18 +10,28 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "Configure a 64-bit build")
 endif()
 
-include(FetchContent)
+# MinHook v1.3.4, commit c3fcafdc10146beb5919319d0683e44e3c30d537, vendored as in
+# Astera Loader (third_party/minhook, BSD-2): hook.c has its one adapter
+# (AL_MINHOOK_PROCESS_THREADS), which lists the process's own threads with
+# Windows PSS (src/hooking/thread_snapshot.cpp) before the unchanged Toolhelp
+# path. On one player's PC the system-wide Toolhelp snapshot failed, so the
+# startup hook could not be removed and the mod never armed (v0.28.6, tifa-4).
+# The target keeps the name minhook; minhook_SOURCE_DIR points at the copy.
+set(minhook_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/minhook")
+add_library(mhw_thread_snapshot STATIC src/hooking/thread_snapshot.cpp src/hooking/thread_snapshot.hpp)
+target_compile_features(mhw_thread_snapshot PRIVATE cxx_std_20)
+target_compile_definitions(mhw_thread_snapshot PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(mhw_thread_snapshot PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+add_library(minhook STATIC
+    third_party/minhook/src/buffer.c third_party/minhook/src/hook.c
+    third_party/minhook/src/trampoline.c third_party/minhook/src/hde/hde64.c)
+target_include_directories(minhook PUBLIC third_party/minhook/include PRIVATE third_party/minhook/src third_party/minhook/src/hde)
+target_compile_definitions(minhook PRIVATE AL_MINHOOK_PROCESS_THREADS)
+target_link_libraries(minhook PRIVATE mhw_thread_snapshot)
+set_target_properties(minhook PROPERTIES PREFIX "" RELEASE_POSTFIX ".x64" DEBUG_POSTFIX ".x64d" RELWITHDEBINFO_POSTFIX ".x64" MINSIZEREL_POSTFIX ".x64")
+
 include(cmake/NgxReplay.cmake)
 include(cmake/StreamlineReflex.cmake)
-
-# MinHook v1.3.4. Pinning the commit keeps diagnostic builds reproducible.
-FetchContent_Declare(
-    minhook
-    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(minhook)
 
   add_library(mhw_dlss_bridge_policy STATIC
     src/bridge_probe/scene_trigger.cpp
@@ -1080,6 +1090,13 @@ if(BUILD_TESTING)
     target_compile_options(silhouette_material_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
     set_target_properties(silhouette_material_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME silhouette_material COMMAND silhouette_material_tests)
+    add_executable(minhook_threads_tests tests/minhook_threads_tests.cpp)
+    target_compile_features(minhook_threads_tests PRIVATE cxx_std_20)
+    target_compile_definitions(minhook_threads_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(minhook_threads_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)
+    target_link_libraries(minhook_threads_tests PRIVATE minhook mhw_thread_snapshot)
+    set_target_properties(minhook_threads_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME minhook_threads COMMAND minhook_threads_tests)
     add_executable(dlss_sdk_contract_tests tests/dlss_sdk_contract_tests.cpp)
     target_compile_features(dlss_sdk_contract_tests PRIVATE cxx_std_20)
     target_compile_options(dlss_sdk_contract_tests PRIVATE /W4 /WX /permissive- /EHsc /utf-8)

@@ -4,7 +4,12 @@
 
 Source: <https://github.com/TsudaKageyu/minhook>
 
-Pinned revision: `c3fcafdc10146beb5919319d0683e44e3c30d537` (v1.3.4)
+Pinned revision: `c3fcafdc10146beb5919319d0683e44e3c30d537` (v1.3.4),
+vendored in `third_party/minhook` as in Astera Loader (since v0.28.6). Every
+file is unchanged except `src/hook.c`, which has Astera Loader's one adapter:
+with `AL_MINHOOK_PROCESS_THREADS`, thread enumeration first lists this
+process's threads with Windows PSS (`src/hooking/thread_snapshot.cpp`), then
+falls back to the original Toolhelp code.
 
 ```text
 MinHook - The Minimalistic API Hooking Library for x64/x86
@@ -160,9 +165,14 @@ DirectXShaderCompiler, commit `69c311af7091953427a6d67c16e811ce65313b93`
 those projects; their folders' README files record the commits. MIT licenses:
 `third_party/al/LICENSE` and `third_party/cmfm/LICENSE`.
 
+`src/hooking/thread_snapshot.cpp` and `.hpp` (MinHook's process-only thread
+list) are Astera Loader's `src/core/hooks/thread_snapshot.*` at commit
+`eb35367`, unchanged apart from the include path and a header comment; same
+MIT license (`third_party/al/LICENSE`).
+
 ## In release packages
 
 `tools/package_release.py` lists every component above that is compiled into
 `mhw_dlss.dll` in the package's `THIRD-PARTY-NOTICES.txt` and copies its license
 file into the package's `licenses` folder. The MinHook license is
-`third_party/minhook-LICENSE.txt`, copied unchanged from the pinned commit.
+`third_party/minhook/LICENSE.txt`, unchanged from the pinned commit.
