@@ -1,0 +1,4 @@
+# Vendored upstream files stay byte for byte as committed. cmake/DxbcHash.cmake
+# checks the DxilHash files by SHA-256, and core.autocrlf would turn them CRLF
+# on a Windows checkout, so a fresh clone would not configure.
+third_party/** -text
