@@ -135,12 +135,9 @@ add_library(mhw_dlss_alpha SHARED
     src/continuous_dlaa/activation.cpp src/continuous_dlaa/activation_entry.asm
     src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
     src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm
-    src/projection_binding/recorder.cpp src/projection_binding/policy.cpp
-    src/projection_binding/provenance.cpp src/projection_binding/provenance_policy.cpp src/projection_binding/depth_readback.cpp
-    src/projection_binding/attachments.cpp src/projection_binding/attachment_output.cpp
+    src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
     src/projection_binding/trampoline_pool.cpp src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
-    src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/output.cpp
-    src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
+    src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
     src/scaled_temporal/stream_route.cpp src/scaled_temporal/stream_entry.asm
     src/render_resolution/runtime.cpp src/render_resolution/resolution_entry.asm
     # Reflex, presentation and the DLL's entry.
@@ -192,12 +189,9 @@ endfunction()
 if(BUILD_TESTING)
     # The game-hook code under test compiles with these, as in the shipped DLL.
     set(binding_includes src/projection_binding src/bridge_probe "${minhook_SOURCE_DIR}/src/hde" "${minhook_SOURCE_DIR}/src")
-    set(binding_common src/projection_binding/recorder.cpp src/projection_binding/policy.cpp
-        src/projection_binding/provenance.cpp src/projection_binding/provenance_policy.cpp src/projection_binding/depth_readback.cpp
-        src/projection_binding/attachments.cpp src/projection_binding/attachment_output.cpp
+    set(binding_common src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
         src/projection_binding/trampoline_pool.cpp src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
-        src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/output.cpp
-        src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp)
+        src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp)
     set(temporal_binding_sources src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
         src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm)
 
