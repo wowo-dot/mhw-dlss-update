@@ -398,3 +398,7 @@ Behaviour stays the same; the log fields stay.
     `bounded_scalar_read.hpp`), the old depth-route and jitter modules'
     declarations, a stale `frame_boundaries::reserve`, and three unused
     helpers.
+  - The C++ sources have one layout (`.clang-format`, clang-format 22 from
+    Visual Studio): one commit (0b27046, in `.git-blame-ignore-revs`)
+    whose DLL differs from the one before only in its link timestamp.
+    Line numbers quoted above are from before it.

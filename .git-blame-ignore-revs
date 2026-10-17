@@ -1,0 +1,4 @@
+# Layout-only commits, skipped by blame (GitHub reads this file; locally:
+# git config blame.ignoreRevsFile .git-blame-ignore-revs).
+# clang-format over every C++ source; the DLL is identical apart from its link timestamp.
+0b270468b2bdbf70db0d7e880a1758360b83b3c1
