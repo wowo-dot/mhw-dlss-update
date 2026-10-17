@@ -1,5 +1,8 @@
-// Serialized by the stream route. Diagnostic only; every native draw forwards
-// unchanged. No resource, pipeline, packet, descriptor or GPU command is edited.
+// Part of stream_route.cpp. The late packets a plan replays
+// (silhouette_candidates) and the sampled indexed draws for the log. Serialized
+// by the stream route; every native draw forwards unchanged, and nothing here
+// edits a resource, pipeline, packet, descriptor or GPU command (the replay is
+// silhouette_route.inl).
 struct IndexedScope {
     unsigned sample = UINT_MAX, slot = UINT_MAX, position = UINT_MAX, calls{};
     std::uintptr_t state{};

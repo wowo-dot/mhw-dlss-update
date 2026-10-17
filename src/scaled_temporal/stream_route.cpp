@@ -1,3 +1,19 @@
+// The stream route after DLSS: the final-screen route, the game's post chain
+// at output size (full_post) and the silhouette replay. One translation unit
+// on purpose: its parts share the route's state and lock (the anonymous
+// namespace below), and the per-draw hooks (indexed_draw runs about 2,600
+// times a frame) call into every part; the build has no link-time code
+// generation, so separate files would stop those calls from inlining. Each
+// part is included where the state and helpers it uses are declared:
+// - silhouette_probe.inl: the late packets a plan replays and the sampled
+//   indexed draws for the log;
+// - full_post.inl: full_post's render-thread state, the post chain's capture,
+//   the tone-map and projection hooks;
+// - post_census.inl: the sampled frame's post-chain census for the log;
+// - full_post_slot.inl: the inputs' upscale slot and the final copy at
+//   execution;
+// - silhouette_route.inl: the silhouette replay (recipes, pipelines, the
+//   recorded draws).
 #include "stream_route.hpp"
 #include "filter_shader.hpp"
 #include "stream_lifetime.hpp"

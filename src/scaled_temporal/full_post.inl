@@ -1,4 +1,5 @@
-// full_post (prototype; full_post.hpp, docs/research/full-size-post-chain.md).
+// full_post: the game's post chain at output size (full_post.hpp,
+// docs/research/full-size-post-chain.md).
 // Included after the final-quad capture. Every state change happens on the
 // render thread that records the camera's scene and post chain: the state is
 // thread-local, so any other thread sees it unarmed. Only the armed frame

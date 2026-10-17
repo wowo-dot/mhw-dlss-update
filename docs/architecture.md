@@ -39,7 +39,7 @@ the shipped configuration.
 | DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.29.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
 | Game options | `continuous_dlaa/game_options.cpp` | The game's own DLSS rules: AA Off, resolution scaling High, locked menu rows |
 | Render resolution | `render_resolution/runtime.cpp` (432) | Sets the game's render scale on its render thread; detects aspect switches |
-| Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + six `.inl`, `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
+| Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + five `.inl` (one translation unit: see its head), `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
 | Observer | `temporal_present/observer.cpp` (387), `bindings.cpp`, `output.cpp`, `unfiltered.cpp` | A CPU mirror of each command list's bindings, raster state and predicate; binding restore after injected work |
 | Frame generation | `frame_generation/game_session*.cpp` (0.29.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
 | Settings and menu | `alpha/*` (config, menu, menu_model, status, capabilities) | ini, the CMFM pages, Status lines, the card's capabilities |
@@ -405,3 +405,9 @@ Behaviour stays the same; the log fields stay.
   - the frame generation session (`game_session.cpp`) is four files by job
     on `game_session_state.hpp`, checked as the other splits: every code
     and comment line moved, the 150 log field writes are unchanged.
+  - `stream_route.cpp` stays one translation unit with its five `.inl`
+    parts: they share the route's state and lock, the per-draw hooks call
+    into every part, and without link-time code generation separate files
+    would stop those calls inlining. Its head now maps the parts; two
+    stale part headers (full_post "prototype", the silhouette probe
+    "diagnostic only") are corrected.
