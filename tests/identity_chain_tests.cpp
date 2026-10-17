@@ -91,6 +91,27 @@ int main() {
     DXGI_SWAP_CHAIN_DESC1 now{};
     check(SUCCEEDED(identity->GetDesc1(&now)) && now.Width == 800 && now.Height == 450, "identity chain size follows");
 
+    // tifa-6 (v0.28.6): the identity chain's own Present with the game's
+    // tearing flag fails (DXGI_ERROR_INVALID_CALL in the field; the game then
+    // aborts), so a game call never reaches it (identity_route). Without a
+    // real chain its resize goes to it without the game's flags.
+    const auto own_present = identity->Present(0, DXGI_PRESENT_ALLOW_TEARING);
+    std::printf("identity chain Present(0, ALLOW_TEARING): 0x%08lx\n", static_cast<unsigned long>(own_present));
+    check(FAILED(own_present), "the identity chain's own Present with the game's flags fails");
+    const auto game_flags = identity->ResizeBuffers(3, 640, 360, desc.Format, desc.Flags);
+    std::printf("identity chain ResizeBuffers with the game's flags: 0x%08lx\n", static_cast<unsigned long>(game_flags));
+    check(FAILED(game_flags), "the identity chain refuses the game's resize flags");
+    check(SUCCEEDED(identity->ResizeBuffers(3, 640, 360, desc.Format, 0)), "unroutable resize: the game's count and size, no flags");
+    // The last resort: a window chain made again on the same window once the
+    // previous one is released, with the game's description.
+    window_chain.Reset();
+    HRESULT again = E_ACCESSDENIED;
+    for (unsigned attempt = 0; attempt < 25 && again == E_ACCESSDENIED; ++attempt) {
+        if (attempt) Sleep(20);
+        again = f2->CreateSwapChainForHwnd(queue.Get(), hwnd, &desc, nullptr, nullptr, &window_chain);
+    }
+    check(SUCCEEDED(again), "window chain made again");
+
     identity.Reset();
     window_chain.Reset();
     DestroyWindow(hwnd);

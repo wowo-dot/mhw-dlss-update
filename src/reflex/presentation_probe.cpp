@@ -173,6 +173,24 @@ std::string quoted(const std::string& value) {
     }
     return out.str() + '"';
 }
+#ifdef MHW_ALPHA
+// A code address as module basename + offset (no path), or the address.
+std::string code_site(std::uintptr_t address) {
+    char text[320]{};
+    HMODULE image_of{};
+    if (!address || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                        reinterpret_cast<LPCWSTR>(address), &image_of)) {
+        std::snprintf(text, sizeof(text), "0x%llx", static_cast<unsigned long long>(address));
+        return text;
+    }
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(image_of, path, MAX_PATH);
+    const wchar_t* name = path;
+    for (DWORD i = 0; i < length; ++i) if (path[i] == L'\\' || path[i] == L'/') name = path + i + 1;
+    std::snprintf(text, sizeof(text), "%ls+0x%llx", name, static_cast<unsigned long long>(address - reinterpret_cast<std::uintptr_t>(image_of)));
+    return text;
+}
+#endif
 struct Call { Call() { active.fetch_add(1); } ~Call() { active.fetch_sub(1); } };
 bool gate(unsigned rva) {
     if (rva == 0x23a15fd)
@@ -218,6 +236,14 @@ struct DlssRetry {std::uint64_t at{};mhw::continuous_dlaa::ModeRequest request{}
 // Frame generation was configured at arming and has not stopped since: it is
 // armed whenever DLSS runs with DLSS-G loaded (its inputs are DLSS's).
 bool fg_ready{};
+// v0.28.6 (tifa-6): a presentation fault with routing kept turns frame
+// generation off for the session (DLSS-G unloaded by a switch); the worker
+// goes on (DLSS, Reflex, the menu). The faults already handled.
+bool generation_fault{};
+std::uint64_t presentation_faults{};
+// The state a switch last failed to reach (refused or failed: 0 off, 1 on);
+// not asked again until the wanted state changes. Before, every 200 ms.
+int switch_unreached=-1;
 // v0.27.4 (fg-live-toggle.md): the game's own "make the buffers again"
 // request and its latency waitable, checked once at arming.
 // - sub_14229C320 (the HDR switch) sets 0x4000 in sRender+0x1F548 when the
@@ -270,14 +296,28 @@ void sync_generation(GenerationSwitch& g){
         fg_loaded=v.frame_generation_loaded;fg_loaded_state.store(fg_loaded);
         log<<"{\"event\":\"fg_switch\",\"want\":"<<g.want<<",\"done\":true,\"loaded\":"<<fg_loaded<<",\"reason\":"<<v.switch_reason
            <<",\"switches\":"<<v.switches<<",\"failures\":"<<v.switch_failures<<",\"refusals\":"<<v.switch_refusals
-           <<",\"hr\":"<<v.switch_last_hr<<",\"waitable_failures\":"<<v.waitable_failures<<",\"tries\":"<<g.tries
-           <<",\"ms\":"<<now-g.asked_at<<",\"buffers\":"<<v.buffers<<"}\n"<<std::flush;
+           <<",\"hr\":"<<v.switch_last_hr<<",\"final_hr\":"<<v.switch_final_hr<<",\"last_resort\":"<<v.last_resort
+           <<",\"waitable_failures\":"<<v.waitable_failures<<",\"tries\":"<<g.tries
+           <<",\"ms\":"<<now-g.asked_at<<",\"buffers\":"<<v.buffers<<",\"queues\":"<<v.queues<<",\"late_queues\":"<<v.late_queues<<"}\n"<<std::flush;
         mhw::alpha::status::reflex_mode(reflex_mode_name(reflex_applied.load()));
-        if(fg_loaded&&cd::live_modes()&&!cd::dlss_off())fg::arm(true);
+        if(fg_loaded!=g.want){
+            // Refused (exclusive fullscreen, the game's waitable moved) or failed:
+            // not asked again until the player changes it or the game changes
+            // its fullscreen state (log_lifecycle).
+            switch_unreached=g.want;
+            if(g.want&&!generation_fault)mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,
+                v.switch_reason==4?"exclusive fullscreen":v.switch_reason==5?"latency waitable":"switch failed");
+        }else if(g.want&&!generation_fault)mhw::alpha::status::generation(mhw::alpha::status::Generation::armed);
+        if(fg_loaded&&!generation_fault&&cd::live_modes()&&!cd::dlss_off())fg::arm(true);
         g={};return;
     }
-    const bool want=fg::status().enabled&&cd::live_modes()&&!cd::dlss_off();
-    if(want==fg_loaded)return;
+    const bool want=!generation_fault&&fg::status().enabled&&cd::live_modes()&&!cd::dlss_off();
+    if(want==fg_loaded){
+        // An unload that did not happen, then the player's On again: armed again.
+        if(switch_unreached==0&&want&&!fg::status().armed)fg::arm(true);
+        switch_unreached=-1;return;
+    }
+    if(switch_unreached==static_cast<int>(want))return;
     if(!want){
         // DLSS-G Off at the next Present and no input slot in use.
         if(fg::status().armed)fg::arm(false);
@@ -286,6 +326,29 @@ void sync_generation(GenerationSwitch& g){
     if(!presentation->request_switch(want))return;
     g={now,0,switch_outcomes(v),want,true};
     game_resize_request();
+}
+// Worker: a presentation fault that kept routing (v0.28.6, tifa-6), logged at
+// once with where and why. Frame generation is off for the session: Off now,
+// DLSS-G unloaded by sync_generation's switch; the worker goes on.
+void presentation_fault(const mhw::reflex::PresentationStats& v){
+    namespace fg=mhw::frame_generation::game;
+    // Bounded: a fault that repeats (a paced Present failing each frame) is
+    // logged at counts 1, 2, 4, 8... or when its site changes.
+    static std::uint32_t logged_site=~0U;
+    presentation_faults=v.faults;
+    const std::string why(v.fault_why.data());
+    if((v.faults&(v.faults-1))!=0&&v.fault_site==logged_site)return;
+    logged_site=v.fault_site;
+    log<<"{\"event\":\"presentation_fault\",\"faults\":"<<v.faults<<",\"site\":"<<v.fault_site<<",\"hr\":"<<v.fault_hr
+       <<",\"why\":"<<quoted(why)<<",\"thread\":"<<v.fault_thread<<",\"routing\":"<<v.routing<<",\"identity\":"<<v.identity
+       <<",\"frame_generation_loaded\":"<<v.frame_generation_loaded<<",\"last_resort\":"<<v.last_resort<<",\"switch_reason\":"<<v.switch_reason
+       <<",\"queues\":"<<v.queues<<",\"late_queues\":"<<v.late_queues<<",\"queue_overflows\":"<<v.queue_overflows
+       <<",\"queue_failures\":"<<v.queue_failures<<",\"unroutable\":"<<v.unroutable_calls<<"}\n"<<std::flush;
+    if(generation_fault)return;
+    generation_fault=true;
+    if(fg::status().armed)fg::arm(false);
+    if(fg_plugin)mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped,"presentation fault");
+    loader_log(AL_LOG_WARNING,"frame generation turned off for this session: presentation fault ("+why+")");
 }
 // Worker: after a scene change, frame generation takes the new scene
 // rectangle (centred in the back buffer); false if it does not fit.
@@ -332,7 +395,7 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted,DlssRetry 
         if(released&&scene)configured=configure_generation_scene();
     }
     const bool running=cd::live_modes()&&!cd::dlss_off();
-    if(fg_ready&&fg_loaded&&running&&released&&configured)fg::arm(true);
+    if(fg_ready&&fg_loaded&&!generation_fault&&running&&released&&configured)fg::arm(true);
     log<<"{\"event\":\"dlss_mode_change\",\"from\":"<<quoted(from_off?"off":mhw::alpha::dlss_mode_value(from))
        <<",\"requested\":"<<quoted(wanted.off?"off":mhw::alpha::dlss_mode_value(wanted.mode))
        <<",\"mode\":"<<quoted(r.off?"off":mhw::alpha::dlss_mode_value(r.mode))<<",\"scene\":"<<r.scene
@@ -374,8 +437,11 @@ void change_dlss_scene(SceneRetry &retry){
     if(generation&&r.ok){
         released=fg::release_inputs(true);
         configured=released&&configure_generation_scene();
-        if(configured&&fg_loaded)fg::arm(true);
-        else{fg_ready=false;mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");}
+        // Not armed while DLSS-G is unloaded, but still ready for the next
+        // load (v0.28.6: since v0.27.4 an aspect change with frame generation
+        // off left it unavailable for the session).
+        if(!configured){fg_ready=false;mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,"scene_rect");}
+        else if(fg_loaded&&!generation_fault)fg::arm(true);
     }
     const bool last=!r.ok&&r.retry&&retry.count+1>=40;
     if(r.ok||!r.retry||last||!retry.count||r.reason!=retry.reason){
@@ -854,6 +920,10 @@ void log_lifecycle(std::ostream& out) {
                                   "", "resize_buffers", "", "", "resize_buffers1", "resize_target"};
     for (unsigned i = 0; i < count; ++i) {
         const auto& e = events[i];
+#ifdef MHW_ALPHA
+        // A fullscreen change: a switch refused in exclusive fullscreen may work now.
+        if (e.method == 6) switch_unreached = -1;
+#endif
         out << "{\"event\":\"swap_lifecycle\",\"sequence\":" << e.sequence << ",\"method\":" << e.method << ",\"name\":\""
             << (e.method < std::size(names) ? names[e.method] : "") << "\",\"thread\":" << e.thread << ",\"host_thread\":" << e.host_thread
             << ",\"current_chain\":" << e.current_chain << ",\"routed\":" << e.routed << ",\"guard_off\":" << e.guard_off
@@ -1343,6 +1413,7 @@ DWORD WINAPI worker(void*) noexcept {
                 // asked whether it took the change (it applies at the next sleep).
                 std::uint64_t live_check_sleeps{};
                 DlssRetry dlss_retry;SceneRetry scene_retry;GenerationSwitch generation_switch;unsigned learned_multiplier{};
+                std::uint64_t chain_retry_at{};  // no real chain: the game's resize asked every 2 s
                 // perf_ab (diagnostic, FG off): DLSS paused and running in
                 // turn, 30 s each, logged with the time to the plugin log.
                 std::uint64_t perf_ab_next=alpha_config.perf_ab&&!fg_loaded?GetTickCount64()+30000:0;bool perf_ab_paused=false;
@@ -1389,9 +1460,25 @@ DWORD WINAPI worker(void*) noexcept {
                         write_reflex_fault(log, frames);log << "}\n" << std::flush;
                         stop_reason="reflex_frames";break;
                     }
+#ifdef MHW_ALPHA
+                    if(!stats.routing){stop_reason="presentation";break;}
+                    // v0.28.6 (tifa-6): a fault that kept routing (the identity
+                    // chain, SDK pacing) turns frame generation off for the
+                    // session and is logged; DLSS, Reflex and the menu go on.
+                    if(stats.faults!=presentation_faults)presentation_fault(stats);
+                    // No real chain behind the identity chain (both switch attempts and
+                    // the last resort failed): its calls are answered meanwhile, and
+                    // each game resize tries the last resort again.
+                    if(stats.identity&&!stats.real_chain&&GetTickCount64()>=chain_retry_at){game_resize_request();chain_retry_at=GetTickCount64()+2000;}
+#else
                     if(!stats.routing || stats.faults){stop_reason="presentation";break;}
 #endif
+#endif
+#ifdef MHW_ALPHA
+                    if(!frames.running || frames.faults || !stats.routing)break;
+#else
                     if(!frames.running || frames.faults || !stats.routing || stats.faults)break;
+#endif
 #ifdef MHW_ALPHA
                     if(reflex_requested.load()!=reflex_applied.load()){
                         std::lock_guard lock(sdk_mutex);
@@ -1496,7 +1583,15 @@ DWORD WINAPI worker(void*) noexcept {
                             require(driver_mode("running_on",reflex_applied.load()!=0),"driver-On-not-enabled");reflex_confirmed=true;}
                         log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed << ",\"tokens\":" << frames.tokens
                             << ",\"sleeps\":" << frames.sleeps << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults
-                            << ",\"owner\":" << frames.owner << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents << "}\n" << std::flush;
+                            << ",\"owner\":" << frames.owner << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents
+                            << ",\"queues\":" << stats.queues << ",\"late_queues\":" << stats.late_queues << ",\"presentation_faults\":" << stats.faults;
+#ifdef MHW_ALPHA
+                        // The first callers of late queue creations, by module (tifa-6: whose they were).
+                        log << ",\"late_queue_callers\":[";
+                        for (unsigned i = 0, n = 0; i < stats.late_queue_callers.size(); ++i) if (stats.late_queue_callers[i]) log << (n++ ? "," : "") << quoted(code_site(stats.late_queue_callers[i]));
+                        log << ']';
+#endif
+                        log << "}\n" << std::flush;
                         last=now;
                     }
                     Sleep(100);
@@ -1560,7 +1655,8 @@ DWORD WINAPI worker(void*) noexcept {
             write_reflex_fault(log, frames);log << ",\"session\":";
             mhw::frame_generation::game::write(log);log << "}\n";
         }
-        log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":true,\"temporal_active\":true}\n" << std::flush;
+        log << "{\"event\":\"fg_runtime_retained\",\"sdk_alive\":true,\"presentation_routed\":" << (presentation && presentation->snapshot().routing)
+            << ",\"temporal_active\":true}\n" << std::flush;
         // Keep recording host lifecycle calls (resizes after FG ended) with a
         // presentation heartbeat on change, until exit or 30 minutes.
         {
@@ -1580,7 +1676,10 @@ DWORD WINAPI worker(void*) noexcept {
                        <<",\"routing\":"<<stats.routing<<",\"presents\":"<<stats.presents<<",\"queues\":"<<stats.queues<<",\"fault_site\":"<<stats.fault_site<<",\"fault_hr\":"<<stats.fault_hr
                        <<",\"identity\":"<<stats.identity<<",\"identity_refused\":"<<stats.identity_refused<<",\"frame_generation_loaded\":"<<stats.frame_generation_loaded
                        <<",\"switches\":"<<stats.switches<<",\"switch_failures\":"<<stats.switch_failures<<",\"switch_refusals\":"<<stats.switch_refusals
-                       <<",\"switch_reason\":"<<stats.switch_reason<<",\"switch_waits\":"<<stats.switch_waits<<"}\n"<<std::flush;
+                       <<",\"switch_reason\":"<<stats.switch_reason<<",\"switch_waits\":"<<stats.switch_waits
+                       <<",\"fault_why\":"<<quoted(std::string(stats.fault_why.data()))<<",\"fault_thread\":"<<stats.fault_thread
+                       <<",\"late_queues\":"<<stats.late_queues<<",\"queue_overflows\":"<<stats.queue_overflows<<",\"queue_failures\":"<<stats.queue_failures
+                       <<",\"unroutable\":"<<stats.unroutable_calls<<",\"last_resort\":"<<stats.last_resort<<"}\n"<<std::flush;
                     last_resizes=stats.resizes;last_swapchains=stats.swapchains;
                 }
                 Sleep(100);
@@ -1660,7 +1759,7 @@ DWORD WINAPI worker(void*) noexcept {
         if (presentation && presentation->snapshot().swapchains) {
             mhw::frame_generation::game::arm(false);
             try { log << "{\"event\":\"worker_failed\",\"reason\":" << quoted(e.what())
-                << ",\"sdk_retained\":true,\"presentation_routed\":true,\"fg_off_requested\":true}\n" << std::flush; } catch (...) {}
+                << ",\"sdk_retained\":true,\"presentation_routed\":" << presentation->snapshot().routing << ",\"fg_off_requested\":true}\n" << std::flush; } catch (...) {}
             return 3;
         }
 #endif

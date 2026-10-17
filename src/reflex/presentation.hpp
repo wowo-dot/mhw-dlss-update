@@ -15,8 +15,18 @@
 namespace mhw::reflex {
 struct PresentationStats {
     std::uint64_t queues{}, swapchains{}, presents{}, native_presents{}, test_presents{}, resizes{}, faults{}, sdk_paced_presents{};
-    // The last routed fault: FaultSite and its HRESULT (0 for a describe failure).
-    std::uint32_t fault_site{}, fault_hr{};
+    // The last fault: FaultSite, its HRESULT (0 for a describe failure), the
+    // thread and why (the exception's what() or the failed check; v0.28.6).
+    std::uint32_t fault_site{}, fault_hr{}, fault_thread{};
+    std::array<char, 48> fault_why{};
+    // v0.28.6 (tifa-6, queue_admission): queue creations left native because
+    // the game's chain existed (the first four callers kept) or the table was
+    // full, and proxies Streamline refused (then made natively, last HRESULT).
+    std::uint64_t late_queues{}, queue_overflows{}, queue_failures{};
+    std::array<std::uintptr_t, 4> late_queue_callers{};
+    std::uint32_t queue_failure_hr{};
+    // Identity-chain calls answered without a real chain (identity_route).
+    std::uint64_t unroutable_calls{};
     std::uint32_t width{}, height{}, format{}, buffers{};
     std::uintptr_t native_device{}, native_swapchain{}, proxy_swapchain{};
     unsigned installed_hooks{}, pending_calls{};
@@ -25,11 +35,15 @@ struct PresentationStats {
     // chains made again by switch_chain() and how the last request ended
     // (0 none, 1 with DLSS-G, 2 without, 3 refused: not possible here, 4 refused:
     // exclusive fullscreen, 5 refused: the game's waitable not as expected,
-    // 6 failed and made again as before, 7 failed: no real chain).
-    bool identity{}, frame_generation_loaded{};
+    // 6 failed and made again as before, 7 failed: no real chain, 8 failed and
+    // made natively past Streamline: last_resort, v0.28.6).
+    bool identity{}, frame_generation_loaded{}, last_resort{};
+    bool real_chain{};  // a real chain behind the identity chain (none after reason 7)
     std::uint64_t identity_refused{}, switches{}, switch_failures{}, switch_refusals{}, waitable_failures{}, switch_waits{};
     unsigned switch_reason{}, switch_pending{};
-    std::uint32_t switch_last_hr{};
+    // The first failed attempt's HRESULT, and the last one's when the switch
+    // fell back further (the chain as before, then the last resort).
+    std::uint32_t switch_last_hr{}, switch_final_hr{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
@@ -107,6 +121,11 @@ public:
     // identity chain (cD3DRender+0x10F0, checked by the caller's code gate);
     // a switch replaces it there.
     void waitable_slot(std::uintptr_t address) noexcept;
+    // Ends routing: without AL the host's later calls on the identity chain
+    // reach its own methods, which cannot present with a game's flags
+    // (tifa-6), so only for a host done with its chain (the fixtures). Under
+    // AL false while the identity chain exists. The alpha never stops while
+    // the game runs (frame generation Off only, routing until exit).
     bool stop() noexcept;
     // Requires successful stop and SDK shutdown. False retains all pins.
     bool release_after_shutdown() noexcept;

@@ -255,6 +255,8 @@ void status_lines() {
     namespace s = mhw::alpha::status;
     check(s::reason_text("DLSS-G-support:3") == "this graphics card or driver has no DLSS Frame Generation", "api reason with code");
     check(s::reason_text("presentation") == "presentation stopped", "exact reason");
+    check(s::reason_text("presentation fault") == "a presentation error turned it off for this session", "presentation fault, not presentation");
+    check(s::reason_text("exclusive fullscreen").starts_with("not available in exclusive fullscreen"), "refused switch reason");
     check(s::reason_text("presentation-al-device-factory-chains") ==
               "see the mod's log (presentation-al-device-factory-chains)", "a longer reason is not a known one");
     check(s::reason_text("") == "see the mod's log", "no reason");

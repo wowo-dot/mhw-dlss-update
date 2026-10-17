@@ -110,7 +110,8 @@ that object's vtable after checking each method is native code
   composition chain shares all 22 routed functions with a window chain, each
   its own function; R10G10B10A2 composition chains work.
 - `Presentation`: `adopt_identity` at the game's `CreateSwapChainForHwnd`,
-  routing of every identity-chain call (faults keep routing; `stop()` ends it),
+  routing of every identity-chain call (faults were meant to keep routing; until
+  v0.28.6 one path did not, see "tifa-6" below),
   `switch_chain` in the routed `ResizeBuffers`, `request_switch` and
   `waitable_slot`. A busy window retries creation (E_ACCESSDENIED, 25 x 20 ms).
 - The worker (`sync_generation`): wants DLSS-G loaded while frame generation is
@@ -138,3 +139,78 @@ waitable replaced each time; latency 3 kept; zero device references at the
 end. The light test scene keeps the Off gap small; the game showed about 40%.
 The existing on fixture (96 of 96 full-multiplier frames, GPU validation) and
 `identity_chain_tests` pass.
+
+## tifa-6 (2026-10-17): the identity chain presented, and the game aborted
+
+A player (RTX 5080, 6x dynamic, VSync off, frame generation on at start)
+turned frame generation off and on live. Both switches worked (`fg_switch`
+reasons 2 and 1, 6 buffers), then the worker stopped with
+`fg_stopped "presentation"` and `presentation_state` showed `faults: 1,
+routing: false, fault_site: 0, queues: 16, identity: true`. The game then
+aborted on purpose (`MtDebug::abort`, a write of 0xDEADBEEF to address 0 at
+exe+0x21fd0c9) from `sRender::checkResult`, called with the result of its
+`Present(0, DXGI_PRESENT_ALLOW_TEARING)`: `DXGI_ERROR_INVALID_CALL`.
+
+**Cause** (confirmed in code, crash registers and the clean image; review of
+2026-10-17, `presentation-review-20261017.md`):
+
+1. The queue hook proxied every queue made on the game's device and kept the
+   proxy; ten more than the usual six (made after the game's chain, from other
+   threads: Streamline's, an overlay's; which is not known) filled the 16 slots.
+2. The 17th threw `presentation-queue-capacity`; the plain `fault()` cleared
+   `accepting` without condition (only the routed-call fault spared the
+   identity chain), and recorded no site.
+3. With `accepting` off, every identity-chain call went to the identity
+   chain's own method. It is a composition chain made with no flags and never
+   presented: its own Present with the game's tearing flag returns
+   `DXGI_ERROR_INVALID_CALL` (`identity_chain_tests`, WARP: 0x887a0001).
+
+**v0.28.6:**
+
+- `identity_route` (`present_result.hpp`, unit-tested): a game call on the
+  identity chain goes to the real chain (Streamline's proxy, or natively after
+  the last resort below), or without one is answered (Present: S_OK, the frame
+  dropped; resize: the last resort, else the identity chain without the game's
+  flags; window, fullscreen, latency, colour space and HDR from the game's own
+  state, kept for a later real chain), and the frame observer still sees the
+  dropped Present,
+  never to the identity chain's own method.
+- One `fault(site, hr, why)`: the site, HRESULT, `what()` and thread are
+  logged (`presentation_fault`, `presentation_state`); routing ends only where
+  the game holds the real chain under the synchronous contract
+  (`fault_keeps_routing`); a creation that throws still ends it (no chain is
+  left). `stop()` ends it for the fixtures (MinHook, after their last frame);
+  under AL it refuses while the identity chain exists, as AL's chains stay.
+  The alpha never stops while the game runs.
+- Queues (`queue_admission`): proxied only before the game's chain exists; a
+  full table forwards natively; later ones are counted (`late_queues`, the
+  first four callers by module in `frame_heartbeat`) without the route mutex.
+- A switch whose two attempts fail (before: `ResizeBuffers` failed, the game
+  aborted) makes the real chain natively on the game's window, past
+  Streamline, with DLSS-G unloaded (reason 8, `last_resort`); switches are
+  then refused. If that fails too the identity chain is resized, the game's
+  latency waitable replaced by a set event, its calls answered, and the worker
+  asks the game for a resize every 2 s, each trying the last resort again.
+- Under SDK pacing a failed Present is a fault and the game gets S_OK, except
+  a lost device (`presentation_result`); it aborted on the SDK's HRESULT. If it
+  keeps failing (no unload possible), after 300 in a row the game gets the
+  HRESULT again (`paced_present_result`): its own abort and crash report
+  rather than a frozen picture.
+- The worker keeps going after a fault that kept routing: frame generation off
+  for the session (`generation_fault`, status "presentation fault", DLSS-G
+  unloaded by a switch), DLSS, Reflex and the menu live; `presentation_fault`
+  is logged at counts 1, 2, 4, 8... (bounded). The status page names the
+  refusal reasons (exclusive fullscreen, latency waitable, switch failed). A switch refused or
+  failed is not asked again until the wanted state changes (it was asked
+  every 200 ms, each a full buffer remake); a game fullscreen change allows
+  one more try.
+- `fg_runtime_retained` and `worker_failed` log the real routing state.
+- Also: an aspect change with frame generation off no longer leaves it
+  unavailable for the session (v0.27.4 bug); the game's latency waitable is
+  the one it keeps in its slot (read at arming), not a later caller's.
+- Reviewed twice before commit (two adversarial agents: lock order, bypass,
+  present accounting, and the runtime scenarios FG off/on, fault under
+  pacing, double switch failure, exclusive fullscreen, startup variants,
+  exit); their findings are in the commit. Open: `late_queue_callers` may
+  name `mhw_dlss.dll` or another plugin instead of the creator under AL; the
+  in-game check on the 5090 (tifa's settings, FG off/on, Steam overlay).

@@ -1384,7 +1384,9 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!unfiltered_lifetime.initialize(device))throw std::runtime_error("unfiltered lifetime fence");
         ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> list;ComPtr<ID3D12CommandQueue> queue;
         D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_DIRECT;
-        if(FAILED(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&allocator)))||FAILED(device->CreateCommandList(0,q.Type,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||FAILED(device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue))))throw std::runtime_error("continuous method discovery");
+        // The discovery queue is the mod's own: never proxied for the presentation (v0.28.6).
+        {astera::Internal internal;
+         if(FAILED(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&allocator)))||FAILED(device->CreateCommandList(0,q.Type,allocator.Get(),nullptr,IID_PPV_ARGS(&list)))||FAILED(list->Close())||FAILED(device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue))))throw std::runtime_error("continuous method discovery");}
         targets[0]=image+tb::dispatch_rva;targets[1]=image+0x259cc20;targets[2]=image+0x23cd170;targets[3]=image+0x259df30;targets[4]=image+0x228f3b0;
         constexpr unsigned slots[]{10,9,10,26,14,17
 #ifdef MHW_CONTINUOUS_SCALED

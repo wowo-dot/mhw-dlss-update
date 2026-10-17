@@ -33,11 +33,38 @@ int main() {
          require(mhw::astera::internal_call(), "still inside the outer scope");}
         require(!mhw::astera::internal_call(), "after the scope");
         // game-124: a fault under SDK pacing keeps the game on the SDK's chain.
-        require(fault_keeps_routing(PresentationContract::sdk_paced) && !fault_keeps_routing(PresentationContract::synchronous_native),
+        require(fault_keeps_routing(PresentationContract::sdk_paced, false) && !fault_keeps_routing(PresentationContract::synchronous_native, false),
             "paced faults keep routing; synchronous faults fall back to the physical chain");
+        // tifa-6: with the identity chain every fault keeps routing.
+        require(fault_keeps_routing(PresentationContract::synchronous_native, true) && fault_keeps_routing(PresentationContract::sdk_paced, true),
+            "identity-chain faults keep routing under either contract");
         require(presentation_result(PresentationContract::sdk_paced, 0, DXGI_ERROR_INVALID_CALL, S_OK).fault &&
             !presentation_result(PresentationContract::sdk_paced, 0, DXGI_ERROR_INVALID_CALL, S_OK).forward_native,
             "a failed paced Present is a fault, never a second native present");
+        // The game aborts on a failed Present other than a lost device.
+        for (const HRESULT hr : {DXGI_ERROR_INVALID_CALL, E_FAIL, E_INVALIDARG, DXGI_ERROR_WAS_STILL_DRAWING})
+            require(presentation_result(PresentationContract::sdk_paced, 1, hr, S_OK).result == S_OK, "failed paced Present answered S_OK");
+        for (const HRESULT hr : {DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET, DXGI_ERROR_DEVICE_HUNG})
+            require(presentation_result(PresentationContract::sdk_paced, 1, hr, S_OK).result == hr && device_lost(hr), "lost device reported");
+        require(presentation_result(PresentationContract::sdk_paced, 1, DXGI_STATUS_OCCLUDED, S_OK).result == DXGI_STATUS_OCCLUDED &&
+            !presentation_result(PresentationContract::sdk_paced, 1, DXGI_STATUS_OCCLUDED, S_OK).fault, "paced status code kept, no fault");
+        require(paced_present_result(S_OK, E_FAIL, paced_failure_limit) == S_OK &&
+            paced_present_result(S_OK, E_FAIL, paced_failure_limit + 1) == E_FAIL, "a persistent paced failure reaches the game again");
+        // tifa-6: queue proxies only before the game's chain; a full table forwards.
+        require(queue_admission(true, false, true) == QueueAdmission::proxy, "the game's queue before its chain is proxied");
+        require(queue_admission(true, false, false) == QueueAdmission::overflow, "a full table forwards natively");
+        require(queue_admission(true, true, true) == QueueAdmission::late && queue_admission(true, true, false) == QueueAdmission::late,
+            "after the game's chain nothing is proxied");
+        require(queue_admission(false, false, true) == QueueAdmission::native && queue_admission(false, true, false) == QueueAdmission::native,
+            "not accepting: native");
+        // A game call on the identity chain never reaches the identity chain itself.
+        for (const bool real : {false, true}) {
+            require(identity_route(true, true, real) == IdentityRoute::forward, "the mod's own calls stay native");
+            require(identity_route(false, false, real) == IdentityRoute::forward, "other chains stay native");
+            require(identity_route(true, false, real) == IdentityRoute::forward, "bypass on other chains stays native");
+        }
+        require(identity_route(false, true, true) == IdentityRoute::real, "identity call with a real chain routes to it");
+        require(identity_route(false, true, false) == IdentityRoute::unroutable, "identity call without a real chain is answered, not forwarded");
         require(paced_host_call(0x1234, 0x1234, 7, 7), "owned logical chain routes on host thread");
         require(!paced_host_call(0x1234, 0x1234, 8, 7), "SDK worker on same physical chain stays native");
         require(!paced_host_call(0x5678, 0x1234, 7, 7), "another physical chain stays native");
@@ -59,7 +86,9 @@ int main() {
             require(fg.result == S_OK && !fg.fault && !fg.forward_native, "pacer owns transaction; no duplicate host Present");
             const auto failed = presentation_result(PresentationContract::sdk_paced, calls, DXGI_ERROR_DEVICE_REMOVED, S_OK);
             require(failed.result == DXGI_ERROR_DEVICE_REMOVED && failed.fault && !failed.forward_native,
-                "propagate SDK error without another native Present");
+                "propagate a lost device without another native Present");
+            const auto invalid = presentation_result(PresentationContract::sdk_paced, calls, E_INVALIDARG, S_OK);
+            require(invalid.result == S_OK && invalid.fault && !invalid.forward_native, "other SDK errors fault and answer S_OK");
         }
         const auto occluded = presentation_result(PresentationContract::synchronous_native, 1, S_OK, DXGI_STATUS_OCCLUDED);
         require(occluded.result == DXGI_STATUS_OCCLUDED && !occluded.fault && !occluded.forward_native, "legacy native status preserved");

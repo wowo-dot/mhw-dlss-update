@@ -83,6 +83,11 @@ inline std::string reason_text(std::string_view raw) {
         {"reflex_frames", "the frame hooks stopped"},
         {"presentation", "presentation stopped"},
         {"scene_rect", "the game's screen layout is not supported"},
+        // v0.28.6: frame generation's own reasons (presentation_probe.cpp).
+        {"presentation fault", "a presentation error turned it off for this session"},
+        {"exclusive fullscreen", "not available in exclusive fullscreen; use borderless or windowed"},
+        {"latency waitable", "the game's frame pacing is not as expected"},
+        {"switch failed", "it could not be loaded; see the mod's log"},
     };
     for (const auto &k : known)
         if (raw == k.key || (raw.size() > k.key.size() && raw.starts_with(k.key) && raw[k.key.size()] == ':'))

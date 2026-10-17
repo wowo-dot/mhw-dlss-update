@@ -334,7 +334,12 @@ changes and 2 switches, then 10 switches) and game-125 (10 switches).
 
 The startup discovery queue (`projection_binding/provenance.cpp`, once) still
 takes one slot. With v0.25.11's paced-fault rule, a full table would no longer
-end routing under frame generation.
+end routing under frame generation. **Wrong** (found 2026-10-17, tifa-6): the
+queue hook called the plain `fault()`, not the paced rule, so a full table still
+ended routing, and with the identity chain (v0.27.4) the game's next Present
+reached that never-presented chain and the game aborted. Fixed in v0.28.6: a
+full table forwards natively, nothing is proxied once the game's chain exists,
+and no fault ends identity routing (`fg-live-toggle.md`, "tifa-6").
 
 **game-126 (v0.25.12):** 26 live aspect switches at 6x frame generation and
 Performance, all completed; 0 Reflex faults, frame generation never stopped,
