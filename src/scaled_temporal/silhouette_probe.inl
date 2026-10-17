@@ -1,7 +1,7 @@
 // Serialized by the stream route. Diagnostic only; every native draw forwards
 // unchanged. No resource, pipeline, packet, descriptor or GPU command is edited.
 struct IndexedScope {unsigned sample=UINT_MAX,slot=UINT_MAX,position=UINT_MAX,calls{};
- std::uintptr_t state{};pb::Draw draw;bool replaced{};};
+ std::uintptr_t state{};pb::DrawSite draw;bool replaced{};};
 thread_local IndexedScope indexed_scope;
 struct IndexedSample {
  std::uint64_t frame{},epoch{},tick{};unsigned key{},technique{},rejection{},calls{};
@@ -86,7 +86,7 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
   s.pixel_hash=pb::bytes_sha256(bytes.data(),size);s.frame=p.stamp.frame;s.epoch=p.stamp.epoch;s.tick=GetTickCount64();s.key=p.late_keys[position];
   unsigned short technique{};field(s.packet_bindings[2],0x18,technique);s.technique=technique;
   for(unsigned i=0;i<3;++i)field(set,0x60+8*i,s.extra_stages[i]);
-  scope.sample=indexed_sample_count++;scope.draw.packet=f.gpr[3];scope.draw.executor=f.gpr[1];scope.draw.context=f.gpr[2];scope.draw.shader_set=set;scope.draw.graphics=s.packet_bindings[2];
+  scope.sample=indexed_sample_count++;scope.draw.packet=f.gpr[3];scope.draw.executor=f.gpr[1];scope.draw.context=f.gpr[2];
   if(!field(f.gpr[1],8,scope.state)||!field(scope.state,0x20,scope.draw.command)){s.rejection=1;scope.sample=UINT_MAX;return scope;}s.state=scope.state;
   std::uintptr_t words{},ids{},modes{};unsigned owners{};std::array<unsigned short,2> range{};
   if(field(set,0,words)&&field(set,0x80,ids)&&field(set,0x88,owners)&&owners<=64&&field(s.packet_bindings[2],0x10,modes)&&field(set,0x14,range)&&range[0]<=128&&unsigned(range[0])+range[1]<=4096){

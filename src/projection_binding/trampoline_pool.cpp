@@ -38,10 +38,4 @@ bool reserve_pool(const std::array<std::uintptr_t,10> &targets,std::string &reas
   // is read or patched here; the reservation lives until the pinned DLL exits.
   pool.ready=true;return true;
 }
-bool reserve_startup(std::uintptr_t base,std::string &reason) {
-  if(base>UINTPTR_MAX-0x55d3000) {reason="pool-image-range";return false;}
-  std::array<std::uintptr_t,10> targets{};
-  for(unsigned i=0;i<targets.size();++i)targets[i]=base+native_rvas[i];
-  return reserve_pool(targets,reason);
-}
 }

@@ -33,22 +33,4 @@ bool capture_matrices(std::uintptr_t base,Source &s) noexcept {
   }
   m.valid=true;if(!matrix_ids_same(base,s)){m.valid=false;return false;}return true;
 }
-unsigned root_variant(unsigned ps_flags,unsigned vs_flags,unsigned ps_count,bool gs,bool hs) noexcept {
-  if(hs)return 4;if(gs)return 3;
-  if((ps_flags&0x10000) && (vs_flags&0x10000))return 1;
-  return ps_count?0:2;
-}
-bool capture_root(std::uintptr_t backend,std::uintptr_t set,const std::array<std::uintptr_t,5> &stages,RootSelection &s) noexcept {
-  unsigned short count{};unsigned char mode{};std::uintptr_t device{};
-  if(!backend || backend>UINTPTR_MAX-0x2a9 || !set || set>UINTPTR_MAX-0x78 ||
-     !read(set+0x10,s.vs_flags) || !read(set+0x1c,s.ps_flags) || !read(set+0x14,count) ||
-     !read(backend+0x270,s.recipe) || !s.recipe || s.recipe>UINTPTR_MAX-11 || !read(backend+0x2a8,mode) || mode>1)return false;
-  if(!read(s.recipe,s.recipe_device) || !read(backend+0x18,device) || !device || device!=s.recipe_device)return false;
-  s.ps_count=count;s.descriptor_mode=mode;
-  for(unsigned i=0;i<3;++i)if(!read(s.recipe+8+i,s.recipe_flags[i]) || s.recipe_flags[i]>1)return false;
-  for(unsigned i=0;i<5;++i)if(!read(backend+0x278+8*i,s.signatures[i]))return false;
-  s.index=root_variant(s.ps_flags,s.vs_flags,s.ps_count,stages[2]!=0,stages[3]!=0);
-  s.valid=s.signatures[s.index]!=0 && s.recipe_flags[2]==mode;
-  return s.valid;
-}
 }
