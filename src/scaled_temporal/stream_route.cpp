@@ -1788,17 +1788,7 @@ extern "C" void mhw_scaled_full_project(mhw::projection_binding::Frame *f) {
     mhw::scaled_temporal::stream_route::full_project_dispatch(f);
 }
 namespace mhw::scaled_temporal::stream_route {
-namespace {
-template <auto Detour> struct Chained;
-template <class... A, void(WINAPI *Detour)(A...)> struct Chained<Detour> {
-    static void WINAPI call(A... a) {
-        if (chain_live.load(std::memory_order_acquire))
-            Detour(a...);
-        else
-            reinterpret_cast<void(WINAPI *)(A...)>(originals[api_hook])(a...);
-    }
-};
-} // namespace
+template <auto Detour> using Chained = astera::Gate<Detour, chain_live, originals, api_hook>;
 void astera_hooks(std::vector<astera::Hook> &out) {
     out.push_back({astera::method(astera::command_list, 16), reinterpret_cast<void *>(&Chained<&copy_hook>::call),
                    &originals[api_hook]});

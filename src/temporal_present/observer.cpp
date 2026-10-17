@@ -391,15 +391,7 @@ void WINAPI outputs_call(ID3D12GraphicsCommandList *list, UINT count, const D3D1
 }
 } // namespace
 namespace {
-template <auto Detour, unsigned I> struct Chained;
-template <class... A, void(WINAPI *Detour)(A...), unsigned I> struct Chained<Detour, I> {
-    static void WINAPI call(A... a) {
-        if (chain_live.load(std::memory_order_acquire))
-            Detour(a...);
-        else
-            reinterpret_cast<void(WINAPI *)(A...)>(originals[I])(a...);
-    }
-};
+template <auto Detour, unsigned I> using Chained = astera::Gate<Detour, chain_live, originals, I>;
 const std::array<void *, max_hooks> chained{
     reinterpret_cast<void *>(Chained<pointer_call<0>, 0>::call),
     reinterpret_cast<void *>(Chained<pointer_call<1>, 1>::call),

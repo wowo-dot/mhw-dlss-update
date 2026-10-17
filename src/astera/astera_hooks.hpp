@@ -13,7 +13,9 @@
 //
 // al.hooks: game functions other plugins may hook too (Main:Update) join AL's
 // one chain per function instead of a patch of the mod's own.
+#include <windows.h>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -27,6 +29,18 @@ struct Hook {
     std::uint32_t method;
     void *detour;
     void **next;
+};
+// The gate in front of a registered detour: while its owner's `live` (an
+// atomic flag, or a pointer that is null until installed) is unset, calls go
+// straight to `next[index]`, the continuation AL stored, as if the detour were
+// absent. Register &Gate<...>::call as the Hook's detour.
+template <auto Detour, auto &live, auto &next, unsigned index> struct Gate;
+template <class R, class... A, R(WINAPI *Detour)(A...), auto &live, auto &next, unsigned index>
+struct Gate<Detour, live, next, index> {
+    static R WINAPI call(A... a) {
+        if (live.load(std::memory_order_acquire)) return Detour(a...);
+        return reinterpret_cast<R(WINAPI *)(A...)>(next[index])(a...);
+    }
 };
 
 // The plugin entry calls this once, from al_plugin_init, before any owner

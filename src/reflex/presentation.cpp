@@ -1295,16 +1295,7 @@ HRESULT STDMETHODCALLTYPE hdr_hook(IDXGISwapChain4 *self, DXGI_HDR_METADATA_TYPE
 // Each detour behind a gate that continues with AL's stored next method
 // until this presentation exists (DEVICE_CREATED). Detours then follow their
 // own accepting/route rules.
-namespace {
-template <auto Detour, unsigned Index> struct Chained;
-template <class R, class... A, R(STDMETHODCALLTYPE *Detour)(A...), unsigned Index> struct Chained<Detour, Index> {
-    static R STDMETHODCALLTYPE call(A... a) {
-        if (!dispatch.load(std::memory_order_acquire))
-            return reinterpret_cast<R(STDMETHODCALLTYPE *)(A...)>(chain_next[Index])(a...);
-        return Detour(a...);
-    }
-};
-} // namespace
+template <auto Detour, unsigned I> using Chained = astera::Gate<Detour, dispatch, chain_next, I>;
 void presentation_astera_hooks(std::vector<astera::Hook> &out) {
     using astera::method;
     const auto add = [&](std::uint32_t m, void *detour, unsigned index) {

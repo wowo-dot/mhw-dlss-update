@@ -63,13 +63,7 @@ void native(unsigned kind, NativeFrame *f) {
     }
 }
 namespace {
-template <auto Detour, unsigned I> struct Chained;
-template <class R, class... A, R(WINAPI *Detour)(A...), unsigned I> struct Chained<Detour, I> {
-    static R WINAPI call(A... a) {
-        if (chain_live.load(std::memory_order_acquire)) return Detour(a...);
-        return reinterpret_cast<R(WINAPI *)(A...)>(originals[I])(a...);
-    }
-};
+template <auto Detour, unsigned I> using Chained = astera::Gate<Detour, chain_live, originals, I>;
 struct ChainedMethod {
     unsigned index;
     astera::Family family;
