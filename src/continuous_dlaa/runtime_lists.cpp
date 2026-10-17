@@ -56,15 +56,14 @@ void WINAPI draw_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,UINT
  }
  {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<DrawFn>(originals[11])(list,n,instances,first,instance);}
 }
+// Only forwards. Its chain gives the private copies (copy_input, the depth
+// copy at the TAA dispatch) their CopyResource continuation, past the hooks
+// ahead of this one, and the hook timing its copy count. Depth used to be
+// leased at the game's own copy; the runtime copies it at the dispatch at
+// every render scale since v0.19.3 (dlaa-identity-path.md, game-70/74/75).
 void WINAPI copy_hook(ID3D12GraphicsCommandList *list,ID3D12Resource *destination,ID3D12Resource *source){
-    perf::hook_timing::Scope timing(perf::hook_timing::copy);Guard guard;const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    {perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<CopyFn>(originals[10])(list,destination,source);}
-    // The scaled build copies depth at the TAA dispatch, on its own recording,
-    // at every render scale (DepthConsumerAdmission; render scale 1.0 is its
-    // whole-copy mode since v0.19.3). A lease at the native copy needed that
-    // copy on the TAA's command list, which the game does not keep at 1.0
-    // (dlaa-identity-path.md, game-70/74/75).
-    (void)caller;
+    perf::hook_timing::Scope timing(perf::hook_timing::copy);Guard guard;
+    perf::hook_timing::ForwardScope forward(timing.sample);reinterpret_cast<CopyFn>(originals[10])(list,destination,source);
 }
 // The game creates and releases command lists while it runs (the
 // nDraw::ExternalRegion proxies each own one; game-86 filled the 128 slots
