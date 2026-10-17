@@ -4,8 +4,6 @@
 #include <span>
 namespace mhw::temporal_bindings {
 inline constexpr unsigned capacity=3;
-inline constexpr bool packet_generations=false;
-inline constexpr unsigned stimulus_count=capacity-2;
 inline constexpr unsigned roles=7, dispatch_rva=0x23c9980, caller_rva=0x2392f31;
 inline constexpr std::array<unsigned,roles> id_rvas={0x4be60e0,0x4be60e4,0x4be60e8,0x4be60ec,0x4be60f0,0x4be60f4,0x4be60f8};
 inline constexpr std::array<const char *,roles> names={"tBaseMap","tBlendMap","tDepthMap","tGBuffer1","rwOutput","tGBuffer4","tPrevGBufferID"};

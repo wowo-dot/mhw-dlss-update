@@ -29,11 +29,6 @@ struct PresentationBuffers {
         if(index>=capacity||!(known_mask&(1U<<index)))return false;
         value=labels[index];return true;
     }
-    bool contains(std::uint64_t value) const noexcept {
-        if(!value)return false;
-        for(unsigned i=0;i<capacity;++i)if((known_mask&(1U<<i))&&labels[i]==value)return true;
-        return false;
-    }
 };
 // Caller serializes every operation.
 class PresentationBufferMap final {

@@ -4,7 +4,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include "renderer_snapshot.hpp"
+#include "bounded_scalar_read.hpp"
 #include "readable_region.hpp"
 #include "../perf/toggles.hpp"
 #include <array>

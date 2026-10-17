@@ -1,5 +1,5 @@
 #pragma once
-#include "../src/temporal_bindings/jitter.hpp"
+#include "../src/temporal_bindings/inputs.hpp"
 #include <bit>
 // Owned virtual memory only; models CPU matrix publication, never game code.
 struct JitterFixture {
@@ -22,10 +22,10 @@ struct JitterFixture {
     const auto frame=get<std::uint64_t>(s.c.renderer+0x1f210);
     if(frame==12 && mode=="jitter_late_exception")RaiseException(0xe0424242,0,0,nullptr);
     if(frame==6 && mode=="jitter_exception")RaiseException(0xe0424242,0,0,nullptr);
-    if(frame==6 && mode=="jitter_stop")tb::jitter::stop();
+    if(frame==6 && mode=="jitter_stop")cd::stop();
     if(frame==6 && mode=="jitter_provider")put(s.c.renderer+0xb4,1U);
     if(frame==6 && mode=="jitter_competing_write")put(s.camera.p+0x38,std::uint64_t{1});
-    if(frame==6 && mode=="jitter_reentrant" && s.calls==2){auto f=s.frame();tb::jitter::dispatch(&f);}
+    if(frame==6 && mode=="jitter_reentrant" && s.calls==2){auto f=s.frame();cd::native(4,&f);}
     std::array<float,16> plain{},view{};for(unsigned i=0;i<4;++i)plain[5*i]=view[5*i]=1;
     auto jittered=plain;jittered[12]=get<float>(s.camera.p+0x38)/s.width;jittered[13]=get<float>(s.camera.p+0x3c)/s.height;
     if(frame==6 && mode=="jitter_matrix")jittered[12]+=.01F;

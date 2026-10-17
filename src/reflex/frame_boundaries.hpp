@@ -19,7 +19,6 @@ struct Frame {
     std::array<std::uintptr_t, 4> stack{};
 };
 static_assert(offsetof(Frame, caller) == 0xa0 && sizeof(Frame) == 0xc8);
-bool reserve(std::uintptr_t image, std::string& reason);
 bool install(std::uintptr_t image, std::string& reason);
 void stop() noexcept;
 bool finish() noexcept;

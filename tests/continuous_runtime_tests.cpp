@@ -17,10 +17,6 @@ template<class T>void put(std::uintptr_t p,T v){std::memcpy(reinterpret_cast<voi
 template<class T>T get(std::uintptr_t p){T v;std::memcpy(&v,reinterpret_cast<void *>(p),sizeof(v));return v;}
 struct Block {std::uintptr_t p;explicit Block(std::size_t n):p(reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr,n,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE))){check(p!=0,"memory");}~Block(){VirtualFree(reinterpret_cast<void *>(p),0,MEM_RELEASE);}};
 #include "temporal_jitter_fixture.hpp"
-namespace mhw::temporal_bindings::jitter {
-void stop() noexcept {cd::stop();}
-void dispatch(NativeFrame *f){cd::native(4,f);}
-}
 void exception_call(tb::NativeFrame *f){
     bool caught=false;__try{cd::native(4,f);}__except(GetExceptionCode()==0xe0424242?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH){caught=true;}
     check(caught,"expected native exception forwarded");

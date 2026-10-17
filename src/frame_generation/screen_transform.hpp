@@ -49,10 +49,6 @@ struct Parameters {
 };
 // Accepted as CBRenderFrame's HDR fields (the capture's layout check).
 constexpr float white_min = 10.0f, white_max = 10000.0f, gamma_min = 0.1f, gamma_max = 10.0f;
-inline bool plausible(const Parameters &p) noexcept {
-    return std::isfinite(p.white) && p.white >= white_min && p.white <= white_max && std::isfinite(p.ratio) && p.ratio >= 0.0f &&
-           p.ratio <= 1.0f && std::isfinite(p.gamma) && p.gamma >= gamma_min && p.gamma <= gamma_max;
-}
 // ST.2084 constants.
 constexpr float m1 = 2610.0f / 16384.0f, m2 = 2523.0f / 32.0f, c1 = 3424.0f / 4096.0f, c2 = 2413.0f / 128.0f, c3 = 2392.0f / 128.0f;
 inline float pq_encode(float normalized) noexcept {

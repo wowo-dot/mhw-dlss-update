@@ -1,5 +1,7 @@
 #pragma once
-#include "depth_work.hpp"
+#include "bounded_scalar_read.hpp"
+#include <array>
+#include <cstdint>
 
 namespace mhw::bridge_probe {
 struct ProjectionAnchor {

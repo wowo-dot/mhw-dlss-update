@@ -2,7 +2,7 @@
 #include "../src/perf/frame_stats.hpp"
 #include "../src/perf/toggles.hpp"
 #include "../src/bridge_probe/readable_region.hpp"
-#include "../src/bridge_probe/renderer_snapshot.hpp"
+#include "../src/bridge_probe/bounded_scalar_read.hpp"
 #include <windows.h>
 #include <array>
 #include <atomic>

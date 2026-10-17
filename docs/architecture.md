@@ -390,3 +390,11 @@ Behaviour stays the same; the log fields stay.
     evaluation). Both are gone; the DLSS frame links the NGX library
     itself, `live.hpp` is `initialization.hpp` (the borrowed NGX
     initialization) and `history.hpp` keeps `HistoryFrame`.
+  - Headers have the same blind spot: a declaration nothing calls needs no
+    definition, and an unused inline function is never compiled. A sweep
+    for names no other file mentions and for declarations without a
+    definition removed the research's renderer snapshot, depth selection
+    and depth work interfaces (`bridge_probe`; `renderer_snapshot.hpp` is
+    `bounded_scalar_read.hpp`), the old depth-route and jitter modules'
+    declarations, a stale `frame_boundaries::reserve`, and three unused
+    helpers.
