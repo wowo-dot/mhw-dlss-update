@@ -128,7 +128,8 @@ add_library(mhw_dlss_alpha SHARED
     src/reflex/live_frames.cpp
     src/reflex/frame_boundaries_entry.asm src/reflex/temporal_coexistence.cpp
     # Frame generation.
-    src/frame_generation/game_session.cpp src/frame_generation/hudless_pass.cpp
+    src/frame_generation/game_session.cpp src/frame_generation/game_session_inputs.cpp
+    src/frame_generation/game_session_present.cpp src/frame_generation/game_session_log.cpp src/frame_generation/hudless_pass.cpp
     src/frame_generation/crash_log.cpp src/perf/sampler.cpp
     # The status lines and the optional CMFM pages (third_party/cmfm); the
     # game's own DLSS rules for its AA and resolution scaling options.
