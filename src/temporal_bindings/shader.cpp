@@ -37,18 +37,4 @@ bool shader_recipe(const Reader &r,const Snapshot &s,ShaderRecipe &o) {
   }
   return true;
 }
-bool compute_dxbc(const std::byte *data,unsigned size) noexcept {
-  if(!projection_binding::dxbc_valid(data,size))return false;
-  const auto word=[&](unsigned at){unsigned v{};std::memcpy(&v,data+at,4);return v;};
-  unsigned programs{};
-  for(unsigned i=0;i<word(28);++i) {
-    const auto at=word(32+4*i),bytes=word(at+4);
-    if(std::memcmp(data+at,"SHDR",4) && std::memcmp(data+at,"SHEX",4))continue;
-    if(++programs!=1 || bytes<8 || (bytes&3))return false;
-    const auto version=word(at+8);
-    // D3D11Shader.h: compute type 5; Shader Model 5.0 token stream.
-    if((version>>16)!=5 || (version&0xffff)!=0x50 || word(at+12)!=bytes/4)return false;
-  }
-  return programs==1;
-}
 }

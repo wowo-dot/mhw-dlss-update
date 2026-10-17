@@ -270,10 +270,6 @@ bool prepare(std::uintptr_t host,std::uintptr_t r,std::string &reason){
 }
 void stop() noexcept {requested=false;}
 void yield(bool y) noexcept {yielded=y;}
-bool owns_projection(std::uintptr_t ctx,std::uintptr_t view) noexcept {
-    return owning()&&!fault.load()&&frame_owned&&frame_thread==GetCurrentThreadId()&&
-        ctx==static_cast<std::uintptr_t>(context())&&view==frame_view&&primary(ctx,view);
-}
 void latch_failure() noexcept {failure_latched=true;}
 bool drained() noexcept {return !pending.load()&&!context();}
 bool healthy() noexcept {return !fault.load();}

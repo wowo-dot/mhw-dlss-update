@@ -21,7 +21,6 @@ std::array<IndexedSample,16> indexed_samples;
 unsigned indexed_sample_count{},indexed_visits{},indexed_errors{},indexed_candidates_rejected{};
 std::array<std::array<std::uintptr_t,2>,32> indexed_seen_sets{};
 unsigned indexed_seen_count{};
-void indexed_probe_error() noexcept {++indexed_errors;if(indexed_scope.sample<indexed_sample_count)indexed_samples[indexed_scope.sample].rejection=99;}
 std::array<std::uint64_t,14> indexed_description(std::uintptr_t candidate) noexcept {
  std::array<std::uint64_t,14> result{};result[0]=candidate;
  if(!candidate)return result;std::uintptr_t method{};

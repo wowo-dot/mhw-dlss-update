@@ -1,8 +1,7 @@
 #include "depth_routes.hpp"
 namespace mhw::temporal_bindings::depth_routes {
 namespace {bool pointer(std::uintptr_t p,std::uintptr_t n){return p && p<=UINTPTR_MAX-n;}}
-static bool operation_states(std::span<const D3D12_RESOURCE_BARRIER> barriers,std::uintptr_t source,std::uintptr_t destination,unsigned source_state,unsigned destination_state,
-                             bool unknown_ok=false) noexcept {
+static bool operation_states(std::span<const D3D12_RESOURCE_BARRIER> barriers,std::uintptr_t source,std::uintptr_t destination,unsigned source_state,unsigned destination_state) noexcept {
   if(!source || !destination || source==destination)return false;
   std::array<unsigned,2> states{};std::array<bool,2> known{};const std::array<std::uintptr_t,2> resources={source,destination};
   for(const auto &b:barriers)for(unsigned i=0;i<2;++i){
@@ -12,14 +11,7 @@ static bool operation_states(std::span<const D3D12_RESOURCE_BARRIER> barriers,st
     if(b.Flags || b.Transition.Subresource!=UINT_MAX || (known[i] && states[i]!=static_cast<unsigned>(b.Transition.StateBefore)))return false;
     states[i]=b.Transition.StateAfter;known[i]=true;
   }
-  if(unknown_ok)return (!known[0] || states[0]==source_state) && (!known[1] || states[1]==destination_state);
   return known[0] && known[1] && states[0]==source_state && states[1]==destination_state;
-}
-bool copy_states(std::span<const D3D12_RESOURCE_BARRIER> b,std::uintptr_t s,std::uintptr_t d) noexcept {
-  return operation_states(b,s,d,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
-}
-bool copy_states_consistent(std::span<const D3D12_RESOURCE_BARRIER> b,std::uintptr_t s,std::uintptr_t d) noexcept {
-  return operation_states(b,s,d,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_COPY_DEST,true);
 }
 bool draw_states(std::span<const D3D12_RESOURCE_BARRIER> b,std::uintptr_t s,std::uintptr_t d) noexcept {
   // The final native writer may read only from the pixel shader. Keep both

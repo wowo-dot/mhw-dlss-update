@@ -3,9 +3,6 @@
 #include <string_view>
 
 namespace mhw::reflex {
-constexpr bool generated_frames_supported(std::uint32_t requested, std::uint32_t maximum) noexcept {
-    return requested != 0 && maximum != 0 && requested <= maximum;
-}
 // Generated frames per host frame for a total multiplier (2x = 1), limited to
 // the reported capability. An unknown capability (0) admits ordinary FG only.
 // 0 means the multiplier is unusable.

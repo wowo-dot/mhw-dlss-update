@@ -487,7 +487,6 @@ void WINAPI indexed_hook(ID3D12GraphicsCommandList *list,UINT n,UINT instances,U
 struct DepthDraw {
  std::array<std::uintptr_t,4> bindings{};std::array<unsigned,2> arguments{};std::array<unsigned,4> rectangle{};
  std::uintptr_t packet{},pipeline{};unsigned rejection{};
- bool operator==(const DepthDraw &)const=default;
 };
 bool depth_draw_snapshot(DepthDraw &out){
  const auto &d=depth_consumer;const auto nested=d.packet.nested;
@@ -944,11 +943,6 @@ bool observed_zero(const perf::InFlightCount &count,std::uint64_t ms){
     if(count.zero())return true;
     const auto end=GetTickCount64()+ms;
     while(!count.idle()){if(GetTickCount64()>=end)return false;SwitchToThread();}
-    return true;
-}
-bool observed_zero(const std::atomic<unsigned> &count,std::uint64_t ms){
-    const auto end=GetTickCount64()+ms;
-    while(count.load()){if(GetTickCount64()>=end)return false;SwitchToThread();}
     return true;
 }
 template<class F> bool observed_true(F &&idle,std::uint64_t ms){

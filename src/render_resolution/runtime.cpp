@@ -343,7 +343,6 @@ bool install(std::uintptr_t base,float scale,std::string &reason,bool shared,boo
 }
 void stop() noexcept {requested=false;}
 void yield() noexcept {Lock lock;if(!image||fault.load()||!requested.load())return;yielded=true;requested=false;}
-bool yielded_now() noexcept {return yielded.load();}
 bool released() noexcept {Lock lock;return !requested.load()&&!ownership.owned;}
 bool full_scale(std::uintptr_t base) noexcept {
     if(image)return false;

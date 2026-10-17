@@ -10,12 +10,6 @@ using namespace mhw::reflex;
 void require(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
 int main() {
     try {
-        require(generated_frames_supported(1, 1), "ordinary FG on ordinary-capable device");
-        require(!generated_frames_supported(2, 1), "MFG rejected on ordinary-only device");
-        require(generated_frames_supported(2, 5) && generated_frames_supported(3, 5) && generated_frames_supported(5, 5),
-            "fixed MFG counts admitted within reported capability");
-        require(!generated_frames_supported(6, 5), "unsupported multiplier rejected");
-        require(!generated_frames_supported(0, 5) && !generated_frames_supported(1, 0), "missing mode/capability rejected");
         require(generated_frames_for(2, 5) == 1 && generated_frames_for(4, 5) == 3 && generated_frames_for(6, 5) == 5,
             "multiplier maps to generated frames within capability");
         require(generated_frames_for(8, 5) == 5 && generated_frames_for(4, 1) == 1, "multiplier limited to capability");

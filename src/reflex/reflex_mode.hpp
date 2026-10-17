@@ -7,8 +7,6 @@ namespace mhw::reflex {
 // are sl::ReflexMode: 0 off, 1 low latency, 2 low latency with boost. The
 // worker refuses off while DLSS Frame Generation is loaded, which needs Reflex.
 void request_mode(unsigned mode) noexcept;
-// The mode Streamline last accepted; 3 before the frame hooks are armed.
-unsigned applied_mode() noexcept;
 // DLSS-G is loaded: Reflex stays on until the game closes (Streamline paces
 // the swap chain; without Reflex the frame rate halves).
 bool frame_generation_loaded() noexcept;

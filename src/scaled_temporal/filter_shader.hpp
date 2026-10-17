@@ -1,18 +1,12 @@
 #pragma once
-#include <cstddef>
-#include <span>
-#include <vector>
 
 namespace mhw::scaled_temporal {
-// Builds a private variant of the observed motion-reconstruction PS. This does
-// not change a native shader, PSO, resource, viewport, or command packet.
-// Only the observed shader and top-left geometry at 1x, or at half truncated
-// per axis (2:1, or 1706x720 for a 3413x1440 scene), are admitted.
-// Native CBScreen/blur constants, UVs and t1..t4 must remain in render space;
-// t0 and the output viewport must cover the complete output allocation.
+// The render extent inside the output (scene) extent that the stream route's
+// private passes are built for (render_resolution::plan).
 struct FilterGeometry {
     unsigned render_width{},render_height{},output_width{},output_height{};
 };
+// One render scale in [0.5, 1] on both axes, truncated per axis, within the
+// D3D12 texture size limit.
 bool valid_filter_geometry(FilterGeometry) noexcept;
-std::vector<std::byte> make_filter_shader(std::span<const std::byte> native,FilterGeometry);
 }

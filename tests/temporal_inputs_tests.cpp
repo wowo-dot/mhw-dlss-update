@@ -62,15 +62,7 @@ void shader_tests(const tb::Snapshot &s) {
   for(auto at:{handle,set+0x78,entry+0x10,desc+8,set+0x80,s.state+0x10,set}) {
     auto bad=m;bad.put(at,UINTPTR_MAX-1);tb::ShaderRecipe out;check(!tb::shader_recipe(bad.reader(),s,out),"overflow pointer");
   }
-  std::array<std::byte,52> bytes{};
-  const auto put=[&](unsigned at,unsigned value){std::memcpy(bytes.data()+at,&value,4);};
-  std::memcpy(bytes.data(),"DXBC",4);put(20,1);put(24,52);put(28,1);put(32,36);
-  std::memcpy(bytes.data()+36,"SHEX",4);put(40,8);put(44,0x50050);put(48,2);
-  check(tb::compute_dxbc(bytes.data(),52),"compute container structure");
-  for(unsigned size=0;size<52;++size)check(!tb::compute_dxbc(bytes.data(),size),"truncated container");
-  for(const auto &[at,value]:std::vector<std::pair<unsigned,unsigned>>{{44,0x10050},{44,0x50051},{48,3},{40,4},{32,32},{28,0},{24,51}}){
-    auto bad=bytes;std::memcpy(bad.data()+at,&value,4);check(!tb::compute_dxbc(bad.data(),52),"invalid compute container");}
-  std::cout<<"Shader recipe and DXBC rejection checks passed; "<<missing<<" missing shader bytes rejected\n";
+  std::cout<<"Shader recipe checks passed; "<<missing<<" missing shader bytes rejected\n";
 }
 void depth_tests(const tb::Snapshot &s) {
   auto m=fixture();const std::uintptr_t container=0xf0000000,attachment=container+0x100,view_wrapper=container+0x200;
@@ -97,31 +89,11 @@ void route_contract_tests(){
   std::array<D3D12_RESOURCE_BARRIER,2> barriers{};
   for(unsigned i=0;i<2;++i){auto &t=barriers[i].Transition;t.pResource=reinterpret_cast<ID3D12Resource *>(0x1000ULL+i*0x1000);t.Subresource=UINT_MAX;
     t.StateBefore=i?D3D12_RESOURCE_STATE_RENDER_TARGET:D3D12_RESOURCE_STATE_DEPTH_WRITE;t.StateAfter=i?D3D12_RESOURCE_STATE_COPY_DEST:D3D12_RESOURCE_STATE_COPY_SOURCE;}
-  check(dr::copy_states(barriers,0x1000,0x2000),"exact depth-copy state interval");
-  check(!dr::copy_states(std::span(barriers.data(),1),0x1000,0x2000),"missing destination state");
-  check(!dr::copy_states(barriers,0x1000,0x1000),"copy state alias");
-  // Render scale 1.0: the copy itself establishes the states; only observed
-  // transitions must agree, and aliasing or contradictions still reject.
-  check(dr::copy_states_consistent(barriers,0x1000,0x2000),"consistent: exact interval");
-  check(dr::copy_states_consistent(std::span(barriers.data(),1),0x1000,0x2000),"consistent: destination transition hoisted");
-  check(dr::copy_states_consistent({},0x1000,0x2000),"consistent: both transitions hoisted");
-  check(!dr::copy_states_consistent(barriers,0x1000,0x1000),"consistent: copy state alias");
-  {auto bad=barriers;bad[1].Transition.StateAfter=D3D12_RESOURCE_STATE_RENDER_TARGET;
-   check(!dr::copy_states_consistent(bad,0x1000,0x2000),"consistent: contradicting destination state");}
-  {auto bad=barriers;bad[0].Type=D3D12_RESOURCE_BARRIER_TYPE_ALIASING;bad[0].Aliasing={reinterpret_cast<ID3D12Resource *>(0x1000ULL),nullptr};
-   check(!dr::copy_states_consistent(bad,0x1000,0x2000),"consistent: aliasing rejects");}
-  for(unsigned variant=0;variant<5;++variant){auto bad=barriers;
-    if(variant==0)bad[0].Transition.StateAfter=static_cast<D3D12_RESOURCE_STATES>(0x840);
-    if(variant==1)bad[0].Flags=D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY;
-    if(variant==2)bad[0].Transition.Subresource=0;
-    if(variant==3){bad[0]={};bad[0].Type=D3D12_RESOURCE_BARRIER_TYPE_ALIASING;}
-    if(variant==4)bad[1].Transition.StateAfter=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    check(!dr::copy_states(bad,0x1000,0x2000),"unqualified depth-copy state");}
   auto drawn=barriers;drawn[0].Transition.StateAfter=static_cast<D3D12_RESOURCE_STATES>(0xc0);
   drawn[1].Transition.StateBefore=D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;drawn[1].Transition.StateAfter=D3D12_RESOURCE_STATE_RENDER_TARGET;
-  check(dr::draw_states(drawn,0x1000,0x2000) && !dr::copy_states(drawn,0x1000,0x2000),"draw and copy states remain distinct");
+  check(dr::draw_states(drawn,0x1000,0x2000),"native depth draw states");
   drawn[0].Transition.StateAfter=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-  check(dr::draw_states(drawn,0x1000,0x2000) && !dr::copy_states(drawn,0x1000,0x2000),"pixel-only native depth draw");
+  check(dr::draw_states(drawn,0x1000,0x2000),"pixel-only native depth draw");
   check(!dr::draw_states(std::span(drawn.data(),1),0x1000,0x2000),"unknown draw destination");
   check(!dr::draw_states(std::span(drawn.data()+1,1),0x1000,0x2000),"unknown draw source");
   check(!dr::draw_states(drawn,0x1000,0x1000),"draw resource alias");

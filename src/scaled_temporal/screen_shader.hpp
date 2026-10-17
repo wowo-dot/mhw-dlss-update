@@ -1,7 +1,10 @@
 #pragma once
 #include "filter_shader.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <span>
+#include <vector>
 
 namespace mhw::scaled_temporal {
 // Generated full-output variant of a single-pass screen filter PS (shader

@@ -836,13 +836,6 @@ void collect(std::uint64_t value) noexcept{Lock lock;if(!fault.load()){
 bool drained() noexcept{Lock lock;if(pending.load()||active.list)return false;
  for(const auto &p:plans)if(p.prepared&&p.handoff.submitted_count()!=p.handoff.count())return false;return true;}
 bool callbacks_idle() noexcept{return pending.load()==0;}
-bool scene_request(unsigned request,const frame_generation::PresentationBuffers &buffers) noexcept {
- (void)request;(void)buffers;return false;
-}
-void scene_present(std::uint64_t frame,std::uint64_t epoch,unsigned reflex_id,unsigned thread,std::uintptr_t swap,
-    const frame_generation::PresentationBuffers &buffers) noexcept {
- (void)frame;(void)epoch;(void)reflex_id;(void)thread;(void)swap;(void)buffers;
-}
 bool abandon() noexcept{
  Lock lock;if(accepting.load()||pending.load())return false;
  // Never report unresolved recordings as submitted/completed or release pins.

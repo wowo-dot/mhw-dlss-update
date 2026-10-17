@@ -88,11 +88,6 @@ std::uint64_t native_queue(std::uintptr_t q,std::uintptr_t context,std::uintptr_
 std::uint64_t native_jitter(std::uintptr_t,std::uintptr_t,std::uintptr_t,std::uintptr_t){++jitter_calls;return answer;}
 std::uint64_t native_frame(std::uintptr_t cam,std::uintptr_t context,std::uintptr_t incoming,std::uintptr_t display){
     check(cam==camera&&context==ctx&&incoming==view&&display==0,"camera ABI");
-    check(aa::owns_projection(ctx,view)==(aa::frame_owned&&aa::requested.load()&&!aa::fault.load()),"projection requires owned frame");
-    check(!aa::owns_projection(worker_ctx,view)&&!aa::owns_projection(ctx,other_view),"projection scope rejects foreign identity");
-    bool foreign_projection=true;
-    std::thread projection_worker([&]{foreign_projection=aa::owns_projection(ctx,view);});projection_worker.join();
-    check(!foreign_projection,"projection ownership is thread local");
     check(activation_table_fixture(table,ctx)==(choice&1)&&activation_sharpen_fixture(unit,ctx)==1,"outer frame alone grants no comparison authority");
     put(ctx+0x1d0,action==4?other_view:(action==5?std::uintptr_t{}:view));
     put(queue+0x39,static_cast<unsigned char>(1));put(queue+0x3c,0U);
@@ -107,7 +102,7 @@ std::uint64_t native_frame(std::uintptr_t cam,std::uintptr_t context,std::uintpt
     if(action==2){choice=3;put(table+0xe9e4,static_cast<std::uint16_t>(0x101));}
     return reinterpret_cast<Call>(mhw_aa_queue_entry)(queue,ctx,view,0x12345678);
 }
-void run(){check(!aa::owns_projection(ctx,view),"no projection ownership before entry");check(reinterpret_cast<Call>(mhw_aa_frame_entry)(camera,ctx,view,0)==answer,"original queue/frame return preserved");check(aa::drained()&&!aa::queued_taa&&!mhw_aa_thread,"all scopes drain");check(!aa::owns_projection(ctx,view),"no projection ownership after return");}
+void run(){check(reinterpret_cast<Call>(mhw_aa_frame_entry)(camera,ctx,view,0)==answer,"original queue/frame return preserved");check(aa::drained()&&!aa::queued_taa&&!mhw_aa_thread,"all scopes drain");}
 void exception_frame(unsigned expected_fault){bool caught=false;
     __try{reinterpret_cast<Call>(mhw_aa_frame_entry)(camera,ctx,view,0);}
     __except(GetExceptionCode()==0xe0424242?EXCEPTION_EXECUTE_HANDLER:EXCEPTION_CONTINUE_SEARCH){caught=true;}

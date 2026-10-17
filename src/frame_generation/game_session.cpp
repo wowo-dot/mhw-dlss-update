@@ -385,7 +385,6 @@ struct Wanted {
     sl::DLSSGMode mode{};
     unsigned generated{}, target{};
     bool fallback{};  // dynamic asked for, the fixed multiplier used
-    bool operator==(const Wanted &) const = default;
 };
 Wanted wanted_options(Session &s) {
     read_state_once(s);

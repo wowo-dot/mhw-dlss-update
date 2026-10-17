@@ -19,5 +19,4 @@ struct ShaderRecipe {
 };
 // CPU request metadata only. A descriptor address is not a typed view description.
 bool shader_recipe(const Reader &,const Snapshot &,ShaderRecipe &);
-bool compute_dxbc(const std::byte *,unsigned) noexcept;
 }

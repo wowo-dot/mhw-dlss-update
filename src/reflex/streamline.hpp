@@ -48,22 +48,14 @@ public:
     // Off is also used to suspend interpolation while retaining SDK routing.
     // retain keeps FG resources allocated across Off (no re-enable stutter).
     sl::Result frame_generation_off(const sl::ViewportHandle& viewport, bool retain = false) const;
-    // Ordinary FG only: one generated frame. Caller must qualify support,
-    // tag the matching frame's inputs and retain them until SDK consumption.
-    sl::Result frame_generation_ordinary(const sl::ViewportHandle& viewport, bool retain = false) const;
-    // FG On with a caller-qualified generated-frame count (1 = ordinary).
-    // Valid while On to change the count; same tagging contract as above.
-    sl::Result frame_generation_generate(const sl::ViewportHandle& viewport, unsigned generated_frames,
-                                         bool retain = false) const;
-    // FG in `mode`, same tagging contract: eOn shows `generated_frames`; eAuto
+    // FG in `mode`. The caller qualifies support, tags the matching frame's
+    // inputs and retains them until SDK consumption. eOn shows `generated_frames`; eAuto
     // too, but DLSS-G pauses it when the game would run faster without; eDynamic
     // picks the count itself toward `target_fps` (0: the display's refresh rate)
     // and needs DLSSGState::bIsDynamicMFGSupported (the caller checks it).
     sl::Result frame_generation_mode(const sl::ViewportHandle& viewport, sl::DLSSGMode mode, unsigned generated_frames,
                                      float target_fps, bool retain = false) const;
-    // Fixed-count MFG only, bounded by this viewport's reported capability.
     // State and option calls must run on the serialized presentation owner.
-    sl::Result frame_generation_multi(const sl::ViewportHandle& viewport, unsigned generated_frames) const;
     sl::Result frame_generation_state(const sl::ViewportHandle& viewport, sl::DLSSGState& value) const;
     sl::Result constants(const sl::Constants&, const sl::FrameToken&, const sl::ViewportHandle&) const;
     sl::Result tags(const sl::FrameToken&, const sl::ViewportHandle&, const sl::ResourceTag*, unsigned count) const;

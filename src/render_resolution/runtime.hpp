@@ -48,7 +48,6 @@ bool input_stamp(std::uintptr_t view,InputStamp &) noexcept;
 // noted as for scene_changed(); rebase() then resumes on the new scene.
 // Unlike stop(), reversible. No effect before install, after a fault or stop.
 void yield() noexcept;
-bool yielded_now() noexcept;
 // No override is requested and the render thread's last visit restored any
 // owned value (after yield() or stop(); before install). The game's own scale
 // setters then cannot race the restore. Any thread.

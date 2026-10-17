@@ -708,16 +708,6 @@ HRESULT WINAPI device_hook(IUnknown* adapter, D3D_FEATURE_LEVEL level, REFIID ii
     }
     SetLastError(error); return result;
 }
-std::filesystem::path path_setting(const std::filesystem::path& file) {
-    require(std::filesystem::file_size(file) > 0 && std::filesystem::file_size(file) <= 4096, "configuration-size");
-    std::ifstream in(file, std::ios::binary); std::string value; std::getline(in, value);
-    if (!value.empty() && value.back() == '\r') value.pop_back();
-    const auto count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    require(count > 0, "configuration-utf8"); std::wstring wide(static_cast<std::size_t>(count), L'\0');
-    require(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), wide.data(), count) == count, "configuration-utf8");
-    const std::filesystem::path path(wide); require(path.is_absolute() && std::filesystem::is_directory(path), "configuration-directory");
-    return std::filesystem::canonical(path);
-}
 bool clean_hooks() noexcept {
     accepting.store(false); bool ok = true;
     for (unsigned i = 0; i < targets.size(); ++i)
@@ -790,35 +780,6 @@ void load_creation_api(unsigned kind, const wchar_t* name, const char* symbol) {
     log << "{\"event\":\"api_module\",\"kind\":" << kind << ",\"was_loaded\":" << was_loaded
         << ",\"loaded_from_system32\":true,\"module\":" << reinterpret_cast<std::uintptr_t>(creation_modules[kind])
         << ",\"target\":" << reinterpret_cast<std::uintptr_t>(targets[kind]) << "}\n" << std::flush;
-}
-std::atomic<bool> boot_monitor_stop{};
-// Diagnostic boot timeline: text table 0 (message table array at host
-// +0x5012DC0), the UI object's state at [[engine+0xAF800]+0x51ACC], and the
-// swap-chain view, sampled every 20 ms and written when anything changes.
-void boot_monitor(std::filesystem::path path) noexcept {
-    try {
-        std::ofstream out(path, std::ios::binary); if (!out) return;
-        const auto began = GetTickCount64();
-        std::uint64_t last_key = ~0ULL; std::uintptr_t last_table{}, last_ui{};
-        while (!boot_monitor_stop.load() && GetTickCount64() - began < 180000) {
-            std::uintptr_t table{}, engine{}, ui{}; unsigned state = ~0U, state_b = ~0U;
-            pb::read(image + 0x5012DC0, table);
-            if (pb::read(image + 0x51c4148, engine) && engine && pb::read(engine + 0xAF800, ui) && ui) {
-                pb::read(ui + 0x51ACC, state); pb::read(ui + 0x51AB0, state_b);
-            }
-            mhw::frame_generation::PresentationBuffers b{}; mhw::reflex::scene_presentation_buffers(b);
-            const std::uint64_t key = (std::uint64_t(state) << 32) ^ (std::uint64_t(state_b) << 16) ^ (table != 0) ^
-                (b.generation << 8) ^ (b.present_other << 20) ^ (std::uint64_t(ui != 0) << 1);
-            if (key != last_key || (table != 0) != (last_table != 0) || ui != last_ui) {
-                out << "{\"t_ms\":" << GetTickCount64() - began << ",\"table0\":" << (table != 0) << ",\"ui\":" << (ui != 0)
-                    << ",\"state\":" << static_cast<int>(state) << ",\"state_b\":" << static_cast<int>(state_b)
-                    << ",\"generation\":" << b.generation << ",\"present_calls\":" << b.present_calls
-                    << ",\"present_other\":" << b.present_other << "}\n" << std::flush;
-                last_key = key; last_table = table; last_ui = ui;
-            }
-            Sleep(20);
-        }
-    } catch (...) {}
 }
 // Swap-chain view the host received through the routed calls (diagnostic).
 int fg_buffers_json(char* out, int size) noexcept {
@@ -1388,49 +1349,6 @@ DWORD WINAPI worker(void*) noexcept {
             }
         }
         return 0;
-        const bool temporal_clean=finish_temporal();
-        std::lock_guard lock(sdk_mutex);
-        const bool frames_clean=!live_frames || live_frames->stop();
-        const auto frame_stats=live_frames?live_frames->snapshot():mhw::reflex::LiveFrameStats{};
-        if(live_frames) { live_frames->write(log);frames_written=true; }
-        const bool latency_routed=!presentation || presentation->stop();
-        if(initialized && frames_clean && latency_routed) {
-            if(mode_change_attempted)require(driver_mode("stopped_on",true),"driver-On-not-retained");
-            sl::ReflexState state{};api(sdk.state(state),"final-Reflex-state");
-            unsigned reports{};
-            for(const auto& f:state.frameReport) {
-                if(!f.simStartTime || !f.simEndTime || !f.renderSubmitStartTime || !f.renderSubmitEndTime || !f.presentStartTime || !f.presentEndTime)continue;
-                ++reports;
-                log << "{\"event\":\"driver_frame\",\"frame\":" << f.frameID << ",\"simulation_start_us\":" << f.simStartTime
-                    << ",\"simulation_end_us\":" << f.simEndTime << ",\"submit_start_us\":" << f.renderSubmitStartTime
-                    << ",\"submit_end_us\":" << f.renderSubmitEndTime << ",\"present_start_us\":" << f.presentStartTime << ",\"present_end_us\":" << f.presentEndTime << "}\n";
-            }
-            log << "{\"event\":\"driver_state\",\"mode\":" << (mode_change_attempted?1:0) << ",\"mode_source\":\"requested\",\"low_latency_available\":" << state.lowLatencyAvailable
-                << ",\"reports_available\":" << state.latencyReportAvailable << ",\"complete_reports\":" << reports << "}\n" << std::flush;
-        }
-        // Quiesce routes before the final state sample or vendor shutdown.
-        const bool routes_clean = !presentation || presentation->stop();
-        const auto stats = presentation ? presentation->snapshot() : mhw::reflex::PresentationStats{};
-        const bool sdk_clean = close_sdk();
-        log << "{\"event\":\"sdk_shutdown\",\"passed\":" << sdk_clean << ",\"after_presentation_stop\":true}\n";
-        log << "{\"event\":\"finished\",\"startup_passed\":" << success << ",\"hooks_restored\":" << (hooks_clean && routes_clean)
-            << ",\"sdk_shutdown_passed\":" << sdk_clean << ",\"qualified_factories\":" << qualified_factories
-            << ",\"qualified_devices\":" << qualified_devices << ",\"pending_calls\":" << active.load() << ",\"swapchain_observed\":" << swap_observed
-            << ",\"swapchain_proxy_installed\":false,\"game_reflex_active\":"
-            << (mode_change_attempted && !mode_restored)
-            << ",\"presents\":" << stats.presents
-            << ",\"native_presents\":" << stats.native_presents << ",\"queues\":" << stats.queues << ",\"swapchains\":" << stats.swapchains
-            << ",\"resizes\":" << stats.resizes << ",\"faults\":" << stats.faults << ",\"presentation_pending\":" << stats.pending_calls
-            << ",\"pins_released\":" << sdk_clean
-            << ",\"temporal_drained\":" << temporal_clean
-            << ",\"frame_hooks_restored\":" << frames_clean << ",\"frame_calls\":" << frame_stats.completed
-            << ",\"sleep_calls\":" << frame_stats.sleeps << ",\"markers\":" << frame_stats.markers
-            << ",\"frame_faults\":" << frame_stats.faults
-            << ",\"mode_restored_off\":" << mode_restored
-            << "}\n" << std::flush;
-        return success && hooks_clean && routes_clean && frames_clean && sdk_clean && swap_observed && frame_stats.completed &&
-            !frame_stats.faults && !frame_stats.frame_active && frame_stats.tokens==frame_stats.completed &&
-            frame_stats.sleeps==frame_stats.completed && frame_stats.markers==frame_stats.completed*6 && !stats.faults && log ? 0 : 2;
     } catch (const std::exception& e) {
         try { startup_failure = e.what(); } catch (...) {}
         mhw::alpha::status::worker_failed(e.what());
@@ -1568,7 +1486,6 @@ extern "C" __declspec(dllexport) al_result_t AL_CALL al_plugin_init(const al_api
 }
 namespace mhw::reflex {
 void request_mode(unsigned mode) noexcept { if(mode<=2)reflex_requested.store(mode); }
-unsigned applied_mode() noexcept { return reflex_applied.load(); }
 bool frame_generation_loaded() noexcept { return fg_loaded_state.load(); }
 }
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
