@@ -103,11 +103,6 @@ public:
     // Copies lifecycle events recorded since the last call (oldest first) and
     // the number lost to the bounded buffer. Never waits for the route mutex.
     unsigned drain_lifecycle(std::array<LifecycleEvent, lifecycle_capacity>& out, std::uint64_t& dropped) noexcept;
-    // Opt-in CPU metadata only, configured before install. No added hooks,
-    // resource references, rendering calls or FG plugin initialization.
-    void ownership(std::uintptr_t image, unsigned image_bytes);
-    void ownership_running();
-    void write_ownership(std::ostream&) const;
     PresentationStats snapshot() const;
     // v0.27.4: the game's next ResizeBuffers on the identity chain makes the
     // real chain again with (`frame_generation`) or without DLSS-G
@@ -133,9 +128,9 @@ private:
     // no destructor that could call the SDK under process-detach loader lock.
     State* state_;
 };
-// Defined only in the scene-diagnostic library variant (mhw_fg_reflex_presentation). Copies the routed host chain's
-// GetBuffer labels, last host index and Present-entry index under a separate
-// lock that never waits for the route mutex. False before construction.
+// The routed host chain's GetBuffer labels, last host index and Present-entry
+// index (the crash log writes them), copied under a separate lock that never
+// waits for the route mutex. False before construction.
 bool scene_presentation_buffers(frame_generation::PresentationBuffers&) noexcept;
 // AL: the presentation detours, each with the storage AL fills with its
 // continuation; registered at PRE_MAIN with claim_presentation. Factory and
