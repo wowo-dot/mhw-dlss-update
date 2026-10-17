@@ -4,7 +4,7 @@ namespace mhw::scaled_temporal {
 continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &pass,
     temporal_present::Output &recovery,ID3D12GraphicsCommandList *list,ID3D12Resource *output,
     const temporal_present::Bindings &bindings,dlss_sdk::HistoryFrame frame,bool reset,float frame_ms,
-    bool evaluate,bool capture,dlss_sdk::RecordFault fault) noexcept {
+    bool evaluate) noexcept {
     using continuous_dlaa::ResolveOutcome;
     continuous_dlaa::ResolveResult result;
     const auto g=pass.geometry();
@@ -19,7 +19,7 @@ continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &pass,
         recovery.prepare_record(list);
     } catch(...) {return result;}
     if(evaluate){
-        const bool success=pass.record_continuous(list,output,bindings,frame,reset,frame_ms,capture,fault);
+        const bool success=pass.record(list,output,bindings,frame,reset,frame_ms);
         result.sdk=pass.last_attempt();
         if(success&&result.sdk.success&&result.sdk.native_output_written&&result.sdk.bindings_restored){
             result.outcome=ResolveOutcome::reconstructed;return result;

@@ -145,7 +145,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested,bool scene) noexcept{
         }
         const dlss_sdk::Geometry geometry{{found.width,found.height},{planned.render.width,planned.render.height},{found.width,found.height},mode};
         auto fresh=std::make_unique<dlss_sdk::InlineFrame>(device,geometry,std::array<ID3D12Resource *,3>{copies[0].Get(),copies[1].Get(),copies[2].Get()},
-            sdk_runtime,*initialization,true,true,false,gpu_memory::room({memory.budget,memory.usage}));
+            sdk_runtime,*initialization,gpu_memory::room({memory.budget,memory.usage}));
         auto fresh_spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{found.width,found.height,
             planned.render.width,planned.render.height},found.width,found.height,true,true);
         if(!sr::resize(planned.render.width,planned.render.height,found.width,found.height,r.reason))throw std::runtime_error(r.reason);

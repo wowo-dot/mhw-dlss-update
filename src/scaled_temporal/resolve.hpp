@@ -14,5 +14,5 @@ namespace mhw::scaled_temporal {
 continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &,
     temporal_present::Output &recovery, ID3D12GraphicsCommandList *, ID3D12Resource *output,
     const temporal_present::Bindings &, dlss_sdk::HistoryFrame, bool reset, float frame_ms,
-    bool evaluate=true, bool capture=false, dlss_sdk::RecordFault=dlss_sdk::RecordFault::none) noexcept;
+    bool evaluate=true) noexcept;
 }

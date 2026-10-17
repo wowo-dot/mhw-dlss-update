@@ -80,12 +80,9 @@ add_library(mhw_dlss_inline STATIC src/dlss_sdk/inline.cpp)
 mhw_library(mhw_dlss_inline)
 target_include_directories(mhw_dlss_inline SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_link_libraries(mhw_dlss_inline PUBLIC mhw_temporal_present mhw_dlss_sdk_live mhw_astera_hooks)
-add_library(mhw_native_taa_resolve STATIC src/continuous_dlaa/resolve.cpp)
-mhw_library(mhw_native_taa_resolve)
-target_link_libraries(mhw_native_taa_resolve PUBLIC mhw_dlss_inline)
 add_library(mhw_scaled_resolve STATIC src/scaled_temporal/resolve.cpp)
 mhw_library(mhw_scaled_resolve)
-target_link_libraries(mhw_scaled_resolve PUBLIC mhw_native_taa_resolve)
+target_link_libraries(mhw_scaled_resolve PUBLIC mhw_dlss_inline)
 
 # NGX start-up inside the game's own NGX init; the game's DLSS 1 declined.
 add_library(mhw_ngx_startup STATIC src/ngx_startup/startup.cpp src/ngx_startup/worker.cpp src/projection_binding/identity.cpp
@@ -141,7 +138,7 @@ target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:c
 target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe)
 target_compile_definitions(mhw_dlss_alpha PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_link_libraries(mhw_dlss_alpha PRIVATE bcrypt d3d12 dxgi dxguid
-    mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
+    mhw_ngx_startup mhw_temporal_state mhw_dlss_inline mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
 # The map file names this DLL's functions in crash stacks and stack-sampler
 # profiles (tools/profile_report.py; keep it with each handed-out build).
 target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
@@ -198,7 +195,7 @@ if(BUILD_TESTING)
     mhw_test(continuous_runtime_tests SOURCES tests/continuous_runtime_tests.cpp ${continuous_runtime_sources} src/continuous_dlaa/activation.cpp
         src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp tests/fake_astera.cpp ${temporal_binding_sources} ${binding_common}
         INCLUDES ${binding_includes} DEFINES MHW_TEMPORAL_FIXTURE
-        LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_native_taa_resolve NO_TEST)
+        LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_dlss_inline NO_TEST)
     foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate
             pending-retirement released-lists held-lists unfiltered-copy reconstruction state-trace native-state-trace
             native-state-admission depth-eligibility depth-destination shutdown-success shutdown-partial

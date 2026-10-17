@@ -86,7 +86,7 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         auto mode=configured_mode;
         if(mode==dlss_sdk::ReconstructionMode::dlaa&&(render_width()!=runtime.width||render_height()!=runtime.height))mode=dlss_sdk::ReconstructionMode::quality;
         scaled_geometry={{runtime.width,runtime.height},{render_width(),render_height()},{runtime.width,runtime.height},mode};
-        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,true,true,false,byte_limit);
+        pass=std::make_unique<dlss_sdk::InlineFrame>(device,scaled_geometry,std::array<ID3D12Resource *,3>{raw[0].Get(),raw[1].Get(),raw[2].Get()},sdk,*initialization,byte_limit);
         spatial=std::make_unique<temporal_present::Output>(device,temporal_present::SpatialSource{runtime.width,runtime.height,render_width(),render_height()},runtime.width,runtime.height,true,true);
         if(FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence))))throw std::runtime_error("continuous fence");
         if(!unfiltered_lifetime.initialize(device))throw std::runtime_error("unfiltered lifetime fence");

@@ -375,3 +375,15 @@ Behaviour stays the same; the log fields stay.
     the plugin: every code and comment line moved apart from the `inline`
     prefixes, declarations and namespace lines (`DEPTH_NOTE` became the
     function it called); the log fields are unchanged.
+  - the DLSS frame (`dlss_sdk::InlineFrame`) keeps the one mode the
+    runtime builds: continuous, caller-retained, no captures. The one-shot
+    `record()`, the readback captures (`Readback`, `collect()`), `finish()`
+    and the GPU fixture's fault points (`RecordFault`) are gone, and with
+    them `continuous_dlaa::record_resolve` (`resolve.cpp`, the unscaled
+    resolve; nothing called it). The frame records the same commands. Its
+    state in the log drops four constant fields (`continuous`,
+    `caller_retained`, `captures`, `collected`).
+  - The linker oracle (step 3) cannot see a static-library object nothing
+    references, since the linker never loads it. Comparing each library's
+    objects with the DLL's map file finds two: `continuous_dlaa/resolve.cpp`
+    and `dlss_sdk/live.cpp` (the bounded evaluation).

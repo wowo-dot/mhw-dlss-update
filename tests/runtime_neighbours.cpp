@@ -74,7 +74,7 @@ void write_summary(std::ostream &){}
 
 namespace mhw::scaled_temporal {
 continuous_dlaa::ResolveResult record_resolve(dlss_sdk::InlineFrame &,temporal_present::Output &,ID3D12GraphicsCommandList *,
-    ID3D12Resource *,const temporal_present::Bindings &,dlss_sdk::HistoryFrame,bool,float,bool,bool,dlss_sdk::RecordFault) noexcept {return {};}
+    ID3D12Resource *,const temporal_present::Bindings &,dlss_sdk::HistoryFrame,bool,float,bool) noexcept {return {};}
 }
 
 namespace mhw::continuous_dlaa::game_options {
