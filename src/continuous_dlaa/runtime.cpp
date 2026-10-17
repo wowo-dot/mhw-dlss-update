@@ -102,6 +102,18 @@ std::array<std::uintptr_t,hook_count> targets{};std::array<void *,hook_count> or
 // finish, as the MinHook patches did, and otherwise continue straight on.
 constexpr unsigned first_api_hook=5;
 std::atomic<bool> chain_live{};
+// v0.29.0: hooks 0-4 (game functions) on al.hooks under AL (astera::OwnedHook),
+// first in their chains (the stubs read their caller); live as each goes in,
+// passing everything on until `accepting`. Patterns: each function's first 16
+// original bytes (clean image; the gates in qualified() cover them).
+constexpr std::array<const char *,first_api_hook> hook_names{"mhw_dlss DLSS:TaaProducer","mhw_dlss DLSS:DispatchExecutor",
+    "mhw_dlss DLSS:DepthProducer","mhw_dlss DLSS:CopyExecutor","mhw_dlss DLSS:ViewportProjection"};
+constexpr std::array<const char *,first_api_hook> hook_patterns{"48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41",
+    "48 89 5C 24 08 4C 89 44 24 18 48 89 54 24 10 55","4C 89 44 24 18 55 56 57 41 55 41 56 48 8B EC 48",
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57","40 55 53 57 48 8D AC 24 60 FE FF FF 48 81 EC A0"};
+static_assert([]{for(const auto *p:hook_patterns)if(!astera::valid_pattern<16>(p))return false;return true;}(),
+              "each runtime pattern is its function's first 16 bytes");
+std::array<astera::OwnedHook,first_api_hook> game_hooks{};
 // native: producer, consumer, depth producer, depth consumer, jitter;
 // D3D: Reset, Close, ExecuteCommandLists, ResourceBarrier, Dispatch, CopyResource.
 using BarrierFn=void(WINAPI *)(ID3D12GraphicsCommandList *,UINT,const D3D12_RESOURCE_BARRIER *);
@@ -1423,14 +1435,25 @@ bool install(std::uintptr_t image,const std::filesystem::path &sdk,std::string &
         if(!obs::install(device,pb::system_method,reason))return false;
 #endif
         for(unsigned i=0;i<targets.size();++i){
-            if(astera::active()&&i>=first_api_hook){if(!originals[i])throw std::runtime_error("continuous AL chain");enabled[i]=true;continue;}
+            if(i<first_api_hook){
+                auto &h=game_hooks[i];h.name=hook_names[i];h.pattern=hook_patterns[i];h.target=reinterpret_cast<void *>(targets[i]);
+                if(!astera::hook_owned(h,detours[i],&originals[i]))throw std::runtime_error("continuous hook creation");
+                enabled[i]=true;continue;
+            }
+            if(astera::active()){if(!originals[i])throw std::runtime_error("continuous AL chain");enabled[i]=true;continue;}
+            // Research builds without AL: the D3D12 methods through MinHook, applied below.
             if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK)throw std::runtime_error("continuous hook creation");
             if(MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK)throw std::runtime_error("continuous enable queue");enabled[i]=true;
         }
+#ifdef MHW_CONTINUOUS_SCALED
+        // Each hook is live as it goes in (al.hooks): the player's Off at start
+        // must hold before activation can own a camera frame.
+        activation::yield(off_at_start);
+#endif
         if(!activation::prepare(image,cfg.renderer,reason))throw std::runtime_error(reason);
         obs::begin();
 #ifdef MHW_CONTINUOUS_SCALED
-        if(off_at_start){activation::yield(true);off.store(true);}
+        if(off_at_start)off.store(true);
         else sr::begin();
         accepting.store(!off_at_start);
 #else
@@ -1477,21 +1500,23 @@ void finish() noexcept {
         while(!abandoned&&GetTickCount64()<deadline+6000){Sleep(1);abandoned=sr::abandon();}
         if(!abandoned)return;
     }
-    const bool route_disable_queued=sr::queue_disable();
-    if(!route_disable_queued)fail(45);
+    // The game hooks come out at once (OwnedHook); without AL the D3D12 method
+    // hooks are queued and applied together below.
+    const bool route_unhooked=sr::unhook();
+    if(!route_unhooked)fail(45);
 #endif
-    if(!activation::queue_disable())fail(25);
+    if(!activation::unhook())fail(25);
     std::array<bool,targets.size()> disable_queued{};
     for(unsigned i=0;i<targets.size();++i)if(enabled[i]){
-        disable_queued[i]=(astera::active()&&i>=first_api_hook)||MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
+        disable_queued[i]=i<first_api_hook?astera::unhook_owned(game_hooks[i]):
+            astera::active()||MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
         if(!disable_queued[i])fail(25);
     }
     if(MH_ApplyQueued()==MH_OK){
         if(astera::active())chain_live.store(false,std::memory_order_release);
         for(unsigned i=0;i<targets.size();++i)if(disable_queued[i])enabled[i]=false;
-        activation::disabled(true);
 #ifdef MHW_CONTINUOUS_SCALED
-        if(route_disable_queued)sr::disabled(true);
+        if(route_unhooked)sr::disabled(true);
 #endif
     }else fail(26);
     // A forwarded callback may have entered before the patch was removed.

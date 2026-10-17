@@ -258,15 +258,20 @@ void shutdown_fixture(){
     check(MH_CreateHook(reinterpret_cast<void *>(code.p),reinterpret_cast<void *>(shutdown_detour),&trampoline)==MH_OK&&
           MH_EnableHook(reinterpret_cast<void *>(code.p))==MH_OK,"install owned shutdown hook");
     check(reinterpret_cast<unsigned(*)()>(code.p)()==99,"owned detour active");
-    cd::targets[0]=code.p;cd::enabled[0]=true;
+    // The runtime's own game hooks (OwnedHook; MinHook without AL).
+    const auto own=[](unsigned i,std::uintptr_t target){
+        cd::targets[i]=target;cd::enabled[i]=true;auto &h=cd::game_hooks[i];
+        h.target=reinterpret_cast<void *>(target);h.minhook=true;h.live=true;
+    };
+    own(0,code.p);
     const bool partial=mode=="shutdown-partial";
-    if(partial){cd::targets[1]=code.p+32;cd::enabled[1]=true;} // Deliberately unregistered target.
+    if(partial)own(1,code.p+32); // Deliberately unregistered target.
     cd::accepting=true;cd::finish();
-    check(!cd::enabled[0]&&cd::enabled[1]==partial&&cd::fault==(partial?25U:0U),"shutdown records only successful queued removals");
+    check(!cd::enabled[0]&&cd::enabled[1]==partial&&cd::fault==(partial?25U:0U),"shutdown records only successful removals");
     check(std::memcmp(reinterpret_cast<void *>(code.p),original.data(),original.size())==0&&
           reinterpret_cast<unsigned(*)()>(code.p)()==42,"native bytes and behavior restored");
     check(MH_Uninitialize()==MH_OK,"shutdown fixture cleanup");
-    std::cout<<"Shutdown queue/apply accounting and actual hook restoration passed: "<<mode<<'\n';
+    std::cout<<"Shutdown removal accounting and actual hook restoration passed: "<<mode<<'\n';
 }
 int main(int argc,char **argv){
     mode=argc==2?argv[1]:"continuous";

@@ -1,5 +1,6 @@
 // Exercise production ASM and activation against owned native-shaped objects.
 #include "../src/continuous_dlaa/activation.cpp"
+#include <MinHook.h>
 #include <algorithm>
 #include <iostream>
 #include <cstdlib>
@@ -185,29 +186,29 @@ int main(){
     aa::fault=0;aa::requested=true;action=6;exception_frame(5);auto taa_exception=receipt();
     aa::fault=0;aa::requested=true;action=10;exception_frame(7);auto queue_exception=receipt();
     aa::fault=0;aa::requested=true;action=9;run();check(aa::fault==5,"reentrant Execute latches fault");auto reentrant=receipt();
-    aa::stop();aa::targets[5]=reinterpret_cast<std::uintptr_t>(activation_table_site);
-    aa::targets[6]=reinterpret_cast<std::uintptr_t>(activation_sharpen_site);aa::enabled[5]=aa::enabled[6]=true;
-    // A callback can re-enter after a drain check and before queued removal.
+    // The fixture's leaf hooks as activation's own (OwnedHook, MinHook without AL).
+    const auto own_leaves=[&]{
+        aa::hooks[5].target=reinterpret_cast<void *>(activation_table_site);aa::hooks[6].target=reinterpret_cast<void *>(activation_sharpen_site);
+        for(unsigned i:{5U,6U}){aa::hooks[i].minhook=true;aa::hooks[i].live=true;}
+    };
+    aa::stop();own_leaves();
+    // A callback can re-enter after a drain check and before removal.
     // It forwards after stop; no owned camera scope remains.
     aa::pending=1;
-    check(aa::queue_disable(),"forwarding callback does not block stopped hook removal");
-    aa::disabled(false);check(aa::enabled[5]&&aa::enabled[6],"failed apply cannot claim removal");
-    check(MH_ApplyQueued()==MH_OK,"apply stopped activation removal");aa::disabled(true);
-    check(!aa::enabled[5]&&!aa::enabled[6],"queued activation hooks retired");aa::pending=0;
+    check(aa::unhook(),"forwarding callback does not block stopped hook removal");
+    check(!aa::hooks[5].live&&!aa::hooks[6].live,"stopped activation hooks taken out");aa::pending=0;
     check(MH_EnableHook(reinterpret_cast<void *>(activation_table_site))==MH_OK&&MH_EnableHook(reinterpret_cast<void *>(activation_sharpen_site))==MH_OK,"reenable fixture hooks");
-    aa::enabled[5]=aa::enabled[6]=true;
+    own_leaves();
     InterlockedExchange64(&mhw_aa_context,static_cast<LONG64>(ctx));
-    check(!aa::queue_disable(),"owned camera scope must finish before removal");
-    check(MH_ApplyQueued()==MH_OK,"unrelated empty apply succeeds");aa::disabled(true);
-    check(aa::enabled[5]&&aa::enabled[6],"empty apply cannot falsely retire unqueued hooks");
+    check(!aa::unhook(),"owned camera scope must finish before removal");
+    check(aa::hooks[5].live&&aa::hooks[6].live,"hooks stay in while a camera scope is owned");
     InterlockedExchange64(&mhw_aa_context,0);
-    aa::requested=true;check(!aa::queue_disable(),"live activation cannot be removed");aa::stop();
-    // One invalid target must not make successfully queued targets look live,
-    // or make the unqueued target look disabled.
-    aa::enabled[0]=true;aa::targets[0]=image.p+0x100;
-    check(!aa::queue_disable(),"partial queue failure reported");
-    check(MH_ApplyQueued()==MH_OK,"apply partial queue");aa::disabled(true);
-    check(aa::enabled[0]&&!aa::enabled[5]&&!aa::enabled[6],"per-hook removal accounting");
+    aa::requested=true;check(!aa::unhook(),"live activation cannot be removed");aa::stop();
+    // One hook that cannot come out must not keep the others in, nor look out itself.
+    aa::hooks[0].target=reinterpret_cast<void *>(image.p+0x100);aa::hooks[0].minhook=true;aa::hooks[0].live=true;
+    check(!aa::unhook(),"partial removal failure reported");
+    check(aa::hooks[0].live&&!aa::hooks[5].live&&!aa::hooks[6].live,"per-hook removal accounting");
+    aa::hooks[0].live=false;
     check(MH_DisableHook(MH_ALL_HOOKS)==MH_OK&&MH_Uninitialize()==MH_OK,"fixture hooks removed");
     check(completions==expected_completions,"queue completion counts include nested, stop and exception cases");
     for(const auto &item:{std::pair{"healthy",healthy},std::pair{"latched",latched},std::pair{"exception",frame_exception},std::pair{"taa-exception",taa_exception},std::pair{"queue-exception",queue_exception},std::pair{"reentrant",reentrant}})

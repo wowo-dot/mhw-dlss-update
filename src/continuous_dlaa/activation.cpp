@@ -2,9 +2,9 @@
 #ifdef MHW_CONTINUOUS_SCALED
 #include "../scaled_temporal/stream_route.hpp"
 #endif
+#include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <windows.h>
-#include <MinHook.h>
 #include <atomic>
 #include <array>
 #include <ostream>
@@ -26,10 +26,25 @@ namespace mhw::continuous_dlaa::activation {
 namespace {
 namespace pb=projection_binding;
 std::uintptr_t image{},renderer{};
-std::array<std::uintptr_t,8> targets{};
-std::array<void *,8> originals{};
-std::array<bool,8> enabled{};
-std::array<bool,8> disable_queued{};
+// v0.29.0: the eight hooks on al.hooks under AL (astera::OwnedHook), first in
+// their chains (the stubs read their caller). Patterns: each target's first 16
+// original bytes (clean image; the gates in prepare() cover them). The two
+// leaf sites are TAA2's comparisons inside 0x2392150, mid-function: AL's entry
+// clobbers only r11, which is dead there (docs/architecture.md, section 5).
+struct HookSpec {unsigned rva;const char *name,*pattern;};
+constexpr HookSpec hook_specs[]{
+    {0x228e770,"mhw_dlss AA:CameraDraw","48 89 5C 24 10 48 89 6C 24 18 56 41 54 41 55 41"},
+    {0x2392150,"mhw_dlss AA:Taa2Execute","48 89 54 24 10 55 53 48 8D 6C 24 88 48 81 EC 78"},
+    {0x23931e0,"mhw_dlss AA:Taa2Jitter","48 83 EC 28 48 8B 05 95 12 E3 02 48 8B 90 50 F4"},
+    {0x2596090,"mhw_dlss AA:Jitter1","0F 57 C0 48 8B D1 0F 2E 81 B0 01 00 00 74 5C 83"},
+    {0x25979b0,"mhw_dlss AA:Jitter3","48 83 EC 28 48 8B 15 C5 CA C2 02 48 8B 82 50 F4"},
+    {0x239217d,"mhw_dlss AA:Taa2TableCompare","80 B8 E4 E9 00 00 00 0F 84 39 10 00 00 48 8B 82"},
+    {0x2392f8e,"mhw_dlss AA:Taa2SharpenCompare","80 BB 87 01 00 00 00 4C 8B BC 24 50 01 00 00 4C"},
+    {0x24f1fc0,"mhw_dlss AA:PostQueue","40 55 56 41 55 41 57 48 83 EC 48 C6 41 39 00 4D"}};
+static_assert([]{for(const auto &h:hook_specs)if(!astera::valid_pattern<16>(h.pattern))return false;return true;}(),
+              "each activation pattern is its target's first 16 bytes");
+std::array<astera::OwnedHook,std::size(hook_specs)> hooks{};
+std::array<void *,std::size(hook_specs)> originals{};
 std::atomic<bool> requested{};
 // The player's DLSS Off (yield): the game's own AA runs as without the mod
 // until the mod takes it over again. Read with requested at each use.
@@ -255,18 +270,18 @@ bool prepare(std::uintptr_t host,std::uintptr_t r,std::string &reason){
         {0x25979b0,124,"d390c4d7965f6b3aa683e7324b570eb574f63fe5a0d419daa469aff73de7399a"}};
     for(const auto &g:gates)if(!pb::verify_code(host,g.rva,g.bytes,g.sha)){reason="AA activation code gate";return false;}
     image=host;renderer=r;
-    constexpr std::array<unsigned,8> rvas{0x228e770,0x2392150,0x23931e0,0x2596090,0x25979b0,0x239217d,0x2392f8e,0x24f1fc0};
-    const std::array<void *,8> detours{reinterpret_cast<void *>(mhw_aa_frame_entry),reinterpret_cast<void *>(mhw_aa_taa_entry),
+    const std::array<void *,hooks.size()> detours{reinterpret_cast<void *>(mhw_aa_frame_entry),reinterpret_cast<void *>(mhw_aa_taa_entry),
         reinterpret_cast<void *>(mhw_aa_jitter2_entry),reinterpret_cast<void *>(mhw_aa_jitter1_entry),reinterpret_cast<void *>(mhw_aa_jitter3_entry),
         reinterpret_cast<void *>(mhw_aa_table_entry),reinterpret_cast<void *>(mhw_aa_sharpen_entry),reinterpret_cast<void *>(mhw_aa_queue_entry)};
-    for(unsigned i=0;i<rvas.size();++i){targets[i]=host+rvas[i];
-        if(MH_CreateHook(reinterpret_cast<void *>(targets[i]),detours[i],&originals[i])!=MH_OK||
-           MH_QueueEnableHook(reinterpret_cast<void *>(targets[i]))!=MH_OK){reason="AA activation hook creation";return false;}
-        enabled[i]=true;
-    }
-    mhw_aa_table_original=originals[5];mhw_aa_sharpen_original=originals[6];
+    // Each hook is live as it goes in: the leaf stubs continue with the very
+    // pointers they jump through, and nothing is owned until `requested` below.
     mhw_aa_table_resume=reinterpret_cast<void *>(host+0x2392184);
     mhw_aa_sharpen_resume=reinterpret_cast<void *>(host+0x2392f95);
+    for(unsigned i=0;i<hooks.size();++i){
+        auto &h=hooks[i];h.name=hook_specs[i].name;h.pattern=hook_specs[i].pattern;h.target=reinterpret_cast<void *>(host+hook_specs[i].rva);
+        void **next=i==5?&mhw_aa_table_original:i==6?&mhw_aa_sharpen_original:&originals[i];
+        if(!astera::hook_owned(h,detours[i],next)){reason="AA activation hook creation";return false;}
+    }
     requested=true;return true;
 }
 void stop() noexcept {requested=false;}
@@ -278,23 +293,18 @@ bool owns_projection(std::uintptr_t ctx,std::uintptr_t view) noexcept {
 void latch_failure() noexcept {failure_latched=true;}
 bool drained() noexcept {return !pending.load()&&!context();}
 bool healthy() noexcept {return !fault.load();}
-bool queue_disable() noexcept {
-    disable_queued.fill(false);
+bool unhook() noexcept {
     // After stop, new callbacks only forward. They can re-enter between the
     // parent's drain check and this call, especially during scale restoration.
-    // MinHook can detach their entry points while the pinned DLL/trampolines
-    // remain alive. An owned camera scope must still finish first.
+    // The entry points can be detached while the pinned DLL and the
+    // continuations remain alive. An owned camera scope must still finish first.
     if(requested.load()||context())return false;
-    bool ok=true;for(unsigned i=0;i<targets.size();++i)if(enabled[i]){
-        disable_queued[i]=MH_QueueDisableHook(reinterpret_cast<void *>(targets[i]))==MH_OK;
-        if(!disable_queued[i])ok=false;
-    }
+    bool ok=true;for(auto &h:hooks)ok=astera::unhook_owned(h)&&ok;
     return ok;
 }
-void disabled(bool success) noexcept {if(success)for(unsigned i=0;i<enabled.size();++i)if(disable_queued[i]){enabled[i]=false;disable_queued[i]=false;}}
 void write(std::ostream &out){
     TelemetryLock lock;
-    bool hooks_off=true;for(bool on:enabled)hooks_off=hooks_off&&!on;
+    bool hooks_off=true;for(const auto &h:hooks)hooks_off=hooks_off&&!h.live;
     out<<"{\"schema\":2,\"policy\":\"native-postqueue-preparation-v2\",\"settings_writes\":0,\"layer_flag_writes\":0,\"requested\":"<<requested.load()
        <<",\"yielded\":"<<yielded.load()<<",\"fault\":"<<fault.load()<<",\"pending\":"<<pending.load()<<",\"active_context\":"<<context()<<",\"frames\":"<<owned_frames.load()
        <<",\"taa_visits\":"<<units.load()<<",\"taa_admitted\":"<<admitted.load()<<",\"taa_rejected\":"<<rejected.load()

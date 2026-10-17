@@ -82,7 +82,10 @@ bool idle() noexcept;
 // (their geometry is baked in) and the plans not prepared. begin() then
 // resumes. False (extents unchanged) if not idle or the extents are invalid.
 bool resize(unsigned render_width,unsigned render_height,unsigned width,unsigned height,std::string &reason) noexcept;
-bool queue_disable() noexcept;
+// Takes the game hooks out at once; without AL (research builds) also queues
+// CopyTextureRegion's MinHook disable for the runtime's apply. disabled(true)
+// after that apply marks the route unhooked.
+bool unhook() noexcept;
 void disabled(bool) noexcept;
 // AL: the CopyTextureRegion detour with the storage AL fills; it runs
 // while chains_live(true) (set where the runtime applies the stream hooks).

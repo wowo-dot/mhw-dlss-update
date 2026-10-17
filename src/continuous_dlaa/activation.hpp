@@ -22,8 +22,9 @@ void yield(bool yielded) noexcept;
 void latch_failure() noexcept;
 bool drained() noexcept;
 bool healthy() noexcept;
-bool queue_disable() noexcept;
-void disabled(bool success) noexcept;
+// Takes the hooks out of the game's path (after stop, no owned frame left);
+// false while either holds or a hook could not be taken out.
+bool unhook() noexcept;
 void write(std::ostream &);
 // The game's AA choice (Off, TAA, FXAA, TAA+FXAA) in each owned frame, as a
 // JSON array.

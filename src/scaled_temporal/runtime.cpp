@@ -34,14 +34,11 @@ bool finish() noexcept {
     aa::stop();const auto start=GetTickCount64();
     activation_unhooked=!native_prepared;
     while(!activation_unhooked&&GetTickCount64()-start<2000){
-        if(aa::drained()&&aa::queue_disable()){
-            activation_unhooked=MH_ApplyQueued()==MH_OK;break;
-        }
+        if(aa::drained()&&aa::unhook()){activation_unhooked=true;break;}
         Sleep(1);
     }
     activation_disabled=!native_prepared;
     if(native_prepared&&activation_unhooked){
-        aa::disabled(true);
         // A thread redirected to the trampoline before patch removal can
         // still return through our callback. Observe its retirement separately.
         const auto disabled_at=GetTickCount64();
