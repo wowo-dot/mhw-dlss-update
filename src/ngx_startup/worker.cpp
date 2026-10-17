@@ -1,6 +1,7 @@
 #include "startup.hpp"
 #include "readiness.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../hooking/thread_snapshot.hpp"
 #include <windows.h>
 #include <cwchar>
 #include <filesystem>
@@ -11,6 +12,12 @@
 namespace {
 namespace fs=std::filesystem;namespace pb=mhw::projection_binding;namespace startup=mhw::ngx_startup;
 void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
+// Each startup hook's removal (startup.hpp) and MinHook's thread lists: taken
+// with Windows PSS, or with Toolhelp where PSS failed (v0.28.6).
+std::ostream &removal(std::ostream &log){
+    const auto r=startup::disable_result();const auto threads=al::hooks::thread_snapshot_counts();
+    return log<<"\"disable_result\":["<<r[0]<<','<<r[1]<<','<<r[2]<<','<<r[3]<<"],\"thread_lists\":["<<threads.attempts<<','<<threads.succeeded<<']';
+}
 fs::path preset_output,preset_runtime;  // use_paths() (alpha); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
     bool unreadable=false;
@@ -92,8 +99,7 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
         if(disabled&&startup::settled()&&startup::done())
             while(!(graphics=startup::write_graphics_snapshot())&&GetTickCount64()-display_wait<120000)Sleep(100);
         log<<"{\"event\":\"stopped\",\"transaction_complete\":"<<startup::done()<<",\"capabilities_supported\":"<<startup::supported()
-           <<",\"calls\":"<<startup::calls()<<",\"hook_disabled\":"<<disabled<<",\"disable_result\":["<<startup::disable_result()[0]<<','<<startup::disable_result()[1]
-           <<','<<startup::disable_result()[2]<<','<<startup::disable_result()[3]<<"],\"settled\":"<<startup::settled()
+           <<",\"calls\":"<<startup::calls()<<",\"hook_disabled\":"<<disabled<<',';removal(log)<<",\"settled\":"<<startup::settled()
            <<",\"swapchain_observed\":"<<graphics<<",\"game_dlss\":"<<startup::game_dlss()
            <<",\"dll_pinned\":true,\"trampoline_retained\":true,\"sdk_shutdown_deferred\":true,\"sdk_evaluation_verified\":false}\n"<<std::flush;
         // If a callback is still active, the stream must outlive this worker.
@@ -101,7 +107,7 @@ bool mhw::ngx_startup::run(HMODULE module,const char *version,bool hook_pool_res
         return disabled&&startup::settled()&&startup::done()&&graphics&&startup::borrowed_initialization()!=nullptr;
     }catch(const std::exception &e){
         const bool disabled=startup::disable();
-        if(log)log<<"{\"event\":\"failed\",\"reason\":"<<std::quoted(e.what())<<",\"hook_disabled\":"<<disabled<<"}\n"<<std::flush;
+        if(log){log<<"{\"event\":\"failed\",\"reason\":"<<std::quoted(e.what())<<",\"hook_disabled\":"<<disabled<<',';removal(log)<<"}\n"<<std::flush;}
         if(!disabled||!startup::settled()){while(true)Sleep(1000);}
         return false;
     }

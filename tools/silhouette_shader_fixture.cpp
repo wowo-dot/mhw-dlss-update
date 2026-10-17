@@ -230,20 +230,20 @@ Verdict verify(Fixture &fixture,std::span<const std::byte> original,bool candida
  for(std::size_t j=0;j<native_one.size();++j){require(std::isfinite(native_one[j])&&std::isfinite(adapted_one[j])&&std::abs(native_one[j]-adapted_one[j])<.00001F,"identity shader equivalence");++v.pixel_checks;}
  // At 2x every output pixel equals the native render-size pixel it covers, at
  // the captured hidden-surface intensity and at a player's 0.02 (v0.28.6).
- unsigned lit=0,dark=0,wrong_pixels=0;
- for(const float strength:{.1F,.02F}){fixture.intensity=strength;
+ // Each intensity must exercise the shader on its own: visible and hidden
+ // pixels, and an enlarged viewport without adaptation must differ (position
+ // dependence). The opacity scales with the intensity, so do the thresholds.
+ for(const float strength:{.1F,.02F}){fixture.intensity=strength;const float visible=strength*.1F;unsigned lit=0,dark=0,wrong_pixels=0;
  for(const float z:{.1F,.9F})for(unsigned scenario=0;scenario<2;++scenario){
   auto native=fixture.draw(original,g,false,z,scenario);auto fixed=fixture.draw(original,g,true,z,scenario,true);auto wrong=fixture.draw(original,g,true,z,scenario);
   for(unsigned py=0;py<g.render_height;++py)for(unsigned px=0;px<g.render_width;++px){const auto source=(std::size_t(py)*g.output_width+px)*4;
    for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx){const auto target=(std::size_t(py*2+dy)*g.output_width+px*2+dx)*4;
     for(unsigned c=0;c<4;++c){require(std::isfinite(fixed[target+c])&&std::abs(fixed[target+c]-native[source+c])<.00002F,"2x mask/depth preservation");++v.pixel_checks;}
-    if(fixed[target+3]>.01F)++lit;else ++dark;if(std::abs(wrong[target+3]-fixed[target+3])>.01F)++wrong_pixels;
+    if(fixed[target+3]>visible)++lit;else ++dark;if(std::abs(wrong[target+3]-fixed[target+3])>visible)++wrong_pixels;
    }}
- }}
+ }
+ require(lit>100&&dark>100&&wrong_pixels>100,"oracle and wrong-coordinate negative control");++v.negative_checks;}
  fixture.intensity=.1F;
- // The scenarios must exercise the shader: visible and hidden pixels, and an
- // enlarged viewport without adaptation must differ (position dependence).
- require(lit>100&&dark>100&&wrong_pixels>100,"oracle and wrong-coordinate negative control");++v.negative_checks;
  const auto native_selected=fixture.draw(original,g,false,.1F,0,true,false),native_control=fixture.draw(original,g,false,.1F,0);
  require(native_selected==native_control,"GPU selector native branch exact equivalence");++v.negative_checks;
  return v;

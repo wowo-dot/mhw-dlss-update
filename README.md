@@ -93,7 +93,9 @@ You need:
   - the [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline) 2.12.0
     (`MHW_STREAMLINE_SDK_ROOT`).
 
-MinHook 1.3.4 is fetched at configure time from its pinned commit.
+MinHook 1.3.4 is vendored in `third_party/minhook` (pinned commit `c3fcafdc`), with
+Astera Loader's process-thread adapter in `src/hook.c` (`AL_MINHOOK_PROCESS_THREADS`);
+the build needs no download.
 
 ```powershell
 cmake -S . -B build -A x64 -DMHW_NGX_SDK_ROOT=<dlss sdk> -DMHW_STREAMLINE_SDK_ROOT=<streamline sdk>
