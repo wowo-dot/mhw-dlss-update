@@ -13,6 +13,7 @@
 //
 // al.hooks: game functions other plugins may hook too (Main:Update) join AL's
 // one chain per function instead of a patch of the mod's own.
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -45,6 +46,21 @@ struct Internal {
 // bytes even after another plugin's patch, and writes *next before the detour
 // can run. Lower `order` runs first, further from the original function.
 struct GameHook {std::int32_t order;const char *name;const char *pattern;void *address;void *detour;void **next;};
+// A pattern of exactly N plain bytes ("40 53 ..."), as bytes; false for a
+// wildcard, a bad digit or another length. Code gates check a function's
+// original head with it while AL's chain owns the function's entry.
+template<unsigned N> constexpr bool pattern_bytes(const char *p,std::array<std::uint8_t,N> &out) noexcept {
+    const auto nibble=[](char c) noexcept {return c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:c>='a'&&c<='f'?c-'a'+10:-1;};
+    unsigned n{};
+    while(*p){
+        if(*p==' '){++p;continue;}
+        const int hi=nibble(p[0]);if(hi<0)return false;
+        const int lo=nibble(p[1]);if(lo<0||n==N)return false;
+        out[n++]=static_cast<std::uint8_t>(hi*16+lo);p+=2;
+    }
+    return n==N;
+}
+template<unsigned N> constexpr bool valid_pattern(const char *p) noexcept {std::array<std::uint8_t,N> bytes{};return pattern_bytes<N>(p,bytes);}
 enum class GameHookState : std::uint32_t {pending=0,active=1,disabled=2,failed=3};
 // The plugin entry hands over AL's "al.hooks" 1.0 table (an al_hooks_t) and
 // its plugin handle, once, from al_plugin_init.

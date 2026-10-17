@@ -44,18 +44,8 @@ constexpr std::array gates{
 };
 constexpr unsigned head_size=16;
 using Head=std::array<std::uint8_t,head_size>;
-constexpr int nibble(char c) noexcept { return c>='0'&&c<='9'?c-'0':c>='A'&&c<='F'?c-'A'+10:c>='a'&&c<='f'?c-'a'+10:-1; }
 // "40 53 ...": exactly head_size bytes and no wildcards; they are original code.
-constexpr bool parse_head(const char* p, Head& out) noexcept {
-    unsigned n{};
-    while(*p) {
-        if(*p==' ') { ++p;continue; }
-        const int hi=nibble(p[0]);if(hi<0)return false;
-        const int lo=nibble(p[1]);if(lo<0 || n==head_size)return false;
-        out[n++]=static_cast<std::uint8_t>(hi*16+lo);p+=2;
-    }
-    return n==head_size;
-}
+constexpr bool parse_head(const char* p, Head& out) noexcept { return mhw::astera::pattern_bytes<head_size>(p,out); }
 constexpr bool heads_valid() noexcept { for(const auto& g:gates) { Head h{};if(!parse_head(g.pattern,h))return false; } return true; }
 static_assert(heads_valid(),"each al.hooks pattern is the function's first 16 bytes");
 // Under AL the chain owns the entry: verify the original head with the live rest.

@@ -9,6 +9,12 @@
 namespace mhw::ngx_startup {
 inline constexpr unsigned entry_rva=0x273f230, caller_rva=0x23842dc;
 inline constexpr std::uint64_t native_app=0x05f8a85f;
+// v0.29.0: both startup hooks' first 16 original bytes (clean image), for
+// Astera Loader's al.hooks and for the code gates while AL's chain owns the
+// entries: NVSDK_NGX_D3D12_Init and the game's DLSS 1 builder (0x23842a0).
+inline constexpr unsigned head_size=16, game_dlss_rva=0x23842a0;
+inline constexpr char entry_head[]="48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41";
+inline constexpr char game_dlss_head[]="40 53 48 83 EC 20 48 8B D9 E8 82 53 16 00 84 C0";
 struct Config {
     void *target{};
     std::uintptr_t caller{},client_slots{};
@@ -24,10 +30,18 @@ struct Config {
 bool install(const Config &,std::ostream &);
 bool done() noexcept;
 bool disable() noexcept;
-// MinHook's status and GetLastError() for each startup hook's removal (the
-// native init, then the game's DLSS builder; both are tried); 0 = removed or
-// never made (v0.28.6).
+// Each startup hook's removal (the native init, then the game's DLSS builder;
+// both are tried); 0,0 = removed or never made (v0.28.6). With MinHook: its
+// status and GetLastError(). With al.hooks: 1 and the hook's AL state when
+// set_enabled failed.
 std::array<int,4> disable_result() noexcept;
+// A startup hook target's code gate: under AL, whose chain may already own the
+// entry, with the original head (`head`, entry_head or game_dlss_head) and the
+// live rest; otherwise all of it live.
+bool verify_entry(std::uintptr_t base,unsigned rva,unsigned bytes,const char *sha,const char *head) noexcept;
+// Which service holds the startup hooks: "al" (Astera Loader's al.hooks, when
+// the plugin handed it over) or "minhook" (research builds without AL).
+const char *hook_service() noexcept;
 bool settled() noexcept;
 bool supported() noexcept;
 unsigned calls() noexcept;

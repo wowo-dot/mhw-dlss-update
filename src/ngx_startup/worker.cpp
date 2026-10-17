@@ -16,7 +16,8 @@ void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
 // with Windows PSS, or with Toolhelp where PSS failed (v0.28.6).
 std::ostream &removal(std::ostream &log){
     const auto r=startup::disable_result();const auto threads=al::hooks::thread_snapshot_counts();
-    return log<<"\"disable_result\":["<<r[0]<<','<<r[1]<<','<<r[2]<<','<<r[3]<<"],\"thread_lists\":["<<threads.attempts<<','<<threads.succeeded<<']';
+    return log<<"\"disable_result\":["<<r[0]<<','<<r[1]<<','<<r[2]<<','<<r[3]<<"],\"thread_lists\":["<<threads.attempts<<','<<threads.succeeded
+              <<"],\"hook_service\":\""<<startup::hook_service()<<'"';
 }
 fs::path preset_output,preset_runtime;  // use_paths() (alpha); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
@@ -31,10 +32,10 @@ void wait_for_code(std::uintptr_t base,std::ostream &log){
     const auto began=GetTickCount64();unsigned polls{},first_mask{};
     while(true){
         unsigned mask{};
-        if(pb::verify_code(base,0x273f230,64,"bae1e1ebc8439c799b1ab900fe0802e1845f6480160c796b074a32e4b9947e8c"))mask|=1;
+        if(startup::verify_entry(base,startup::entry_rva,64,"bae1e1ebc8439c799b1ab900fe0802e1845f6480160c796b074a32e4b9947e8c",startup::entry_head))mask|=1;
         if(pb::verify_code(base,0x273f270,413,"e74b34a3d4d93abe149584291f6aeb91e6d7ab066bbfca81277ec1b76adeed7d"))mask|=2;
         if(pb::verify_code(base,0x273f40d,23,"8951f13564e74f1eb66250638c6af29c5df54571475b81c3e0a8f2e52e195ba4"))mask|=4;
-        if(pb::verify_code(base,0x23842a0,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c"))mask|=8;
+        if(startup::verify_entry(base,startup::game_dlss_rva,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",startup::game_dlss_head))mask|=8;
         if(!polls)first_mask=mask;++polls;
         const auto now=GetTickCount64();const auto slot_state=slots(base);const auto admission=startup::admit(mask,slot_state,now-began);
         if(admission!=startup::Admission::wait){

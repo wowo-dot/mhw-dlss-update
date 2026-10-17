@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <MinHook.h>
 #include <nvsdk_ngx.h>
@@ -31,13 +32,40 @@ void require(bool ok,const char *why){if(!ok)throw std::runtime_error(why);}
 // mod's own NGX must survive: the wrapper is freed as there, without the
 // shutdown, the state the game's own refusals leave (NGX initialized, no
 // wrapper; 0x51c6c28 = 2 or 3, the RTX 50 case).
-constexpr unsigned game_dlss_rva=0x23842a0,generic_free_rva=0x2175260;
+constexpr unsigned generic_free_rva=0x2175260;
 using GameDlss=void *(*)(void *);
 using GenericFree=void (*)(void *,std::size_t);
 GameDlss game_dlss_original{};GenericFree generic_free{};
 void *game_dlss_target{};
 bool decline_requested{},game_dlss_hooked{};
 std::atomic_uint game_dlss_state{};
+// v0.29.0: under Astera Loader both hooks join al.hooks chains (AL patches each
+// entry once, with its own thread handling; removal is set_enabled). Research
+// builds without AL keep MinHook. The order puts both detours first in their
+// chains: hook() checks _ReturnAddress() against the game's DLSS 1 builder,
+// which holds only when AL's entry jumps straight to it.
+constexpr std::int32_t chain_order=-1000000;
+static_assert(astera::valid_pattern<head_size>(entry_head)&&astera::valid_pattern<head_size>(game_dlss_head),
+              "each startup hook's pattern is its function's first 16 bytes");
+bool chained{};
+std::uint32_t entry_handle{},game_dlss_handle{};
+std::uint32_t chain(const char *name,const char *pattern,void *target,void *detour,void **next) noexcept {
+    return astera::game_hook({chain_order,name,pattern,target,detour,next});
+}
+bool chain_active(std::uint32_t handle,void *next) noexcept {
+    return handle&&next&&astera::game_hook_state(handle)==astera::GameHookState::active;
+}
+// Takes one hook out (both services); results as disable_result() describes.
+bool remove(bool &hooked,std::uint32_t handle,void *target,int *result) noexcept {
+    if(!hooked)return true;
+    if(chained){
+        const bool ok=astera::set_game_hook_enabled(handle,false);
+        result[0]=ok?0:1;result[1]=ok?0:static_cast<int>(astera::game_hook_state(handle));
+        if(ok)hooked=false;return ok;
+    }
+    const auto s=MH_DisableHook(target);result[0]=s;result[1]=s==MH_OK?0:static_cast<int>(GetLastError());
+    if(s==MH_OK)hooked=false;return s==MH_OK;
+}
 bool free_wrapper(void *wrapper) noexcept {
     const auto at=reinterpret_cast<std::uintptr_t>(wrapper);std::uint64_t features[2]{};
     if(!projection_binding::read(at+56,features[0])||!projection_binding::read(at+64,features[1])||features[0]||features[1])return false;
@@ -182,28 +210,56 @@ bool install(const Config &config,std::ostream &log){
     require(zero_slots(),"native-init-already-observed");
     require(!GetModuleHandleW((cfg.runtime/L"nvngx_dlss.dll").c_str())||shared_provider_verified(),"modern-provider-already-loaded");
     std::filesystem::create_directories(cfg.data);
-    const auto status=MH_Initialize();
-    require(status==(cfg.hook_pool_reserved?MH_ERROR_ALREADY_INITIALIZED:MH_OK),"startup-minhook-init");
-    require(MH_CreateHook(cfg.target,reinterpret_cast<void *>(&hook),reinterpret_cast<void **>(&original))==MH_OK,"startup-hook-create");
+    chained=astera::game_hooks_available();
+    if(!chained){
+        const auto status=MH_Initialize();
+        require(status==(cfg.hook_pool_reserved?MH_ERROR_ALREADY_INITIALIZED:MH_OK),"startup-minhook-init");
+        require(MH_CreateHook(cfg.target,reinterpret_cast<void *>(&hook),reinterpret_cast<void **>(&original))==MH_OK,"startup-hook-create");
+    }
     // Before the init hook: the game builds the wrapper right after its init.
     if(decline_requested){
         // The wrapper's builder, constructor and release, and the allocator's
         // free (clean image): otherwise the game's DLSS 1 stays as it is.
         const auto base=reinterpret_cast<std::uintptr_t>(cfg.target)-entry_rva;
-        const bool code=projection_binding::verify_code(base,0x23842a0,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c")&&
+        const bool code=verify_entry(base,game_dlss_rva,344,"920c2df8717dcb2cf809d06f7d17c6e75b1d540b3e810e01b25b8a9e57d5ad2c",game_dlss_head)&&
             projection_binding::verify_code(base,0x2383760,54,"1ff21702d0d9ef19421ba8132849d21a53e75be539b8574a1a26686f124c8eeb")&&
             projection_binding::verify_code(base,0x23837a0,130,"066bbfc555bcbeb999b5e7b0688877cc9ec2d07f9155a2c6af94ce98d71c9b30")&&
             projection_binding::verify_code(base,0x2175260,50,"d678c8b941af2d1e2bcd5e4a5926d070ac5e983003ee2b51f85b2f53388b72ce");
         game_dlss_target=reinterpret_cast<void *>(base+game_dlss_rva);generic_free=reinterpret_cast<GenericFree>(base+generic_free_rva);
-        game_dlss_hooked=code&&MH_CreateHook(game_dlss_target,reinterpret_cast<void *>(&game_dlss_hook),reinterpret_cast<void **>(&game_dlss_original))==MH_OK&&
-            MH_EnableHook(game_dlss_target)==MH_OK;
-        game_dlss_state=game_dlss_hooked?1:5;
-        log<<"{\"event\":\"game_dlss\",\"declining\":"<<game_dlss_hooked<<",\"code\":"<<code<<"}\n"<<std::flush;
+        bool declining{};
+        if(code&&chained){
+            // Live once AL accepts it; disable() takes it out again either way.
+            game_dlss_handle=chain("mhw_dlss NGX:GameDlss1",game_dlss_head,game_dlss_target,reinterpret_cast<void *>(&game_dlss_hook),
+                                   reinterpret_cast<void **>(&game_dlss_original));
+            game_dlss_hooked=game_dlss_handle!=0;
+            declining=chain_active(game_dlss_handle,reinterpret_cast<void *>(game_dlss_original));
+        }else if(code){
+            game_dlss_hooked=MH_CreateHook(game_dlss_target,reinterpret_cast<void *>(&game_dlss_hook),reinterpret_cast<void **>(&game_dlss_original))==MH_OK&&
+                MH_EnableHook(game_dlss_target)==MH_OK;
+            declining=game_dlss_hooked;
+        }
+        game_dlss_state=declining?1:5;
+        log<<"{\"event\":\"game_dlss\",\"declining\":"<<declining<<",\"code\":"<<code<<"}\n"<<std::flush;
     }
     // Write before enable: callback events may occur immediately after enabling.
-    log<<"{\"event\":\"installing\",\"tick\":"<<GetTickCount64()<<",\"sdk_initializations_limit\":1,\"gpu_commands\":0}\n"<<std::flush;
+    log<<"{\"event\":\"installing\",\"tick\":"<<GetTickCount64()<<",\"sdk_initializations_limit\":1,\"gpu_commands\":0,\"hook_service\":\""
+       <<hook_service()<<"\"}\n"<<std::flush;
+    if(chained){
+        entry_handle=chain("mhw_dlss NGX:D3D12_Init",entry_head,cfg.target,reinterpret_cast<void *>(&hook),reinterpret_cast<void **>(&original));
+        installed=entry_handle!=0;
+        require(chain_active(entry_handle,reinterpret_cast<void *>(original)),"startup-hook-chain");
+        return true;
+    }
     require(MH_EnableHook(cfg.target)==MH_OK,"startup-hook-enable");installed=true;return true;
 }
+bool verify_entry(std::uintptr_t base,unsigned rva,unsigned bytes,const char *sha,const char *head) noexcept {
+    // Under AL another plugin's chain may own the entry already: its original
+    // head (the pattern) with the live rest.
+    if(!astera::game_hooks_available())return projection_binding::verify_code(base,rva,bytes,sha);
+    std::array<std::uint8_t,head_size> first{};
+    return astera::pattern_bytes<head_size>(head,first)&&projection_binding::verify_code_with_head(base,rva,bytes,sha,first.data(),head_size);
+}
+const char *hook_service() noexcept {return chained||astera::game_hooks_available()?"al":"minhook";}
 void decline_game_dlss() noexcept{decline_requested=true;}
 unsigned game_dlss() noexcept{return game_dlss_state.load();}
 bool done() noexcept{return finished.load();}
@@ -212,12 +268,10 @@ bool done() noexcept{return finished.load();}
 // Both removals are tried, so each pair describes its own hook.
 std::array<int,4> disable_results{};
 bool disable() noexcept{
-    stopping=true;bool removed=true;
-    if(installed){const auto s=MH_DisableHook(cfg.target);disable_results[0]=s;disable_results[1]=s==MH_OK?0:static_cast<int>(GetLastError());
-        if(s==MH_OK)installed=false;else removed=false;}
-    if(game_dlss_hooked){const auto s=MH_DisableHook(game_dlss_target);disable_results[2]=s;disable_results[3]=s==MH_OK?0:static_cast<int>(GetLastError());
-        if(s==MH_OK)game_dlss_hooked=false;else removed=false;}
-    return removed; // keep the trampolines allocated; a suspended entry may still forward
+    stopping=true;
+    const bool entry=remove(installed,entry_handle,cfg.target,&disable_results[0]);
+    const bool builder=remove(game_dlss_hooked,game_dlss_handle,game_dlss_target,&disable_results[2]);
+    return entry&&builder; // the continuations stay valid; a suspended entry may still forward
 }
 std::array<int,4> disable_result() noexcept{return disable_results;}
 bool settled() noexcept{return pending.load()==0;}
