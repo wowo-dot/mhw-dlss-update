@@ -94,9 +94,9 @@ void sync_generation(GenerationSwitch &g) {
             switch_unreached = g.want;
             if (g.want && !generation_fault)
                 mhw::settings::status::generation(mhw::settings::status::Generation::unavailable,
-                                               v.switch_reason == 4   ? "exclusive fullscreen"
-                                               : v.switch_reason == 5 ? "latency waitable"
-                                                                      : "switch failed");
+                                                  v.switch_reason == 4   ? "exclusive fullscreen"
+                                                  : v.switch_reason == 5 ? "latency waitable"
+                                                                         : "switch failed");
         } else if (g.want && !generation_fault)
             mhw::settings::status::generation(mhw::settings::status::Generation::armed);
         if (fg_loaded && !generation_fault && cd::live_modes() && !cd::dlss_off()) fg::arm(true);

@@ -55,7 +55,8 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry
     }
     const bool running = cd::live_modes() && !cd::dlss_off();
     if (fg_ready && fg_loaded && !generation_fault && running && released && configured) fg::arm(true);
-    log << "{\"event\":\"dlss_mode_change\",\"from\":" << quoted(from_off ? "off" : mhw::settings::dlss_mode_value(from))
+    log << "{\"event\":\"dlss_mode_change\",\"from\":"
+        << quoted(from_off ? "off" : mhw::settings::dlss_mode_value(from))
         << ",\"requested\":" << quoted(wanted.off ? "off" : mhw::settings::dlss_mode_value(wanted.mode))
         << ",\"mode\":" << quoted(r.off ? "off" : mhw::settings::dlss_mode_value(r.mode)) << ",\"scene\":" << r.scene
         << ",\"ok\":" << r.ok << ",\"unchanged\":" << r.unchanged << ",\"resumed\":" << r.resumed

@@ -26,7 +26,8 @@ int main() {
         const auto c = mhw::settings::parse_config(
             "# comment\r\n FRAME_GENERATION = 4X ; inline\r\nreflex=on\r\nruntime_dir = \"C:\\SL Runtime\" \r\nlog_dir=..\\Logs\r\n",
             folder);
-        check(c.frame_generation && c.multiplier == 4 && c.reflex == mhw::settings::ReflexMode::on && c.warnings.empty(),
+        check(c.frame_generation && c.multiplier == 4 && c.reflex == mhw::settings::ReflexMode::on &&
+                  c.warnings.empty(),
               "values, case, comments, CRLF");
         check(c.runtime_dir == std::filesystem::path(L"C:\\SL Runtime"), "absolute runtime folder keeps its case");
         check(c.log_dir == std::filesystem::path(L"D:\\mods\\Logs"), "relative log folder");
@@ -91,14 +92,16 @@ int main() {
               "unknown reflex value keeps the default (off)");
         for (const auto m : {ReflexMode::off, ReflexMode::on, ReflexMode::boost}) {
             ReflexMode back{};
-            check(mhw::settings::parse_reflex(mhw::settings::reflex_value(m), back) && back == m, "reflex values round-trip");
+            check(mhw::settings::parse_reflex(mhw::settings::reflex_value(m), back) && back == m,
+                  "reflex values round-trip");
         }
         check(mhw::settings::with_reflex("reflex = on   ; comment\r\n", ReflexMode::boost) ==
                   "reflex = boost   ; comment\r\n",
               "reflex edited in place");
-        check(mhw::settings::parse_config(mhw::settings::with_reflex("frame_generation = off\n", ReflexMode::off), folder)
-                      .reflex == ReflexMode::off,
-              "reflex appended and read back");
+        check(
+            mhw::settings::parse_config(mhw::settings::with_reflex("frame_generation = off\n", ReflexMode::off), folder)
+                    .reflex == ReflexMode::off,
+            "reflex appended and read back");
     }
     {
         namespace a = mhw::settings;

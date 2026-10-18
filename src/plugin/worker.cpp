@@ -86,10 +86,10 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     mhw::frame_generation::game::enable(config.frame_generation);
     fg_mode = config.dynamic           ? mhw::frame_generation::game::Mode::dynamic
               : config.generation_auto ? mhw::frame_generation::game::Mode::automatic
-                                             : mhw::frame_generation::game::Mode::fixed;
+                                       : mhw::frame_generation::game::Mode::fixed;
     fg_target = config.dynamic_target;
     mhw::settings::status::generation(fg_plugin ? mhw::settings::status::Generation::starting
-                                             : mhw::settings::status::Generation::off);
+                                                : mhw::settings::status::Generation::off);
     mhw::continuous_dlaa::reconstruction_mode(config.dlss_mode);
     mhw::continuous_dlaa::start_off(!config.dlss);
     mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(config.dlss_mode));
@@ -98,7 +98,7 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     mhw::perf::toggles.store(mhw::perf::all_toggles | (config.profile ? mhw::perf::sample_profile : 0U));
     reflex_requested.store(config.reflex == mhw::settings::ReflexMode::off     ? 0U
                            : config.reflex == mhw::settings::ReflexMode::boost ? 2U
-                                                                                  : 1U);
+                                                                               : 1U);
     mhw::settings::status::reflex_mode(mhw::settings::reflex_name(config.reflex));
     mhw::reflex::sdk_verbose_log = false;
 }
@@ -169,8 +169,7 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(config.runtime_dir.string())
         << ",\"log_dir\":" << quoted(config.log_dir.string()) << ",\"warnings\":[";
-    for (unsigned i = 0; i < config.warnings.size(); ++i)
-        log << (i ? "," : "") << quoted(config.warnings[i]);
+    for (unsigned i = 0; i < config.warnings.size(); ++i) log << (i ? "," : "") << quoted(config.warnings[i]);
     log << "]}\n" << std::flush;
     return session;
 }
@@ -210,7 +209,7 @@ bool wait_for_swap_chain() {
     const bool swap_observed = success && attach_stopped && describe_swap() && !swapchain_chains_missing.load();
     if (!swap_observed)
         mhw::settings::status::worker_failed(failure.empty() ? std::string_view("presentation")
-                                                          : std::string_view(failure));
+                                                             : std::string_view(failure));
     return swap_observed;
 }
 
@@ -277,7 +276,7 @@ bool wait_until_qualified(std::uint64_t wait_start) {
         << std::flush;
     if (!arm_now)
         mhw::settings::status::worker_failed(not_ready.empty() ? std::string_view("presentation")
-                                                            : std::string_view(not_ready));
+                                                               : std::string_view(not_ready));
     return arm_now;
 }
 
@@ -292,7 +291,7 @@ void arm_dlss() {
     mhw::settings::status::dlss_sizes(render_w, render_h, scene_w, scene_h);
     mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(mhw::continuous_dlaa::reconstruction_mode()));
     mhw::settings::status::dlss(mhw::continuous_dlaa::dlss_off() ? mhw::settings::status::Stage::player_off
-                                                              : mhw::settings::status::Stage::running);
+                                                                 : mhw::settings::status::Stage::running);
     // NGX startup and the DLSS install succeeded (capabilities.hpp).
     mhw::settings::status::dlss_available(true);
 }
