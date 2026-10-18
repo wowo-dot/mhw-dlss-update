@@ -1,13 +1,14 @@
-# Architecture of the shipped mod (v0.28.6, 2026-10-17)
+# Architecture of the shipped mod (0.30.0)
 
 The map behind the 0.30.0 cleanup: what `mhw_dlss.dll` (CMake target
 `mhw_dlss`, `mhw_dlss_alpha` up to 0.28.6) is made of, how it starts, what runs per frame, every hook,
-how it fails, and which log output players send us. Line numbers refer to
-`ddb7ab9` (v0.28.6). Since then the research targets were retired (tag
-`research-final`, `docs/research/history/retired-targets.md`) and the
-research switches were resolved to their shipped values, so the files have
-lost the `#if` branches those line numbers count. This page describes only
-the shipped configuration.
+how it fails, and which log output players send us. It was drawn on
+2026-10-17 from `ddb7ab9` (v0.28.6) and kept up with the cleanup: sections 1
+to 7 describe 0.30.0 (line counts after its formatting), section 8 is the
+debt the map found in 0.28.6 (its line numbers are 0.28.6's), section 9 is
+the cleanup's record. The research targets are retired (tag
+`research-final`, `docs/research/history/retired-targets.md`), so this page
+describes only the shipped configuration.
 
 ## 1. What ships
 
@@ -33,31 +34,32 @@ the shipped configuration.
 | Area | Files | Job |
 |---|---|---|
 | Plugin entry, worker | `plugin/` (0.30.0; `reflex/presentation_probe.cpp`, 1,909 lines, up to 0.28.6) | `plugin.hpp` (the shared state), `plugin.cpp` (AL exports, start, phases), `device.cpp` (device attach, shutdown), `worker.cpp` (the worker's stages and the session loop), `reflex_control.cpp`, `generation.cpp` (the FG switch), `dlss_control.cpp` (mode and aspect changes), `log_events.cpp` (most of the main log) |
-| Presentation | `reflex/presentation.cpp` (1,250), `identity_chain.hpp`, `present_result.hpp` | DXGI/D3D12 routing through Streamline's proxies, the identity chain the game holds, the live FG chain switch |
-| Reflex | `reflex/live_frames.cpp` (419), `frame_boundaries_entry.asm`, `streamline.cpp`, `frame_session.cpp`, `driver_status.cpp` | Frame boundary hooks (simulation, render submit, present), Streamline loading (pinned SHA-256 and signature), PCL markers |
+| Presentation | `reflex/presentation.cpp` (1,480), `identity_chain.hpp`, `present_result.hpp` | DXGI/D3D12 routing through Streamline's proxies, the identity chain the game holds, the live FG chain switch |
+| Reflex | `reflex/live_frames.cpp` (543), `frame_boundaries_entry.asm`, `streamline.cpp`, `frame_session.cpp`, `driver_status.cpp` | Frame boundary hooks (simulation, render submit, present), Streamline loading (pinned SHA-256 and signature), PCL markers |
 | AL glue | `astera/astera_hooks.cpp` | al.d3d12 chains, al.hooks wrappers, internal-call scopes |
-| DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.30.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
+| DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.30.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (482), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
 | Game options | `continuous_dlaa/game_options.cpp` | The game's own DLSS rules: AA Off, resolution scaling High, locked menu rows |
-| Render resolution | `render_resolution/runtime.cpp` (432) | Sets the game's render scale on its render thread; detects aspect switches |
-| Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + five `.inl` (one translation unit: see its head), `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
-| Observer | `temporal_present/observer.cpp` (387), `bindings.cpp`, `output.cpp`, `unfiltered.cpp` | A CPU mirror of each command list's bindings, raster state and predicate; binding restore after injected work |
+| Render resolution | `render_resolution/runtime.cpp` (776) | Sets the game's render scale on its render thread; detects aspect switches |
+| Post chain at output size | `scaled_temporal/stream_route.cpp` (1,818) + five `.inl` (one translation unit: see its head), `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
+| Observer | `temporal_present/observer.cpp` (589), `bindings.cpp`, `output.cpp`, `unfiltered.cpp` | A CPU mirror of each command list's bindings, raster state and predicate; binding restore after injected work |
 | Frame generation | `frame_generation/game_session*.cpp` (0.30.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
 | Settings and menu | `settings/*` (0.30.0; `alpha/` up to 0.28.6: config, menu, menu_model, status, capabilities, version) | ini, the CMFM pages, Status lines, the card's capabilities |
 | NGX startup | `ngx_startup/startup.cpp`, `worker.cpp` | Initializes the mod's NGX inside the game's own NGX init; declines the game's DLSS 1 |
 | Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy}`, `game_memory/{bounded_scalar_read,projection_snapshot}` (`bridge_probe/` up to 0.28.6), `common/` (0.30.0: `require`, `quoted`, the stubs' frame macros) | Code gates, structure discovery, guarded reads, matrices and jitter |
 
-**Compiled in but unused by the shipped mod:**
+**Compiled in but unused by the shipped mod** (up to 0.28.6; all gone in
+0.30.0, section 9):
 - the capture machinery of `projection_binding/recorder.cpp` and
   `provenance.cpp`, plus `depth_readback.cpp`, `output.cpp`,
   `attachment_output.cpp` and most of `attachments.cpp`;
 - 41 of the entry stubs in `projection_binding/entry.asm` (only
-  `mhw_binding_forward` is used);
-- `dlss_sdk/live.cpp`, which is linked only as the carrier of the NGX
-  library.
+  `mhw_binding_forward` is used, the one left);
+- `dlss_sdk/live.cpp`, which was linked only as the carrier of the NGX
+  library (now `MHW_NGX_LIBRARY` in CMake).
 
 ## 2. Start-up
 
-1. **`al_plugin_info` / `al_plugin_init`** (`presentation_probe.cpp:1843-1897`,
+1. **`al_plugin_info` / `al_plugin_init`** (`plugin/plugin.cpp`, `start`,
    AL's PRE_MAIN thread):
    - checks the exe hash and refuses DirectX 11;
    - claims the presentation role and registers every al.d3d12 detour at order
@@ -70,13 +72,18 @@ the shipped configuration.
    - reads the ini, opens the log, installs the crash log;
    - (up to 0.28.6: reserved a MinHook trampoline pool);
    - accepts.
-3. **Game render-setup thread, at DEVICE_CREATED** (`attach_device`, 562-757):
+3. **Game render-setup thread, at DEVICE_CREATED** (`plugin/device.cpp`,
+   `attach_device`):
    - gathers the card's capabilities;
    - runs Streamline `slInit` and attaches it;
    - unloads DLSS-G at start;
    - installs the presentation layer.
 4. **NGX startup** (worker → `temporal::prepare` → `ngx_startup::run`):
    - waits until the game's NGX init can be hooked;
+   - hooks it and the DLSS 1 builder first in their al.hooks chains; this
+     runs alongside the other plugins' PRE_MAIN, so a hook can be pending
+     until PRE_MAIN ends, and the install waits for it (`pending_ms` in
+     `game_dlss`; the long session, section 9);
    - when the game calls its DLSS 1 builder `0x23842a0`, the hooked
      `NVSDK_NGX_D3D12_Init` (`0x273f230`) first initializes the mod's NGX
      with the game's device;
@@ -127,17 +134,17 @@ the shipped configuration.
 | Thread | Owner | Runs |
 |---|---|---|
 | AL PRE_MAIN | AL | `al_plugin_init` |
-| Worker | the mod (`presentation_probe.cpp:1024`) | Start-up, NGX startup, arming, main loop, logs |
+| Worker | the mod (`plugin/worker.cpp`, `worker`) | Start-up, NGX startup, arming, main loop, logs |
 | NGX startup worker | the mod (`ngx_startup/worker.cpp`) | Readiness wait, hook install and removal |
-| Region refresher | the mod (`bounded_scalar_read.cpp:234`, every 20 ms, never exits) | Read-cache upkeep |
+| Region refresher | the mod (`game_memory/bounded_scalar_read.cpp`, `refresher`, every 20 ms, never exits) | Read-cache upkeep |
 | CMFM menu | CMFM | Menu callbacks: settings only, applied by the worker |
 | Game: render setup, engine, render, recording workers, present | the game | Every hook in section 5 |
 
 ## 5. Hooks
 
 All targets are in `MonsterHunterWorld.exe`, checked by SHA-256 code gates
-against the tested build (205 gates; `sigscan.py gates`) before anything is
-patched.
+against the tested build (109 gates in 0.30.0, 205 with the research code up
+to `research-final`; `sigscan.py gates`) before anything is patched.
 
 **About `r11`.** AL's entry stub is `mov r11, imm64; jmp [r11]`, so it
 overwrites r11. At a function start that's harmless: r11 is volatile and is
@@ -185,7 +192,7 @@ the frame boundaries):
 | Reflex frames | The first reason is kept; frame session stops; FG off | Originals keep running |
 | FG session | Per Present: Off with the reason counted in `off.*` | DLSS, Reflex |
 | Game options | Never faults; counts `call_faults` | Everything |
-| Worker | A `require` failure in the main loop ends the worker (see section 8) | DLSS and hooks; menu changes stop applying |
+| Worker | A `require` failure in the main loop ends the worker (section 8; 0.30.0: an unconfirmed Reflex mode and a failed status write no longer do) | DLSS and hooks; menu changes stop applying |
 
 Not a fault: `reconstruction.latch(14)` after a recovered SDK failure leaves
 DLSS degraded (no AA, history reset) with `healthy()` still true.
@@ -494,3 +501,17 @@ Behaviour stays the same; the log fields stay.
   `game_dlss` logs the wait as `pending_ms`. MinHook, up to 0.28.6,
   installed these two at once; the other al.hooks hooks register after the
   device, long after PRE_MAIN.
+- The long session, again (0.29.0-dev.6, pid 60620, 2026-10-18, 76 min,
+  Default profile: CMFM, ten Stracker plugins, cpuopt 0.15.1 in player mode
+  with its frame limiter and frame cap removal): passed. The NGX hooks
+  waited 2,156 ms for PRE_MAIN; 11 mode changes (presets, Off and back),
+  all ok; 2 FG
+  switches; DLSS 1,122,659 frames, fault 0; full_post 853,649 switched, 0
+  not switched, 0 fallbacks; silhouettes 9.43 M recorded, 0 unknown; FG 2x
+  1,162,011 presents, 0 record failures and exceptions; Reflex 1,162,010
+  frames, 0 faults; presentation faults 0; empty crash log; clean exit (no
+  crash report). cpuopt shares no hook chain with the mod (the only shared
+  chain is Main:Update with AL's own layer). The game thread's stalls over
+  50 ms fell through the session whatever cpuopt's settings (15, 3.6 and 0
+  per 10 minutes outside switches and loading), which points at the game's
+  own warm-up rather than either mod.

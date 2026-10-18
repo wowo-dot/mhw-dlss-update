@@ -51,7 +51,7 @@ Claude Code has an IDA MCP (Hex-Rays), an x64dbg MCP, a Frida MCP and `sigscan.p
 
 - **IDA:** open only the private game databases listed above (or a new copy under `local\`), never the NVIDIA module databases under `local\` (`nvngx_*`, `_nvngx`) and never anything in `ai\glavenus`, and never create a database in another project's folder. Open a fresh binary with `-Opdb:off`; otherwise IDA asks Microsoft's symbol server for `World300.pdb`. Ask through the MCP's `execute_python` instead of writing one-off headless scripts. Write-back and exports stay under `local\`.
 - **Code gates and heads** (`py -3.12 -B %USERPROFILE%\.claude\re-tools\sigscan.py`, on the clean image):
-  - `gates <image> src` hashes every `{rva, size, "sha256"}` gate in the source against the image; on 2026-10-17 all 118 of the shipped code matched on the clean image (205 with the research code, tag `research-final`). Write gates as literals (`0x..., size, "sha"`): the scanner does not see named constants. Run it before staging a build that adds or changes a gate.
+  - `gates <image> src` hashes every `{rva, size, "sha256"}` gate in the source against the image; on 2026-10-18 all 109 of the shipped code (0.30.0) matched on the clean image (205 with the research code, tag `research-final`). Write gates as literals (`0x..., size, "sha"`): the scanner does not see named constants. Run it before staging a build that adds or changes a gate.
   - `audit <image> src` checks the spaced-hex heads in `reflex/live_frames.cpp`. They are verified at pinned RVAs, so a head may match elsewhere too (`Render:Publish` matches 20+ times; fine).
   - `make <image> <VA>` and `scan <image> "<pattern>"` find and check patterns when exploring new sites.
 - **x64dbg and Frida on the running game:**
