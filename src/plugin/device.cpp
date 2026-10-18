@@ -67,9 +67,10 @@ bool close_sdk() noexcept {
             for (unsigned i = 0; i < presentation_heads.size(); ++i) {
                 const auto &head = presentation_heads[i];
                 if (!head.created) continue;
-                log << "{\"event\":\"presentation_hook_restoration\",\"kind\":" << i << ",\"target\":" << head.target
-                    << ",\"restored\":" << head.restored
-                    << ",\"original_head_sha256\":" << quoted(pb::bytes_sha256(head.original.data(), 32)) << "}\n";
+                // AL owns these patches: no original bytes here, nothing to restore
+                // (0.28.6 logged presentation_hook_restoration, restored false).
+                log << "{\"event\":\"presentation_hook\",\"kind\":" << i << ",\"target\":" << head.target
+                    << ",\"enabled\":" << head.enabled << ",\"chain\":\"al.d3d12\"}\n";
             }
             log << "{\"event\":\"presentation_cleanup\",\"restored\":" << restored << ",\"heads_rva\":"
                 << reinterpret_cast<std::uintptr_t>(&presentation_heads) - reinterpret_cast<std::uintptr_t>(module)

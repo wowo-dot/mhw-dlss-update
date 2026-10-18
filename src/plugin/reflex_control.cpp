@@ -54,6 +54,25 @@ bool apply_reflex_mode(bool loaded) {
     reflex_requested.store(reflex_applied.load());
     return false;
 }
+// The worker, while the session runs: the driver did not confirm the applied
+// mode (driver_mode logged its status). Up to 0.28.6 this ended the worker,
+// which left DLSS running but stopped the menu and the log. Now, as for a
+// presentation fault: with On or Boost, Reflex shows Off and frame generation,
+// which needs it, is off for the session; the worker goes on.
+void reflex_unconfirmed(const char *phase) {
+    const auto mode = reflex_applied.load();
+    log << "{\"event\":\"reflex_unconfirmed\",\"phase\":" << quoted(phase) << ",\"mode\":" << mode
+        << ",\"generation_off\":" << (mode != 0 && !generation_fault) << "}\n"
+        << std::flush;
+    if (mode == 0) return; // Off asked for; the driver kept low latency on
+    mhw::settings::status::reflex(mhw::settings::status::Stage::off, "reflex unconfirmed");
+    loader_log(AL_LOG_WARNING, std::string("the graphics driver did not confirm Reflex (") + phase + ")");
+    if (generation_fault) return;
+    generation_fault = true;
+    namespace fg = mhw::frame_generation::game;
+    if (fg::status().armed) fg::arm(false);
+    if (fg_plugin) mhw::settings::status::generation(mhw::settings::status::Generation::stopped, "reflex unconfirmed");
+}
 } // namespace mhw::plugin
 
 namespace mhw::reflex {

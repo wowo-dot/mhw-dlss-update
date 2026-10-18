@@ -131,6 +131,7 @@ bool driver_mode(const char *phase, bool expected, bool enforce = true);
 void mode_options(const char *phase, sl::ReflexMode mode, sl::Result result);
 const char *reflex_mode_name(unsigned mode) noexcept;
 bool apply_reflex_mode(bool loaded);
+void reflex_unconfirmed(const char *phase);
 
 // generation.cpp
 bool game_chain_qualified() noexcept;

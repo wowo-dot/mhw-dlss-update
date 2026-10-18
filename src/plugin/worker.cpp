@@ -7,6 +7,7 @@
 #include "../settings/capabilities.hpp"
 #include "../settings/status.hpp"
 #include "../settings/version.hpp"
+#include "../common/log_path.hpp"
 #include "../game_memory/readable_region.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
@@ -24,8 +25,6 @@
 namespace mhw::plugin {
 namespace {
 namespace pb = mhw::projection_binding;
-// Logged by frames_ready and frames_armed (the research build's capture length).
-constexpr unsigned capture_seconds = 600;
 const char *stop_reason = "not_armed"; // Why the session loop ended.
 std::filesystem::path stop_file, arm_file;
 
@@ -166,8 +165,8 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"profile\":" << config.profile << ",\"perf_ab\":" << config.perf_ab
         << ",\"hook_timing\":" << config.hook_timing
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
-        << ",\"runtime_dir\":" << quoted(config.runtime_dir.string())
-        << ",\"log_dir\":" << quoted(config.log_dir.string()) << ",\"warnings\":[";
+        << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
+        << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
     for (unsigned i = 0; i < config.warnings.size(); ++i) log << (i ? "," : "") << quoted(config.warnings[i]);
     log << "]}\n" << std::flush;
     return session;
@@ -195,8 +194,7 @@ void accept_device() {
     }
     {
         std::lock_guard lock(sdk_mutex);
-        log << "{\"event\":\"ready\",\"early_api_hooks\":2,\"startup_completed\":" << completed.load() << "}\n"
-            << std::flush;
+        log << "{\"event\":\"ready\",\"startup_completed\":" << completed.load() << "}\n" << std::flush;
     }
 }
 
@@ -216,8 +214,7 @@ bool wait_for_swap_chain() {
 // the game began.
 std::uint64_t start_frames(const Session &session) {
     require(driver_mode("startup_off", false), "driver-startup-Off");
-    log << "{\"event\":\"frames_ready\",\"mode\":0,\"target_mode\":1,\"sleep_calls\":0,\"markers\":0,\"armed\":false,\"duration_seconds\":"
-        << capture_seconds << "}\n"
+    log << "{\"event\":\"frames_ready\",\"mode\":0,\"target_mode\":1,\"sleep_calls\":0,\"markers\":0,\"armed\":false}\n"
         << std::flush;
     log << "{\"event\":\"fg_crash_log\",\"installed\":" << session.crash_log << "}\n";
     log_fg_buffers(log, "frames_ready");
@@ -318,7 +315,7 @@ void arm_reflex() {
     live_frames->install(image, reinterpret_cast<std::uintptr_t>(device_pin.Get()), log);
     live_frames->describe(log, static_cast<unsigned>(arm_mode));
     log << "{\"event\":\"frames_armed\",\"mode\":" << static_cast<unsigned>(arm_mode)
-        << ",\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n"
+        << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n"
         << std::flush;
     mhw::settings::status::reflex(mhw::settings::status::Stage::running);
 }
@@ -407,6 +404,7 @@ void run_session() {
             // memory and written at once: the process may end.
             {
                 std::ostringstream summary;
+                summary << std::boolalpha; // as the log's own lines
                 mhw::reflex::temporal::sample();
                 summary << "{\"event\":\"fg_status\",\"display_hz\":" << mhw::frame_generation::display_refresh_hz()
                         << ",\"session\":";
@@ -451,7 +449,7 @@ void run_session() {
         } else if (live_check_sleeps && frames.sleeps >= live_check_sleeps) {
             // As at the first heartbeat: low latency on for On and Boost, off for Off.
             live_check_sleeps = 0;
-            require(driver_mode("live", reflex_applied.load() != 0), "driver-live-mode");
+            if (!driver_mode("live", reflex_applied.load() != 0)) reflex_unconfirmed("live");
         }
         mhw::render_resolution::write_captures(log);
         if (perf_ab_next && GetTickCount64() >= perf_ab_next) {
@@ -514,7 +512,7 @@ void run_session() {
             log_latency(log);
             mhw::perf::sampler::write(log);
             if (!reflex_confirmed && frames.completed >= reflex_check_frames) {
-                require(driver_mode("running_on", reflex_applied.load() != 0), "driver-On-not-enabled");
+                if (!driver_mode("running_on", reflex_applied.load() != 0)) reflex_unconfirmed("running_on");
                 reflex_confirmed = true;
             }
             log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed

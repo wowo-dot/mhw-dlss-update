@@ -251,8 +251,9 @@ void finish() noexcept {
         return;
     }
     // Restore native sizing while the render-thread callback is still installed.
+    // Fault 47 (44 up to 0.28.6, which also meant a failed consumer depth copy).
     if (!render_resolution::finish()) {
-        fail(44);
+        fail(47);
         return;
     }
     while (sr::healthy() && !sr::drained() && GetTickCount64() < deadline + 6000) Sleep(1);

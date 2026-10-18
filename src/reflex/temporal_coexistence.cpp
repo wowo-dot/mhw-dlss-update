@@ -90,18 +90,20 @@ bool scene_extent(unsigned &scene_width, unsigned &scene_height, unsigned &windo
 bool render_extent(unsigned &width, unsigned &height) noexcept {
     return installed && cd::render_extent(width, height);
 }
-void sample() {
-    require(healthy(), "temporal-runtime-fault");
+void sample() noexcept {
+    // Unhealthy: the worker's loop stops on that itself (fault_snapshot).
+    if (!healthy()) return;
     ++samples;
     // perf::quiet_status: the dumps hold the render locks while they format and write.
     if (mhw::perf::on(mhw::perf::quiet_status)) return;
-    {
-        std::ofstream status(directory / (name + ".status.json"), std::ios::binary | std::ios::trunc);
-        cd::write(status);
-        require(bool(status), "temporal-status");
-    }
-    if (samples <= 12 || (samples & (samples - 1)) == 0) cd::write(events);
-    require(bool(events), "temporal-heartbeat-log");
+    // A write that fails is skipped (up to 0.28.6 it ended the worker).
+    try {
+        {
+            std::ofstream status(directory / (name + ".status.json"), std::ios::binary | std::ios::trunc);
+            cd::write(status);
+        }
+        if (samples <= 12 || (samples & (samples - 1)) == 0) cd::write(events);
+    } catch (...) {}
 }
 void summary(std::ostream &out) {
     if (!installed) {

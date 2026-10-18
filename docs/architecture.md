@@ -450,3 +450,21 @@ Behaviour stays the same; the log fields stay.
     `{"event":"start","schema":1,"version":"<version>",` instead. The
     `alpha_config`, `alpha_waiting` and `alpha_arm` event names stay, so
     old and new logs read the same.
+- Step 5, the bugs of section 8 (0.29.0):
+  - the exit summary's `fg_status` and `dlss_summary` print booleans as
+    `true`/`false`, as the heartbeat's do;
+  - `provider_check`'s path and `alpha_config`'s `runtime_dir`/`log_dir`
+    write the user's profile folder as `%USERPROFILE%` (`common/log_path.hpp`);
+  - a Reflex mode the driver does not confirm no longer ends the worker:
+    `reflex_unconfirmed` is logged, Reflex shows Off and frame generation
+    is off for the session (as the worker's end did), the menu and the log
+    go on; `temporal::sample()` never throws (skipped while unhealthy, a
+    failed status write is skipped), so the exit summary is always written;
+  - fault 47 is `render_resolution::finish` failing at stop; 44 is only the
+    consumer depth copy;
+  - under AL each registered presentation method is `presentation_hook`
+    (kind, target, enabled, chain `al.d3d12`) instead of
+    `presentation_hook_restoration` with `restored:false` and a zero head;
+  - the stale constants go: `ready`'s `early_api_hooks: 2` (MinHook's) and
+    `frames_ready`/`frames_armed`'s `duration_seconds: 600` (the research
+    capture length; `reflex_frames.py` checks it only in research logs).

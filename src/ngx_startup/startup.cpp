@@ -1,5 +1,6 @@
 #include "startup.hpp"
 #include "../common/require.hpp"
+#include "../common/log_path.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <nvsdk_ngx.h>
@@ -282,9 +283,8 @@ bool install(const Config &config, std::ostream &log) {
         // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
         const auto path = cfg.runtime / L"nvngx_dlss.dll";
         const auto digest = projection_binding::file_digest(path.wstring());
-        const auto utf8 = path.u8string();
-        log << "{\"event\":\"provider_check\",\"path\":" << std::quoted(std::string(utf8.begin(), utf8.end()))
-            << ",\"stage\":\"" << digest.stage << "\",\"error\":" << digest.error << ",\"size\":" << digest.size
+        log << "{\"event\":\"provider_check\",\"path\":" << std::quoted(mhw::log_path(path)) << ",\"stage\":\""
+            << digest.stage << "\",\"error\":" << digest.error << ",\"size\":" << digest.size
             << ",\"read\":" << digest.read << ",\"matches\":" << (digest.sha == provider_sha) << "}\n"
             << std::flush;
         require(digest.sha == provider_sha, "startup-provider-sha256");

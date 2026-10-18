@@ -195,6 +195,8 @@ if(BUILD_TESTING)
     # Settings, menu and status.
     mhw_test(settings_config_tests SOURCES tests/settings_config_tests.cpp)
     mhw_test(settings_menu_tests SOURCES tests/settings_menu_tests.cpp)
+    # The shared helpers (src/common).
+    mhw_test(common_tests SOURCES tests/common_tests.cpp)
 
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.

@@ -21,7 +21,9 @@ bool scene_extent(unsigned &scene_width, unsigned &scene_height, unsigned &windo
                   unsigned &window_height) noexcept;
 // DLSS's render size (see continuous_dlaa).
 bool render_extent(unsigned &width, unsigned &height) noexcept;
-void sample();
+// Each heartbeat: the runtime's status file and, at the first 12 and then at
+// powers of two, its full state in the inputs log. Skipped while unhealthy.
+void sample() noexcept;
 // The runtime's counters (see cd::write_summary), or null before arming.
 void summary(std::ostream &);
 // Writes the runtime state to the input log and status file without requiring
