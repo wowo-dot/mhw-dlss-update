@@ -59,6 +59,15 @@ GameHookState game_hook_state(std::uint32_t handle) noexcept {
     const auto state = hooks->state(game_self, handle);
     return state <= AL_HOOK_FAILED ? static_cast<GameHookState>(state) : GameHookState::failed;
 }
+GameHookState settled_game_hook_state(std::uint32_t handle, std::uint64_t limit_ms) noexcept {
+    const auto began = GetTickCount64();
+    auto state = game_hook_state(handle);
+    while (state == GameHookState::pending && GetTickCount64() - began < limit_ms) {
+        Sleep(10);
+        state = game_hook_state(handle);
+    }
+    return state;
+}
 bool hook_owned(OwnedHook &hook, void *detour, void **next) noexcept {
     if (hook.live || hook.handle || !hook.target || !detour || !next) return false;
     hook.handle = game_hook({first_in_chain, hook.name, hook.pattern, hook.target, detour, next});

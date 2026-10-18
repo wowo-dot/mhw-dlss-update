@@ -237,7 +237,9 @@ event's `schema`.
   `render_resolution::finish`.
 - An install that fails after queueing MinHook enables leaves them in
   MinHook's global queue; game_options and render_resolution stay enabled.
-  (Gone with MinHook in 0.30.0; under AL each hook is live as registered.)
+  (Gone with MinHook in 0.30.0; under AL each hook is live as registered,
+  or pending until PRE_MAIN ends if registered before: the long session,
+  section 9.)
 - Under AL, `presentation_hook_restoration` reports `restored:false` and the
   hash of an all-zero head for every presentation method: AL owns those
   patches, so nothing restores or records them.
@@ -481,3 +483,14 @@ Behaviour stays the same; the log fields stay.
   else the research notes and the code's own reads). Code addresses and gate
   literals stay written out. Proof, per stage: the DLL is byte-identical to
   the one before apart from its link timestamps.
+- The long session (0.29.0-dev.5, Default profile, 2026-10-18) ended at the
+  title: with ten Stracker plugins, stracker_compat's PRE_MAIN took 3.9 s
+  (1 ms without them, every earlier checkpoint), and the worker registered
+  the NGX startup hooks before it ended. AL keeps such a hook pending until
+  PRE_MAIN ends, then makes it active before the game's code starts;
+  `install()` wanted it active at once and failed closed
+  (`startup-hook-chain`, the game's own AA). It now waits for it
+  (`astera::settled_game_hook_state`, up to the code's 300 s) and
+  `game_dlss` logs the wait as `pending_ms`. MinHook, up to 0.28.6,
+  installed these two at once; the other al.hooks hooks register after the
+  device, long after PRE_MAIN.

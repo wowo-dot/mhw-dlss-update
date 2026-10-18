@@ -197,6 +197,8 @@ if(BUILD_TESTING)
     mhw_test(settings_menu_tests SOURCES tests/settings_menu_tests.cpp)
     # The shared helpers (src/common).
     mhw_test(common_tests SOURCES tests/common_tests.cpp)
+    # al.hooks: waiting for a hook registered before PRE_MAIN ends.
+    mhw_test(astera_hooks_tests SOURCES tests/astera_hooks_tests.cpp LIBS mhw_astera_hooks)
 
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.

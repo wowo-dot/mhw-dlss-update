@@ -135,4 +135,9 @@ bool unhook_owned(OwnedHook &hook) noexcept;
 // finish normally. False for an unknown handle or without al.hooks.
 bool set_game_hook_enabled(std::uint32_t handle, bool enabled) noexcept;
 GameHookState game_hook_state(std::uint32_t handle) noexcept;
+// A hook registered before PRE_MAIN ends is pending until it ends; AL then
+// makes it active (or failed), before the game's own code starts. Its state
+// once it left pending, or pending still after `limit_ms`. It sleeps while it
+// waits: for the plugin's own threads only.
+GameHookState settled_game_hook_state(std::uint32_t handle, std::uint64_t limit_ms) noexcept;
 } // namespace mhw::astera

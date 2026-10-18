@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "readiness.hpp"
 #include "../game_memory/layout.hpp"
 #include "../common/require.hpp"
 #include "../common/log_path.hpp"
@@ -54,8 +55,18 @@ std::uint32_t entry_handle{}, game_dlss_handle{};
 std::uint32_t chain(const char *name, const char *pattern, void *target, void *detour, void **next) noexcept {
     return astera::game_hook({astera::first_in_chain, name, pattern, target, detour, next});
 }
-bool chain_active(std::uint32_t handle, void *next) noexcept {
-    return handle && next && astera::game_hook_state(handle) == astera::GameHookState::active;
+// This worker runs alongside the other plugins' PRE_MAIN work, which can take
+// seconds: stracker_compat loading ten Stracker plugins took 3.9 s (0.30.0's
+// long session), and both hooks were registered by then. Such a hook is
+// pending until PRE_MAIN ends and active before the game's own code starts,
+// so before the game can call it (settled_game_hook_state). Waits as long as
+// for the code (readiness.hpp).
+std::uint64_t pending_ms{};
+bool chain_active(std::uint32_t handle) noexcept {
+    const auto began = GetTickCount64();
+    const auto state = astera::settled_game_hook_state(handle, readiness_timeout_ms);
+    pending_ms += GetTickCount64() - began;
+    return state == astera::GameHookState::active;
 }
 // Takes one hook out; results as disable_result() describes.
 bool remove(bool &hooked, std::uint32_t handle, int *result) noexcept {
@@ -319,10 +330,12 @@ bool install(const Config &config, std::ostream &log) {
                 chain("mhw_dlss NGX:GameDlss1", game_dlss_head, game_dlss_target,
                       reinterpret_cast<void *>(&game_dlss_hook), reinterpret_cast<void **>(&game_dlss_original));
             game_dlss_hooked = game_dlss_handle != 0;
-            declining = chain_active(game_dlss_handle, reinterpret_cast<void *>(game_dlss_original));
+            declining = chain_active(game_dlss_handle) && game_dlss_original;
         }
         game_dlss_state = declining ? 1 : 5;
-        log << "{\"event\":\"game_dlss\",\"declining\":" << declining << ",\"code\":" << code << "}\n" << std::flush;
+        log << "{\"event\":\"game_dlss\",\"declining\":" << declining << ",\"code\":" << code
+            << ",\"pending_ms\":" << pending_ms << "}\n"
+            << std::flush;
     }
     // Write before enable: callback events may occur immediately after enabling.
     // hook_service: "minhook" was possible up to v0.28.6; the log tools read it.
@@ -332,7 +345,7 @@ bool install(const Config &config, std::ostream &log) {
     entry_handle = chain("mhw_dlss NGX:D3D12_Init", entry_head, cfg.target, reinterpret_cast<void *>(&hook),
                          reinterpret_cast<void **>(&original));
     installed = entry_handle != 0;
-    require(chain_active(entry_handle, reinterpret_cast<void *>(original)), "startup-hook-chain");
+    require(chain_active(entry_handle) && original, "startup-hook-chain");
     return true;
 }
 bool verify_entry(std::uintptr_t base, unsigned rva, unsigned bytes, const char *sha, const char *head) noexcept {
