@@ -21,7 +21,6 @@ std::ostream &removal(std::ostream &log) {
     return log << "\"disable_result\":[" << r[0] << ',' << r[1] << ',' << r[2] << ',' << r[3]
                << "],\"hook_service\":\"al\"";
 }
-fs::path preset_output, preset_runtime; // use_paths() (the plugin); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
     bool unreadable = false;
     for (unsigned i = 0; i < 7; ++i) {
@@ -69,34 +68,9 @@ void wait_for_code(std::uintptr_t base, std::ostream &log) {
         Sleep(10);
     }
 }
-fs::path read_path(const fs::path &file) {
-    require(fs::file_size(file) > 0 && fs::file_size(file) <= 4096, "config-size");
-    std::ifstream in(file, std::ios::binary);
-    std::string value;
-    std::getline(in, value);
-    if (!value.empty() && value.back() == '\r') value.pop_back();
-    const auto n =
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    require(n > 0, "config-utf8");
-    std::wstring wide(static_cast<std::size_t>(n), L'\0');
-    require(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-                                wide.data(), n) == n,
-            "config-utf8");
-    const fs::path p(wide);
-    require(p.is_absolute() && fs::is_directory(p), "config-directory");
-    return fs::canonical(p).make_preferred();
-}
 } // namespace
-void mhw::ngx_startup::use_paths(const fs::path &output, const fs::path &runtime) noexcept {
-    try {
-        preset_output = output;
-        preset_runtime = runtime;
-    } catch (...) {
-        preset_output.clear();
-        preset_runtime.clear();
-    }
-}
-bool mhw::ngx_startup::run(HMODULE module, const char *version, bool shared_provider) noexcept {
+bool mhw::ngx_startup::run(HMODULE module, const char *version, const fs::path &output,
+                           const fs::path &runtime_folder) noexcept {
     HMODULE pinned{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
                             reinterpret_cast<LPCWSTR>(&run), &pinned))
@@ -106,7 +80,7 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, bool shared_prov
         wchar_t dll_name[32768]{}, host_name[32768]{};
         require(GetModuleFileNameW(module, dll_name, 32768) > 0 && GetModuleFileNameW(nullptr, host_name, 32768) > 0,
                 "module-path");
-        // The plugin's paths (use_paths) are absolute and lexically normal, from
+        // The plugin's paths are absolute and lexically normal, from
         // the DLL's own folder, and stay that way (v0.28.5). Under MO2 a game
         // folder that also exists in overwrite (the log folder's parent, after
         // the first launch) canonicalizes to overwrite's copy, which has no
@@ -116,13 +90,10 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, bool shared_prov
             require(p.is_absolute() && fs::is_directory(p), "config-directory");
             return p.lexically_normal().make_preferred();
         };
-        const auto folder =
-            preset_output.empty() ? read_path(fs::path(dll.wstring() + L".output-dir")) : preset(preset_output);
-        const auto game = preset_output.empty() ? fs::canonical(host.parent_path())
-                                                : host.parent_path().lexically_normal().make_preferred();
+        const auto folder = preset(output);
+        const auto game = host.parent_path().lexically_normal().make_preferred();
         require(_wcsicmp(folder.c_str(), game.c_str()) != 0, "output-game-directory");
-        const auto runtime =
-            preset_runtime.empty() ? read_path(folder / L"sdk-runtime-dir.txt") : preset(preset_runtime);
+        const auto runtime = preset(runtime_folder);
         const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
         std::string reason;
         require(pb::host_identity(base, reason), "host-identity");
@@ -148,7 +119,7 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, bool shared_prov
                 "client-export");
         wait_for_code(base, log);
         startup::install({reinterpret_cast<void *>(base + startup::entry_rva), base + startup::caller_rva,
-                          base + 0x51d8808, runtime, folder / (name + ".sdk-data"), base + 0x51c7050, shared_provider},
+                          base + 0x51d8808, runtime, folder / (name + ".sdk-data"), base + 0x51c7050},
                          log);
         const auto began = GetTickCount64();
         while (!startup::done() && GetTickCount64() - began < 600000) Sleep(50);

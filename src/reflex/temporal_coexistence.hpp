@@ -10,9 +10,8 @@ namespace mhw::reflex::temporal {
 // same native device; NGX ownership remains process-lived as in the accepted
 // temporal renderer. No second worker, arm event, or SDK shutdown is introduced.
 const char *version() noexcept;
-// The NGX runtime folder: `ngx_runtime` when given (the plugin), else the output
-// folder's sdk-runtime-dir.txt (research runs).
-void prepare(HMODULE, const std::filesystem::path &, std::uintptr_t, const std::filesystem::path &ngx_runtime = {});
+// `output`: the log folder; `ngx_runtime`: the NGX runtime folder.
+void prepare(HMODULE, const std::filesystem::path &output, std::uintptr_t, const std::filesystem::path &ngx_runtime);
 // The continuous runtime would install now (no side effects; see cd::ready).
 bool ready(std::string &reason);
 void arm(ID3D12Device *);

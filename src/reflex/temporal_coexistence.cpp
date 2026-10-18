@@ -21,16 +21,6 @@ std::string name;
 std::uintptr_t image{};
 bool prepared{}, attempted{}, installed{}, finished{}, clean{};
 unsigned samples{};
-std::wstring wide(const std::string &value) {
-    const auto size =
-        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    require(size > 0, "NGX-runtime-UTF8");
-    std::wstring result(static_cast<std::size_t>(size), L'\0');
-    require(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-                                result.data(), size) == size,
-            "NGX-runtime-path");
-    return result;
-}
 } // namespace
 const char *version() noexcept {
     return temporal_version;
@@ -62,22 +52,11 @@ void prepare(HMODULE module, const std::filesystem::path &output, std::uintptr_t
         << ",\"experiment\":" << quoted(experiment)
         << ",\"graphics_api\":\"D3D12\",\"frame_limit\":null,\"replacement_scope\":\"qualified-native-resolve\",\"exclusive_mode\":false,\"retention\":\"reset-and-fence-v1\",\"request_retirement\":\"validated-native-return-v1\",\"activation\":\"native-postqueue-preparation-v2\",\"reconstruction\":\"suspend-or-latch-unfiltered-v1\",\"state_trace\":\"consumer-local-state-v1\",\"native_state_trace\":\"scheduled-state-evidence-v1\",\"state_admission\":\"native-current-use-v1\",\"copy_telemetry\":\"single-fence-observation-v1\",\"depth_eligibility\":\"depth-eligibility-observation-v1\",\"depth_destination\":\"depth-destination-identity-v1\"}\n"
         << std::flush;
-    if (!ngx_runtime.empty())
-        runtime = ngx_runtime;
-    else {
-        const auto config = directory / L"sdk-runtime-dir.txt";
-        require(std::filesystem::file_size(config) <= 4096, "bounded-NGX-configuration");
-        std::ifstream input(config, std::ios::binary);
-        std::string folder;
-        std::getline(input, folder);
-        if (!folder.empty() && folder.back() == '\r') folder.pop_back();
-        runtime = std::filesystem::path(wide(folder));
-    }
+    runtime = ngx_runtime;
     require(runtime.is_absolute() && std::filesystem::is_directory(runtime), "NGX-runtime-directory");
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
-    mhw::ngx_startup::use_paths(directory, runtime); // mhw_dlss.ini, no research sidecars
-    mhw::ngx_startup::decline_game_dlss();           // its own DLSS 1: never with this mod
-    require(mhw::ngx_startup::run(module, temporal_version, true), "coexistence-NGX-startup");
+    mhw::ngx_startup::decline_game_dlss(); // its own DLSS 1: never with this mod
+    require(mhw::ngx_startup::run(module, temporal_version, directory, runtime), "coexistence-NGX-startup");
     events << "{\"event\":\"ready\",\"hooks_installed\":false}\n" << std::flush;
     prepared = true;
 }

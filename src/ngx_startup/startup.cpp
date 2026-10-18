@@ -160,12 +160,12 @@ void graphics(ID3D12Device *expected) {
          << "}\n"
          << std::flush;
 }
-// FG builds: Streamline may have loaded the provider from this exact runtime
-// folder first. Accept only that path with the pinned hash.
+// Streamline may have loaded the provider from this exact runtime folder
+// first. Accept only that path with the pinned hash.
 bool shared_provider_verified() noexcept {
     const auto provider = cfg.runtime / L"nvngx_dlss.dll";
     const auto module = GetModuleHandleW(provider.c_str());
-    if (!cfg.shared_provider || !module) return false;
+    if (!module) return false;
     wchar_t loaded[32768]{};
     const auto length = GetModuleFileNameW(module, loaded, 32768);
     std::error_code error;

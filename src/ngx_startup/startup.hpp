@@ -20,9 +20,6 @@ struct Config {
     std::uintptr_t caller{}, client_slots{};
     std::filesystem::path runtime, data;
     std::uintptr_t backend_slot{}; // production renderer slot; zero only in the isolated fixture
-    // Frame-generation builds: Streamline's own NGX initialization may load the
-    // provider first. Accepted only from this exact runtime path and hash.
-    bool shared_provider{};
 };
 // One startup transaction. Pinned caller retains the configuration and stream.
 // Only disable the hook; retain the trampoline and SDK/device until process exit.
@@ -42,7 +39,12 @@ bool supported() noexcept;
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
-bool run(HMODULE, const char *version, bool shared_provider = false) noexcept;
+// The start-up worker: logs to `output` and takes the NGX runtime from
+// `runtime` (mhw_dlss.ini's log_dir and runtime_dir), both existing absolute
+// folders. Streamline's own NGX initialization may have loaded the provider
+// first; it is accepted only from `runtime` with the pinned hash.
+bool run(HMODULE, const char *version, const std::filesystem::path &output,
+         const std::filesystem::path &runtime) noexcept;
 // Alpha: the game's own DLSS 1 is declined (docs/research/game-dlss1.md):
 // right after the game's NGX init, which this transaction observes, the game
 // builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,
@@ -53,8 +55,4 @@ void decline_game_dlss() noexcept;
 // made none (DLSS 1 unsupported), 3 declined, 4 kept (unexpected wrapper
 // state), 5 not hooked (the game's code differs).
 unsigned game_dlss() noexcept;
-// Alpha: run() logs to this folder and takes the NGX runtime from this folder
-// (mhw_dlss.ini), instead of the research sidecars <dll>.output-dir and
-// <output>/sdk-runtime-dir.txt. Both must be existing absolute directories.
-void use_paths(const std::filesystem::path &output, const std::filesystem::path &runtime) noexcept;
 } // namespace mhw::ngx_startup
