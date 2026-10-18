@@ -131,7 +131,6 @@ void Streamline::initialize(const std::filesystem::path &runtime, const std::fil
     const wchar_t *paths[]{plugin.c_str()};
     const sl::Feature features[]{sl::kFeatureReflex, sl::kFeaturePCL, sl::kFeatureDLSS_G};
     sl::Preferences pref{};
-    if (frame_generation_ && sdk_verbose_log) pref.logLevel = sl::LogLevel::eVerbose;
     pref.pathsToPlugins = paths;
     pref.numPathsToPlugins = 1;
     pref.pathToLogsAndData = logs.c_str();

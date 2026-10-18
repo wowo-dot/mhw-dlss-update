@@ -4,9 +4,9 @@
 namespace mhw::perf {
 // Lean paths for the per-frame work found in the v0.12 overhead audit. Each
 // bit keeps the original fail-closed contract and only changes how it is
-// checked; 0 keeps the original path. The research build starts at 0 and
-// switches live ("<log>.perf-N" markers) so one session can compare them; the
-// plugin starts with every bit set.
+// checked; 0 keeps the original path. The plugin starts with all_toggles;
+// tools/fg_game.py switches them live ("<log>.perf-N" markers, poll_perf) so
+// one session can compare them.
 enum Toggle : unsigned {
     cached_reads = 1U,        // validated memory regions reused for about one frame per thread
     cached_methods = 2U,      // system-module method targets remembered after the first check
@@ -15,7 +15,7 @@ enum Toggle : unsigned {
     quiet_status = 16U,       // no 5-second status dumps under the render locks
     no_viewport_trace = 32U,  // no per-RSSetViewports telemetry
     no_output_sentinel = 64U, // no diagnostic clear of the DLSS output before evaluation
-    sample_profile = 128U,    // research build: stack sampler (sampler.hpp); not a lean path
+    sample_profile = 128U,    // profile = on: the stack sampler (sampler.hpp); not a lean path
     pooled_selectors = 256U,  // scaled route: a plan slot keeps its GPU selector buffer
     keyed_staging = 512U,     // FG: per-frame copies of the DLSS inputs, matched by frame (v0.12.5)
     owner_lists = 1024U,      // binding observer: no per-list lock; D3D12 lets one thread at a time

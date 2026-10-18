@@ -100,7 +100,6 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
                            : config.reflex == mhw::settings::ReflexMode::boost ? 2U
                                                                                : 1U);
     mhw::settings::status::reflex_mode(mhw::settings::reflex_name(config.reflex));
-    mhw::reflex::sdk_verbose_log = false;
 }
 
 // Nothing the mod writes or reads lies in the game folder, except its own
