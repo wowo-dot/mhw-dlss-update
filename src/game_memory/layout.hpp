@@ -46,6 +46,9 @@ inline constexpr Offset backend = 0x78;            // cD3DRender*
 inline constexpr Offset parallel_rendering = 0x93; // byte (mParallelRendering, dlaa-identity-path.md)
 inline constexpr Offset use_dlss = 0xa5;           // byte: the game's DLSS use (jitter-sequence-probe.md)
 inline constexpr Offset sizing_flags = 0xb4;       // bit 0: the game's DLSS sizing (scoped-camera-jitter.md)
+inline constexpr Offset cas = 0xbc;                // byte: FidelityFX CAS on (0x43de50, game-cas-option.md)
+inline constexpr Offset cas_sharpness = 0xc0;      // float
+inline constexpr Offset cas_scale = 0xc4;          // float: 0.8 with CAS on; content_scale_desired = it x 0xb0
 inline constexpr Offset scene_rect = 0x188;        // int[4]: the scene rectangle in the window (live-aspect.md)
 inline constexpr Offset scene_width = 0x198;       // the scene size (live-aspect.md)
 inline constexpr Offset scene_height = 0x19c;

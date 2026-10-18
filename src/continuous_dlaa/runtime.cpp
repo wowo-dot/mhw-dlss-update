@@ -187,8 +187,11 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         if (std::string why; game_options::install(image, why) && !off_at_start) {
             game_options::take_over();
             if (!wait_for([&] { return render_resolution::full_scale(image); }, 2000))
-                throw std::runtime_error("the game did not apply resolution scaling High");
-        }
+                throw std::runtime_error("the game did not apply resolution scaling High and CAS Off");
+        } else if (unsigned char cas{}; !off_at_start && pb::read(cfg.renderer + layout::renderer::cas, cas) && cas)
+            // Without the game options (their code differs) the player's CAS
+            // stays on, and its content scale refuses the render scale.
+            throw std::runtime_error("fidelityfx-cas");
         if (!render_resolution::install(image, dlss_sdk::requested_scale(configured_mode), reason, off_at_start))
             throw std::runtime_error(reason);
         if (!obs::install(device, pb::system_method, reason, render_resolution::observe_viewports))

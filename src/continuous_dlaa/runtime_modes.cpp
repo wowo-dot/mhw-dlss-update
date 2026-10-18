@@ -4,11 +4,15 @@
 #include "runtime_state.hpp"
 
 namespace mhw::continuous_dlaa::detail {
-// The player's anti-aliasing and resolution scaling again (game_options.hpp),
-// once the render thread restored the owned scale.
+// The player's anti-aliasing, CAS and resolution scaling again
+// (game_options.hpp), once the render thread restored the owned scale and a
+// visit saw the game's own scale whole: the player's CAS (content scale 0.8)
+// refuses those visits from then, and finish() needs one.
 void give_back_options() noexcept {
     if (!game_options::taken()) return;
+    const auto seen = render_resolution::restorations();
     wait_for(render_resolution::released, 1000);
+    wait_for([&] { return render_resolution::restorations() > seen; }, 1000);
     game_options::give_back();
 }
 namespace {
@@ -187,9 +191,18 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
         mark(3);
         // 4 the render scale: retarget, or rebase on the new scene. From here
         // a failure stops the runtime.
-        // From Off: the game's own DLSS rules again (anti-aliasing Off,
-        // resolution scaling High) before the scale is taken.
-        if (from_off) game_options::take_over();
+        // From Off: the game's own DLSS rules again (anti-aliasing Off, CAS
+        // Off, resolution scaling High) before the scale is taken. The render
+        // thread applies CAS's content scale on its next update: two visits
+        // must read it at 1 before the override can own a frame.
+        if (from_off) {
+            const auto seen = render_resolution::full_content_visits();
+            game_options::take_over();
+            if (!wait_for([&] { return render_resolution::full_content_visits() >= seen + 2; }, 2000)) {
+                give_back_options();
+                return resume("fidelityfx-cas");
+            }
+        }
         if (scene) {
             if (std::string why; !render_resolution::rebase({found.width, found.height}, basis,
                                                             dlss_sdk::requested_scale(requested), why))

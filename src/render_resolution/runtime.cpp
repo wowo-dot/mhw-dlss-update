@@ -49,6 +49,9 @@ std::atomic<bool> yielded{};
 // is adopted as the native value instead of the start-up check (visits <= 32).
 bool adopted{};
 std::atomic<unsigned> pending{}, fault{};
+// Visits that read the content scale at 1 in all three fields (FidelityFX
+// CAS off), qualified or not.
+std::atomic<std::uint64_t> full_content{};
 unsigned render_thread{};
 std::uint64_t visits{}, unqualified{}, overrides{}, pre_restores{}, foreign_requests{}, scaled_observed{},
     restored_observed{};
@@ -71,6 +74,7 @@ struct Snapshot {
     // renderer's sizing word and whether a backend wrapper was present.
     unsigned check{}, sizing{};
     bool wrapper{};
+    unsigned char cas{}; // FidelityFX CAS on (renderer::cas)
     // The live aspect change (docs/research/live-aspect.md, clean image):
     // sRender's window size (+0x1f448), the aspect mode requested and applied
     // (+0x7b440, +0x7b43c; 0 window, 1 16:9, 2 64:27; 0x229ef20 applies it and
@@ -195,14 +199,21 @@ bool write_request(float value) noexcept {
         return false;
     }
 }
-bool snapshot(Snapshot &s, const Plan &t) noexcept {
+bool content_full(const Snapshot &s) noexcept {
+    return s.content_desired == 1.F && s.content == 1.F && s.view_content == 1.F;
+}
+// cas_pending: FidelityFX CAS's content scale (0.8) is admitted, because
+// nothing is taken yet: game_options turns CAS off before the scale is taken
+// (install() then checks again), or the player's DLSS Off at start keeps it.
+bool snapshot(Snapshot &s, const Plan &t, bool cas_pending = false) noexcept {
     // Every value is read before any is judged, so a refused snapshot still
     // records what the renderer reported. Checks: 1 renderer, 2 API, 3 backend,
     // 4 view, 5 sizing word, 6 backend wrapper, 7 config, 8 renderer/view
     // values, 9 scale basis; then 10 sizing in progress, 11 wrapper present,
     // 12 width override, 13 basis differs from display, 14 non-finite scale,
-    // 15 display differs from the swap chain, 16 content scale not 1,
-    // 17 scale out of range, 18 view flags, 19 renderer or view changed.
+    // 15 display differs from the swap chain, 16 content scale not 1 (CAS's,
+    // with cas_pending, admitted), 17 scale out of range, 18 view flags,
+    // 19 renderer or view changed.
     const auto stop = [&](unsigned check) {
         s.check = check;
         return false;
@@ -232,6 +243,7 @@ bool snapshot(Snapshot &s, const Plan &t) noexcept {
     pb::read(renderer + layout::renderer::aspect_applied, s.aspect_applied);
     pb::read(renderer + layout::renderer::display_changes, s.flags);
     for (unsigned i = 0; i < 4; ++i) pb::read(renderer + layout::renderer::scene_rect + 4 * i, s.rect[i]);
+    pb::read(renderer + layout::renderer::cas, s.cas);
     if (!pb::read(renderer + layout::renderer::frame, s.frame) ||
         !pb::read(renderer + layout::renderer::scene_width, s.width) ||
         !pb::read(renderer + layout::renderer::scene_height, s.height) ||
@@ -260,7 +272,7 @@ bool snapshot(Snapshot &s, const Plan &t) noexcept {
                         s.view_content, s.view_combined})
         if (!std::isfinite(value)) return stop(14);
     if (s.width != t.display.width || s.height != t.display.height) return stop(15);
-    if (s.content_desired != 1.F || s.content != 1.F || s.view_content != 1.F) return stop(16);
+    if (!content_full(s) && !(cas_pending && s.cas)) return stop(16);
     // A view may hold the truncated ratio of the planned render extent, just
     // under 0.5 for an odd scene; 2:1 scenes keep the 0.5 floor exactly.
     const float view_floor = std::min(.5F, truncated_ratio(t));
@@ -330,7 +342,10 @@ void update(pb::Frame *f) {
     }
     mhw_binding_forward(original, f);
     Snapshot s{};
-    if (!snapshot(s, t)) {
+    const bool qualified = snapshot(s, t);
+    // The content scale is read when checks 1-8 passed.
+    if ((qualified || s.check >= 9) && content_full(s)) ++full_content;
+    if (!qualified) {
         Lock lock;
         if (!unqualified++) first_unqualified = s;
         last_unqualified = s;
@@ -341,7 +356,9 @@ void update(pb::Frame *f) {
             scene_pending = true;
             scene_flag = true;
             ++scene_changes;
-        } else if (overrides && !scene_pending && !yielded.load())
+        } else if (requested.load() && overrides && !scene_pending)
+            // Yielded or stopped, the game's own scale is its business (its
+            // CAS given back, for one, refuses check 16).
             fail(4);
         return;
     }
@@ -431,7 +448,8 @@ void write_snapshot(std::ostream &out, const Snapshot &s) {
         << ',' << s.view_combined << "],\"native_width_override\":" << s.width_override << ",\"native_scale_basis\":["
         << s.basis_width << ',' << s.basis_height << "],\"view_flags\":" << s.view_flags
         << ",\"depth_metadata\":" << s.depth_metadata << ",\"depth_extent\":[" << s.depth_width << ',' << s.depth_height
-        << "],\"check\":" << s.check << ",\"sizing\":" << s.sizing << ",\"wrapper\":" << s.wrapper << "}";
+        << "],\"check\":" << s.check << ",\"sizing\":" << s.sizing << ",\"wrapper\":" << s.wrapper
+        << ",\"cas\":" << unsigned(s.cas) << "}";
 }
 void write_viewport(std::ostream &out, const ViewportSample &s) {
     out << "{\"tick\":" << s.tick << ",\"caller\":" << s.caller << ",\"values\":[";
@@ -504,7 +522,7 @@ bool ready(std::uintptr_t base, float scale, std::string &reason) {
     renderer = root;
     discovered = probe;
     Snapshot s{};
-    const bool admitted = snapshot(s, planned);
+    const bool admitted = snapshot(s, planned, true);
     image = 0;
     renderer = 0;
     discovered = {};
@@ -539,7 +557,7 @@ bool install(std::uintptr_t base, float scale, std::string &reason, bool yielded
     expected_return = base + 0x22982e7;
     setter = reinterpret_cast<Setter>(base + 0x229bd70);
     Snapshot s{};
-    const bool admitted = snapshot(s, target);
+    const bool admitted = snapshot(s, target, yielded_start);
     {
         Lock lock;
         startup = s;
@@ -645,6 +663,13 @@ bool retarget(float scale, std::string &reason) {
 std::uint64_t applied_visits() noexcept {
     Lock lock;
     return scaled_observed;
+}
+std::uint64_t full_content_visits() noexcept {
+    return full_content.load();
+}
+std::uint64_t restorations() noexcept {
+    Lock lock;
+    return restored_observed;
 }
 bool scene_changed() noexcept {
     return scene_flag.load();

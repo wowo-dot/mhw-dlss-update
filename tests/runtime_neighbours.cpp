@@ -27,6 +27,15 @@ bool retarget(float, std::string &reason) {
 std::uint64_t applied_visits() noexcept {
     return 0;
 }
+// A rendering game: each look sees new visits.
+std::uint64_t full_content_visits() noexcept {
+    static std::uint64_t visits{};
+    return visits += 2;
+}
+std::uint64_t restorations() noexcept {
+    static std::uint64_t visits{};
+    return ++visits;
+}
 bool scene_changed() noexcept {
     return false;
 }

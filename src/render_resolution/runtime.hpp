@@ -18,6 +18,8 @@ bool install(std::uintptr_t image, float scale, std::string &reason, bool yielde
 // install()'s qualification without hooks or retained state: the renderer is
 // discovered, the plan is valid, the sizing code matches and the native sizing
 // snapshot is admitted. Early in startup this fails and can be retried.
+// FidelityFX CAS's content scale is admitted here (game_options turns CAS
+// off before install(), whose own check admits it only for yielded_start).
 bool ready(std::uintptr_t image, float scale, std::string &reason);
 void observe_viewports(ID3D12GraphicsCommandList *, unsigned, const D3D12_VIEWPORT *, std::uintptr_t caller) noexcept;
 bool active_ready() noexcept;
@@ -29,6 +31,12 @@ bool active_ready() noexcept;
 bool retarget(float scale, std::string &reason);
 // Visits since install or the last retarget that showed the target applied.
 std::uint64_t applied_visits() noexcept;
+// v0.30.1, FidelityFX CAS (game_options.hpp): visits that read the content
+// scale at 1 (CAS off), and visits that saw the game's own scale whole with
+// no override requested (finish() waits for one; CAS's content scale given
+// back refuses them). The worker counts new ones.
+std::uint64_t full_content_visits() noexcept;
+std::uint64_t restorations() noexcept;
 // Worker: writes each aspect-change capture once it is complete (with
 // `partial`, also one still filling), as "aspect_capture" events. Returns how
 // many it wrote. Research for the live aspect change (part B).

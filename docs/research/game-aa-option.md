@@ -115,7 +115,8 @@ Fixes on the way:
 
 ## Not covered
 
-- FidelityFX CAS with this mod's DLSS (the game makes them exclusive).
+- FidelityFX CAS with this mod's DLSS (the game makes them exclusive):
+  covered from v0.30.1, `game-cas-option.md`.
 - Dynamic Range 64-bit with this mod (raw copies are R11G11B10).
 - In game: the locked rows, help texts, Off and back, and Low/Mid/Variable or
   TAA/FXAA saved at start. That is the next run.
