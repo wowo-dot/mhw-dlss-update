@@ -138,7 +138,7 @@ add_library(mhw_dlss_alpha SHARED
     src/frame_generation/crash_log.cpp src/perf/sampler.cpp
     # The status lines and the optional CMFM pages (third_party/cmfm); the
     # game's own DLSS rules for its AA and resolution scaling options.
-    src/alpha/status.cpp src/alpha/menu.cpp src/continuous_dlaa/game_options.cpp)
+    src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp)
 mhw_cxx(mhw_dlss_alpha)
 target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
 target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe)
@@ -193,8 +193,8 @@ if(BUILD_TESTING)
         src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm)
 
     # Settings, menu and status.
-    mhw_test(alpha_config_tests SOURCES tests/alpha_config_tests.cpp)
-    mhw_test(alpha_menu_tests SOURCES tests/alpha_menu_tests.cpp)
+    mhw_test(settings_config_tests SOURCES tests/settings_config_tests.cpp)
+    mhw_test(settings_menu_tests SOURCES tests/settings_menu_tests.cpp)
 
     # The DLSS runtime (runtime.cpp under test): requests, forwarded requests,
     # the list registry, fences, shutdown, depth eligibility.

@@ -134,7 +134,7 @@ everything compiled into the DLL.
     resolution;
   - `reflex/` (Streamline, Reflex, presentation and the plugin's entry point)
     and `frame_generation/`;
-  - `alpha/`: the ini, the CMFM pages and the status lines.
+  - `settings/`: the ini, the CMFM pages and the status lines.
 - **`tests/`**: unit tests, WARP fixtures and the Python tools' tests.
 - **`tools/`**: what reads players' logs and builds releases. That's
   `fg_game.py` (run status and summaries), `profile_report.py`, `perf/`

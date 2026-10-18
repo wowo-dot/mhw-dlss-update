@@ -11,7 +11,7 @@
 #include "../common/require.hpp"
 #include "../reflex/presentation.hpp"
 #include "../reflex/live_frames.hpp"
-#include "../alpha/config.hpp"
+#include "../settings/config.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../../third_party/al/al_plugin.h"
@@ -30,15 +30,15 @@ namespace mhw::plugin {
 // --- The process --------------------------------------------------------------
 inline HMODULE module{};       // this DLL (DllMain)
 inline std::uintptr_t image{}; // the game's exe in memory
-inline mhw::alpha::Config alpha_config;
+inline mhw::settings::Config config;
 // The plugin's own folder (empty when the DLL sits in the game folder itself):
 // the only place inside the game folder the mod reads its runtime from and
 // logs to. Lexical, as the configuration's paths are: under MO2 the module
 // reports its virtual game-folder path while canonical() resolves to the
 // mod's real folder.
-inline std::wstring alpha_home;
+inline std::wstring home;
 // Folder holding mhw_dlss.ini: a failure before the log opens is recorded there.
-inline std::filesystem::path alpha_base;
+inline std::filesystem::path config_folder;
 inline std::filesystem::path runtime, output; // the NVIDIA DLLs; the logs
 inline std::ofstream log;
 // AL's al.game reported this exe's SHA-256: the worker skips re-hashing it.

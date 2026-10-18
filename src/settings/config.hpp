@@ -6,8 +6,8 @@
 #include <vector>
 #include "../dlss_sdk/geometry.hpp"
 
-namespace mhw::alpha {
-// mhw_dlss.ini next to the DLL (alpha). Lines are "key = value"; '#' or ';'
+namespace mhw::settings {
+// mhw_dlss.ini next to the DLL. Lines are "key = value"; '#' or ';'
 // starts a comment; keys and values are case-insensitive; unknown keys and bad
 // values are reported as warnings and keep the default. Relative folders are
 // relative to the DLL's folder. The defaults are the shipped ini's (v0.29.0):
@@ -303,4 +303,4 @@ inline std::string with_frame_generation(std::string_view text, std::string_view
 inline std::string with_reflex(std::string_view text, ReflexMode mode) {
     return with_value(text, "reflex", reflex_value(mode));
 }
-} // namespace mhw::alpha
+} // namespace mhw::settings

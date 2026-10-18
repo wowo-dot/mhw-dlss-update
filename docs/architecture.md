@@ -42,7 +42,7 @@ the shipped configuration.
 | Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + five `.inl` (one translation unit: see its head), `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
 | Observer | `temporal_present/observer.cpp` (387), `bindings.cpp`, `output.cpp`, `unfiltered.cpp` | A CPU mirror of each command list's bindings, raster state and predicate; binding restore after injected work |
 | Frame generation | `frame_generation/game_session*.cpp` (0.29.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
-| Settings and menu | `alpha/*` (config, menu, menu_model, status, capabilities) | ini, the CMFM pages, Status lines, the card's capabilities |
+| Settings and menu | `settings/*` (0.29.0; `alpha/` up to 0.28.6: config, menu, menu_model, status, capabilities, version) | ini, the CMFM pages, Status lines, the card's capabilities |
 | NGX startup | `ngx_startup/startup.cpp`, `worker.cpp` | Initializes the mod's NGX inside the game's own NGX init; declines the game's DLSS 1 |
 | Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy,trampoline_pool}`, `bridge_probe/{bounded_scalar_read,projection_snapshot}` | Code gates, structure discovery, guarded reads, matrices and jitter |
 
@@ -433,3 +433,11 @@ Behaviour stays the same; the log fields stay.
     `error`), which the logs report; a shared visitor would have to carry
     each, in code only the game exercises. The hex/SHA-256 helpers differ
     (memoized code hashes, file digests, Streamline's pinned DLLs).
+  - Names: `src/alpha/` is `src/settings/` (`mhw::settings`), the
+    plugin's `alpha_config`/`alpha_home`/`alpha_base` are `config`/`home`/
+    `config_folder`, `MHW_ALPHA_VERSION` is `MHW_VERSION`, and comments
+    that called the shipped mod "the alpha" say what they mean. Strings
+    the logs, the ini and the package carry keep their text: the
+    `alpha_config`, `alpha_waiting` and `alpha_arm` events, `"build":
+    "alpha"`, the ini's "(alpha)" header (88 event and 1,833 field
+    writes compared before and after).

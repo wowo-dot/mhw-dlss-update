@@ -2,13 +2,13 @@
 #include <cstdint>
 #include <string>
 
-// What this graphics card, driver and system offer (alpha, v0.27.5): filled at
+// What this graphics card, driver and system offer (v0.27.5): filled at
 // start from the SDKs' own answers (DXGI's adapter description, NGX's DLSS
 // capability, Streamline's support results and requirements, DLSS-G's state)
 // and completed when DLSS-G reports more later. The menu offers only what is
-// available here, with the reason for the rest. Pure (tests/alpha_menu_tests.cpp);
+// available here, with the reason for the rest. Pure (tests/settings_menu_tests.cpp);
 // the worker fills it and status.cpp keeps it.
-namespace mhw::alpha::capabilities {
+namespace mhw::settings::capabilities {
 
 enum class Support : unsigned { unknown, yes, no };
 // Why frame generation is not available.
@@ -142,4 +142,4 @@ inline std::string generation_support_line(const Capabilities &c) {
     return line;
 }
 
-} // namespace mhw::alpha::capabilities
+} // namespace mhw::settings::capabilities

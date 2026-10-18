@@ -3,7 +3,7 @@
 // a presentation fault turns it off for the session, and an aspect change
 // gives it a new scene rectangle.
 #include "plugin.hpp"
-#include "../alpha/status.hpp"
+#include "../settings/status.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../reflex/temporal_coexistence.hpp"
 #include <intrin.h>
@@ -86,19 +86,19 @@ void sync_generation(GenerationSwitch &g) {
             << ",\"tries\":" << g.tries << ",\"ms\":" << now - g.asked_at << ",\"buffers\":" << v.buffers
             << ",\"queues\":" << v.queues << ",\"late_queues\":" << v.late_queues << "}\n"
             << std::flush;
-        mhw::alpha::status::reflex_mode(reflex_mode_name(reflex_applied.load()));
+        mhw::settings::status::reflex_mode(reflex_mode_name(reflex_applied.load()));
         if (fg_loaded != g.want) {
             // Refused (exclusive fullscreen, the game's waitable moved) or failed:
             // not asked again until the player changes it or the game changes
             // its fullscreen state (log_lifecycle).
             switch_unreached = g.want;
             if (g.want && !generation_fault)
-                mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable,
+                mhw::settings::status::generation(mhw::settings::status::Generation::unavailable,
                                                v.switch_reason == 4   ? "exclusive fullscreen"
                                                : v.switch_reason == 5 ? "latency waitable"
                                                                       : "switch failed");
         } else if (g.want && !generation_fault)
-            mhw::alpha::status::generation(mhw::alpha::status::Generation::armed);
+            mhw::settings::status::generation(mhw::settings::status::Generation::armed);
         if (fg_loaded && !generation_fault && cd::live_modes() && !cd::dlss_off()) fg::arm(true);
         g = {};
         return;
@@ -143,7 +143,7 @@ void presentation_fault(const mhw::reflex::PresentationStats &v) {
     if (generation_fault) return;
     generation_fault = true;
     if (fg::status().armed) fg::arm(false);
-    if (fg_plugin) mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped, "presentation fault");
+    if (fg_plugin) mhw::settings::status::generation(mhw::settings::status::Generation::stopped, "presentation fault");
     loader_log(AL_LOG_WARNING, "frame generation turned off for this session: presentation fault (" + why + ")");
 }
 // Worker: after a scene change, frame generation takes the new scene

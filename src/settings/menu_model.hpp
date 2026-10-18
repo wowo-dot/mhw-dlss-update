@@ -7,7 +7,7 @@
 #include "capabilities.hpp"
 #include "config.hpp"
 
-// The settings CMFM's "Settings" page shows (alpha, v0.28.0), as the ini holds
+// The settings CMFM's "Settings" page shows (v0.28.0), as the ini holds
 // them. Every row applies at once; a row that cannot change now stays visible,
 // greyed, with the reason in the help line (lock_reason()).
 // - "DLSS" On/Off: Off hands the game back (continuous_dlaa::turn_off): its own
@@ -26,8 +26,8 @@
 //   Auto pause. While Off or Dynamic the multiplier is kept in memory.
 // - "Reflex": Off only while DLSS-G is not loaded (it paces the swap chain and
 //   needs Reflex); turning frame generation on turns Reflex on again.
-// Pure (tests/alpha_menu_tests.cpp).
-namespace mhw::alpha::menu_model {
+// Pure (tests/settings_menu_tests.cpp).
+namespace mhw::settings::menu_model {
 
 struct Settings {
     dlss_sdk::ReconstructionMode dlss_mode = dlss_sdk::ReconstructionMode::performance;
@@ -197,4 +197,4 @@ inline std::string lock_reason(Row row, const Settings &s, const capabilities::C
     return {};
 }
 
-} // namespace mhw::alpha::menu_model
+} // namespace mhw::settings::menu_model

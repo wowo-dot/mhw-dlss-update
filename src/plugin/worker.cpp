@@ -4,9 +4,9 @@
 // game exits: the menu's live changes, the game's aspect changes, the frame
 // generation switch, and a heartbeat in the log every 20 s.
 #include "plugin.hpp"
-#include "../alpha/capabilities.hpp"
-#include "../alpha/status.hpp"
-#include "../alpha/version.hpp"
+#include "../settings/capabilities.hpp"
+#include "../settings/status.hpp"
+#include "../settings/version.hpp"
 #include "../bridge_probe/readable_region.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
@@ -71,35 +71,35 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     const auto game_folder = host.parent_path().lexically_normal();
     if (std::filesystem::is_regular_file(base / L"mhw_dlss.ini", missing) &&
         _wcsicmp(base.c_str(), game_folder.c_str()))
-        alpha_home = base.wstring();
-    alpha_base = base;
+        home = base.wstring();
+    config_folder = base;
     std::ifstream in(base / L"mhw_dlss.ini", std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    alpha_config = mhw::alpha::parse_config(text, base);
-    output = alpha_config.log_dir;
+    config = mhw::settings::parse_config(text, base);
+    output = config.log_dir;
     std::filesystem::create_directories(output);
-    runtime = alpha_config.runtime_dir;
+    runtime = config.runtime_dir;
     // DLSS-G loads unless frame_generation_plugin = off; the frame
     // generation setting only turns it on or off (live, in the menu).
-    fg_plugin = alpha_config.generation_plugin;
-    fg_multiplier = alpha_config.multiplier;
-    mhw::frame_generation::game::enable(alpha_config.frame_generation);
-    fg_mode = alpha_config.dynamic           ? mhw::frame_generation::game::Mode::dynamic
-              : alpha_config.generation_auto ? mhw::frame_generation::game::Mode::automatic
+    fg_plugin = config.generation_plugin;
+    fg_multiplier = config.multiplier;
+    mhw::frame_generation::game::enable(config.frame_generation);
+    fg_mode = config.dynamic           ? mhw::frame_generation::game::Mode::dynamic
+              : config.generation_auto ? mhw::frame_generation::game::Mode::automatic
                                              : mhw::frame_generation::game::Mode::fixed;
-    fg_target = alpha_config.dynamic_target;
-    mhw::alpha::status::generation(fg_plugin ? mhw::alpha::status::Generation::starting
-                                             : mhw::alpha::status::Generation::off);
-    mhw::continuous_dlaa::reconstruction_mode(alpha_config.dlss_mode);
-    mhw::continuous_dlaa::start_off(!alpha_config.dlss);
-    mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(alpha_config.dlss_mode));
+    fg_target = config.dynamic_target;
+    mhw::settings::status::generation(fg_plugin ? mhw::settings::status::Generation::starting
+                                             : mhw::settings::status::Generation::off);
+    mhw::continuous_dlaa::reconstruction_mode(config.dlss_mode);
+    mhw::continuous_dlaa::start_off(!config.dlss);
+    mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(config.dlss_mode));
     // profile = on: the stack sampler too (perf::sample_profile; started
     // with the frame windows).
-    mhw::perf::toggles.store(mhw::perf::all_toggles | (alpha_config.profile ? mhw::perf::sample_profile : 0U));
-    reflex_requested.store(alpha_config.reflex == mhw::alpha::ReflexMode::off     ? 0U
-                           : alpha_config.reflex == mhw::alpha::ReflexMode::boost ? 2U
+    mhw::perf::toggles.store(mhw::perf::all_toggles | (config.profile ? mhw::perf::sample_profile : 0U));
+    reflex_requested.store(config.reflex == mhw::settings::ReflexMode::off     ? 0U
+                           : config.reflex == mhw::settings::ReflexMode::boost ? 2U
                                                                                   : 1U);
-    mhw::alpha::status::reflex_mode(mhw::alpha::reflex_name(alpha_config.reflex));
+    mhw::settings::status::reflex_mode(mhw::settings::reflex_name(config.reflex));
     mhw::reflex::sdk_verbose_log = false;
 }
 
@@ -119,12 +119,12 @@ void check_folders(const std::filesystem::path &host) {
         const auto text = path.wstring();
         // The plugin folder may sit inside the game folder (AL, MO2 virtual
         // paths); nothing else there is used.
-        if (!alpha_home.empty() && under(path.lexically_normal().wstring(), alpha_home)) continue;
+        if (!home.empty() && under(path.lexically_normal().wstring(), home)) continue;
         require(!under(text, game_root), "configuration-in-game-directory");
     }
 }
 
-// The game's identity, then this launch's log: start and alpha_config.
+// The game's identity, then this launch's log: start and config.
 Session open_log(const std::filesystem::path &dll) {
     Session session;
     image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
@@ -148,7 +148,7 @@ Session open_log(const std::filesystem::path &dll) {
     require(bool(log), "log");
     log << std::boolalpha;
     session.crash_log = mhw::frame_generation::crash_log::install(output / (name + ".crash.jsonl"), fg_buffers_json);
-    log << "{\"event\":\"start\",\"schema\":1,\"version\":\"" MHW_ALPHA_VERSION
+    log << "{\"event\":\"start\",\"schema\":1,\"version\":\"" MHW_VERSION
            "\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":"
         << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier
         << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId() << ",\"creation\":" << session.creation
@@ -158,19 +158,19 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"upscaling\":true,\"temporal_version\":" << quoted(mhw::reflex::temporal::version()) << "}\n"
         << std::flush;
     log << "{\"event\":\"alpha_config\",\"dlss_mode\":\""
-        << mhw::alpha::dlss_setting_value(alpha_config.dlss, alpha_config.dlss_mode)
-        << "\",\"frame_generation\":" << alpha_config.frame_generation << ",\"multiplier\":" << alpha_config.multiplier
-        << ",\"dynamic\":" << alpha_config.dynamic
-        << ",\"dynamic_target\":" << quoted(mhw::alpha::dynamic_target_value(alpha_config.dynamic_target))
-        << ",\"frame_generation_auto\":" << alpha_config.generation_auto
-        << ",\"frame_generation_plugin\":" << quoted(alpha_config.generation_plugin ? "auto" : "off")
-        << ",\"profile\":" << alpha_config.profile << ",\"perf_ab\":" << alpha_config.perf_ab
-        << ",\"hook_timing\":" << alpha_config.hook_timing
-        << ",\"reflex\":" << quoted(mhw::alpha::reflex_value(alpha_config.reflex))
-        << ",\"runtime_dir\":" << quoted(alpha_config.runtime_dir.string())
-        << ",\"log_dir\":" << quoted(alpha_config.log_dir.string()) << ",\"warnings\":[";
-    for (unsigned i = 0; i < alpha_config.warnings.size(); ++i)
-        log << (i ? "," : "") << quoted(alpha_config.warnings[i]);
+        << mhw::settings::dlss_setting_value(config.dlss, config.dlss_mode)
+        << "\",\"frame_generation\":" << config.frame_generation << ",\"multiplier\":" << config.multiplier
+        << ",\"dynamic\":" << config.dynamic
+        << ",\"dynamic_target\":" << quoted(mhw::settings::dynamic_target_value(config.dynamic_target))
+        << ",\"frame_generation_auto\":" << config.generation_auto
+        << ",\"frame_generation_plugin\":" << quoted(config.generation_plugin ? "auto" : "off")
+        << ",\"profile\":" << config.profile << ",\"perf_ab\":" << config.perf_ab
+        << ",\"hook_timing\":" << config.hook_timing
+        << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
+        << ",\"runtime_dir\":" << quoted(config.runtime_dir.string())
+        << ",\"log_dir\":" << quoted(config.log_dir.string()) << ",\"warnings\":[";
+    for (unsigned i = 0; i < config.warnings.size(); ++i)
+        log << (i ? "," : "") << quoted(config.warnings[i]);
     log << "]}\n" << std::flush;
     return session;
 }
@@ -209,7 +209,7 @@ bool wait_for_swap_chain() {
     const bool attach_stopped = stop_device_attach();
     const bool swap_observed = success && attach_stopped && describe_swap() && !swapchain_chains_missing.load();
     if (!swap_observed)
-        mhw::alpha::status::worker_failed(failure.empty() ? std::string_view("presentation")
+        mhw::settings::status::worker_failed(failure.empty() ? std::string_view("presentation")
                                                           : std::string_view(failure));
     return swap_observed;
 }
@@ -228,10 +228,10 @@ std::uint64_t start_frames(const Session &session) {
         << ",\"previous\":0,\"accepted\":true}\n"
         << std::flush;
     mhw::perf::host_frames.take();
-    if (alpha_config.profile) mhw::perf::sampler::start();
+    if (config.profile) mhw::perf::sampler::start();
     // Hot game-memory regions stay validated off the render thread.
     mhw::bridge_probe::start_region_refresher();
-    if (alpha_config.hook_timing) mhw::perf::hook_timing::enable();
+    if (config.hook_timing) mhw::perf::hook_timing::enable();
     return wait_start;
 }
 
@@ -276,7 +276,7 @@ bool wait_until_qualified(std::uint64_t wait_start) {
         << ",\"fault_hr\":" << stats.fault_hr << "}\n"
         << std::flush;
     if (!arm_now)
-        mhw::alpha::status::worker_failed(not_ready.empty() ? std::string_view("presentation")
+        mhw::settings::status::worker_failed(not_ready.empty() ? std::string_view("presentation")
                                                             : std::string_view(not_ready));
     return arm_now;
 }
@@ -289,12 +289,12 @@ void arm_dlss() {
     unsigned render_w{}, render_h{}, scene_w{}, scene_h{}, window_w{}, window_h{};
     mhw::reflex::temporal::render_extent(render_w, render_h);
     mhw::reflex::temporal::scene_extent(scene_w, scene_h, window_w, window_h);
-    mhw::alpha::status::dlss_sizes(render_w, render_h, scene_w, scene_h);
-    mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(mhw::continuous_dlaa::reconstruction_mode()));
-    mhw::alpha::status::dlss(mhw::continuous_dlaa::dlss_off() ? mhw::alpha::status::Stage::player_off
-                                                              : mhw::alpha::status::Stage::running);
+    mhw::settings::status::dlss_sizes(render_w, render_h, scene_w, scene_h);
+    mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(mhw::continuous_dlaa::reconstruction_mode()));
+    mhw::settings::status::dlss(mhw::continuous_dlaa::dlss_off() ? mhw::settings::status::Stage::player_off
+                                                              : mhw::settings::status::Stage::running);
     // NGX startup and the DLSS install succeeded (capabilities.hpp).
-    mhw::alpha::status::dlss_available(true);
+    mhw::settings::status::dlss_available(true);
 }
 
 // Reflex in the player's mode (Off only without DLSS-G), then the frame
@@ -322,7 +322,7 @@ void arm_reflex() {
     log << "{\"event\":\"frames_armed\",\"mode\":" << static_cast<unsigned>(arm_mode)
         << ",\"duration_seconds\":" << capture_seconds << ",\"sleep_calls_enabled\":true,\"markers_enabled\":true}\n"
         << std::flush;
-    mhw::alpha::status::reflex(mhw::alpha::status::Stage::running);
+    mhw::settings::status::reflex(mhw::settings::status::Stage::running);
 }
 
 // Frame generation on the game's chain, for the scene rectangle.
@@ -343,7 +343,7 @@ void arm_frame_generation() {
             << ",\"scene\":[" << scene_width << ',' << scene_height << "],\"window\":[" << window_width << ','
             << window_height << "],\"chain\":[" << chain.width << ',' << chain.height << "]}\n"
             << std::flush;
-        mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "scene_rect");
+        mhw::settings::status::generation(mhw::settings::status::Generation::unavailable, "scene_rect");
     } else {
         const mhw::frame_generation::game::SceneRect scene{
             (chain.width - scene_width) / 2, (chain.height - scene_height) / 2, scene_width, scene_height};
@@ -366,7 +366,7 @@ void arm_frame_generation() {
             << scene.x << ',' << scene.y << ',' << scene.width << ',' << scene.height << ']'
             << ",\"display_hz\":" << mhw::frame_generation::display_refresh_hz() << "}\n"
             << std::flush;
-        mhw::alpha::status::generation(mhw::alpha::status::Generation::armed);
+        mhw::settings::status::generation(mhw::settings::status::Generation::armed);
     }
 }
 
@@ -392,7 +392,7 @@ void run_session() {
     std::uint64_t chain_retry_at{}; // no real chain: the game's resize asked every 2 s
     // perf_ab (diagnostic, FG off): DLSS paused and running in
     // turn, 30 s each, logged with the time to the plugin log.
-    std::uint64_t perf_ab_next = alpha_config.perf_ab && !fg_loaded ? GetTickCount64() + 30000 : 0;
+    std::uint64_t perf_ab_next = config.perf_ab && !fg_loaded ? GetTickCount64() + 30000 : 0;
     bool perf_ab_paused = false;
     stop_reason = "duration";
     // 20 s, so a session closed soon after an event still logs it.
@@ -471,10 +471,10 @@ void run_session() {
             const auto session = mhw::frame_generation::game::status();
             if (session.maximum && session.maximum + 1 != learned_multiplier) {
                 learned_multiplier = session.maximum + 1;
-                const auto dynamic = session.dynamic_support == 2   ? mhw::alpha::capabilities::Support::yes
-                                     : session.dynamic_support == 1 ? mhw::alpha::capabilities::Support::no
-                                                                    : mhw::alpha::capabilities::Support::unknown;
-                mhw::alpha::status::generation_limits(learned_multiplier, dynamic);
+                const auto dynamic = session.dynamic_support == 2   ? mhw::settings::capabilities::Support::yes
+                                     : session.dynamic_support == 1 ? mhw::settings::capabilities::Support::no
+                                                                    : mhw::settings::capabilities::Support::unknown;
+                mhw::settings::status::generation_limits(learned_multiplier, dynamic);
                 log << "{\"event\":\"fg_limits\",\"source\":\"session\",\"max_multiplier\":" << learned_multiplier
                     << ",\"dynamic\":" << session.dynamic_support << "}\n"
                     << std::flush;
@@ -547,8 +547,8 @@ void end_session() {
         // The game's exit is not one; the status keeps its last state.
         const std::string_view why = stop_reason;
         if (why == "reflex_frames" || why == "presentation")
-            mhw::alpha::status::reflex(mhw::alpha::status::Stage::off, why);
-        if (why != "game_exit") mhw::alpha::status::worker_failed(why);
+            mhw::settings::status::reflex(mhw::settings::status::Stage::off, why);
+        if (why != "game_exit") mhw::settings::status::worker_failed(why);
     }
     mhw::frame_generation::game::arm(false);
     const auto fg_off_began = GetTickCount64();
@@ -622,7 +622,7 @@ int fail(const std::exception &e) noexcept {
     try {
         startup_failure = e.what();
     } catch (...) {}
-    mhw::alpha::status::worker_failed(e.what());
+    mhw::settings::status::worker_failed(e.what());
     signal_startup();
     // Once Streamline has created the host chain under SDK pacing, the game
     // renders into Streamline's buffers: unhooking or shutting it down here
@@ -647,9 +647,9 @@ int fail(const std::exception &e) noexcept {
     } catch (...) {}
     // Failed before the log opened (configuration, paths, identity): leave
     // one line next to mhw_dlss.ini so the silent fail-closed is explainable.
-    if (!log.is_open() && !alpha_base.empty()) try {
-            std::ofstream early(alpha_base / L"startup-error.jsonl", std::ios::binary | std::ios::app);
-            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"" << mhw::alpha::version
+    if (!log.is_open() && !config_folder.empty()) try {
+            std::ofstream early(config_folder / L"startup-error.jsonl", std::ios::binary | std::ios::app);
+            early << "{\"event\":\"worker_failed\",\"stage\":\"startup\",\"version\":\"" << mhw::settings::version
                   << "\",\"pid\":" << GetCurrentProcessId() << ",\"reason\":" << quoted(e.what()) << "}\n"
                   << std::flush;
         } catch (...) {}

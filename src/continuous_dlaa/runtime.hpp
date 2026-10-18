@@ -9,11 +9,11 @@
 #include <string>
 #include "../dlss_sdk/geometry.hpp"
 namespace mhw::continuous_dlaa {
-// Before ready()/install() (alpha: dlss_mode in mhw_dlss.ini): the DLSS preset,
+// Before ready()/install() (dlss_mode in mhw_dlss.ini): the DLSS preset,
 // which also sets the render scale asked of the game. Performance by default.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept;
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept;
-// Any thread (the alpha menu): ask for a live preset change, or for DLSS off;
+// Any thread (the CMFM menu): ask for a live preset change, or for DLSS off;
 // the worker takes it with requested_mode() and runs change_mode() or
 // turn_off(). The scaled build only.
 void request_mode(dlss_sdk::ReconstructionMode) noexcept;
@@ -77,10 +77,10 @@ ModeChange change_scene() noexcept;
 ModeChange turn_off() noexcept;
 // Whether the player's Off holds. Any thread.
 bool dlss_off() noexcept;
-// Before install() (alpha: dlss_mode = off): install everything, take
+// Before install() (dlss_mode = off): install everything, take
 // nothing over; change_mode() then turns DLSS on.
 void start_off(bool) noexcept;
-// Diagnostic (the alpha's perf_ab): pause stops admitting frames as the live
+// Diagnostic (the ini's perf_ab): pause stops admitting frames as the live
 // rebuild's pause does, so the game renders natively with every hook still
 // installed; resume admits them again (refused after a fault). Worker only,
 // frame generation off.
@@ -104,6 +104,6 @@ void finish() noexcept;
 void astera_hooks(std::vector<astera::Hook> &);
 void save_rejected_shader(const std::filesystem::path &) noexcept;
 void write(std::ostream &);
-// Counters only (frames, DLSS history resets by reason) for the alpha's minute log.
+// Counters only (frames, DLSS history resets by reason) for the minute log.
 void write_summary(std::ostream &);
 } // namespace mhw::continuous_dlaa

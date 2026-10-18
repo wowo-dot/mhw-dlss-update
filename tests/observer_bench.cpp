@@ -1,6 +1,6 @@
 // Observer per-call cost (v0.23.8 work; not a ctest). WARP command lists,
 // native and with the binding observer's hooks installed (MinHook, as the
-// research build; the alpha chains through Astera Loader instead).
+// research build; the plugin chains through Astera Loader instead).
 // - one thread: a million SetGraphicsRootConstantBufferView calls;
 // - N threads, each recording its own list (the observer's entries are
 //   adjacent), a draw-like mix: topology, viewport, root CBV, table-less

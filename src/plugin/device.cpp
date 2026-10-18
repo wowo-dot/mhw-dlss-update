@@ -4,9 +4,9 @@
 // description, and the SDK's shutdown when the worker fails before the game
 // renders through it.
 #include "plugin.hpp"
-#include "../alpha/capabilities.hpp"
-#include "../alpha/menu.hpp"
-#include "../alpha/status.hpp"
+#include "../settings/capabilities.hpp"
+#include "../settings/menu.hpp"
+#include "../settings/status.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../reflex/driver_status.hpp"
 #include "../reflex/native_factory.hpp"
@@ -134,7 +134,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
     require(device_pin->GetNodeCount() == 1 && SUCCEEDED(device_pin->GetDeviceRemovedReason()), "native-device-health");
     owner = GetCurrentThreadId();
     // v0.27.5: the card first (capabilities.hpp), so a failure below still shows it.
-    namespace caps_ns = mhw::alpha::capabilities;
+    namespace caps_ns = mhw::settings::capabilities;
     caps_ns::Capabilities caps;
     caps.known = true;
     if (Microsoft::WRL::ComPtr<IDXGIAdapter1> described;
@@ -151,7 +151,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
             if (caps.card.vendor != caps_ns::nvidia) caps.dlss = caps_ns::Support::no;
         }
     }
-    mhw::alpha::status::card_capabilities(caps);
+    mhw::settings::status::card_capabilities(caps);
     // FG target only: load DLSS-G with Reflex/PCL; the default stays Reflex-only.
     sdk.initialize(runtime, output / L"sdk-logs",
                    fg_plugin ? mhw::reflex::StreamlineFeatures::reflex_and_frame_generation
@@ -178,7 +178,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
             caps.frame_generation = caps_ns::Support::no;
             caps.missing = caps_ns::Missing::plugin_off;
         }
-        mhw::alpha::status::card_capabilities(caps);
+        mhw::settings::status::card_capabilities(caps);
     }
     api(sdk.supported(sl::kFeatureReflex, info), "Reflex-support");
     api(sdk.supported(sl::kFeaturePCL, info), "PCL-support");
@@ -213,7 +213,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
                     caps.card.driver_minor = fg_requirements.driverVersionDetected.minor;
                 }
             }
-            mhw::alpha::status::card_capabilities(caps);
+            mhw::settings::status::card_capabilities(caps);
         }
         // v0.27.0: DLSS-G loads at every start, so frame generation turns on
         // and off live. A card or system without it runs DLSS and Reflex alone.
@@ -224,7 +224,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
                 << ",\"result\":" << static_cast<int>(unloaded) << "}\n"
                 << std::flush;
             fg_plugin = false;
-            mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "DLSS-G-support");
+            mhw::settings::status::generation(mhw::settings::status::Generation::unavailable, "DLSS-G-support");
         }
     }
     api(sdk.attach(device_pin.Get()), "attach-native-device");
@@ -245,7 +245,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
             << std::flush;
         // v0.27.4: frame generation off (or DLSS off) at start: the game's
         // chain is made without DLSS-G (full speed); a switch loads it later.
-        if (!alpha_config.frame_generation || !alpha_config.dlss) {
+        if (!config.frame_generation || !config.dlss) {
             const auto unloaded = sdk.unload_frame_generation();
             log << "{\"event\":\"fg_unloaded\",\"reason\":\"off_at_start\",\"result\":" << static_cast<int>(unloaded)
                 << "}\n"
@@ -263,7 +263,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
     sl::ReflexState state{};
     api(sdk.state(state), "Reflex-state");
     if (!state.lowLatencyAvailable) caps.reflex = caps_ns::Support::no;
-    mhw::alpha::status::card_capabilities(caps);
+    mhw::settings::status::card_capabilities(caps);
     log << "{\"event\":\"card_capabilities\",\"name\":" << quoted(caps.card.name) << ",\"vendor\":" << caps.card.vendor
         << ",\"device\":" << caps.card.device << ",\"memory_mb\":" << caps.card.memory_mb
         << ",\"driver\":" << quoted(caps_ns::version_text(caps.card.driver_major, caps.card.driver_minor))
@@ -276,7 +276,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
         << "}\n"
         << std::flush;
     // v0.28.0: the menu's choices follow the card.
-    mhw::alpha::menu::card_ready();
+    mhw::settings::menu::card_ready();
     device_checked = true;
     log << "{\"event\":\"device_checked\",\"caller_rva\":0,\"loader\":true"
         << ",\"thread\":" << owner << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get())

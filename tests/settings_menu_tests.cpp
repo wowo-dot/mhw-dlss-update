@@ -1,8 +1,8 @@
-// The alpha's CMFM pages: the ini edit, the settings model and the status lines.
-#include "../src/alpha/capabilities.hpp"
-#include "../src/alpha/config.hpp"
-#include "../src/alpha/menu_model.hpp"
-#include "../src/alpha/status.hpp"
+// The mod's CMFM pages: the ini edit, the settings model and the status lines.
+#include "../src/settings/capabilities.hpp"
+#include "../src/settings/config.hpp"
+#include "../src/settings/menu_model.hpp"
+#include "../src/settings/status.hpp"
 #include "../src/continuous_dlaa/game_options.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -28,7 +28,7 @@ constexpr std::string_view shipped =
     "log_dir = logs             ; one log file per launch\r\n";
 
 void ini_edits() {
-    namespace a = mhw::alpha;
+    namespace a = mhw::settings;
     const std::filesystem::path folder = L"D:\\mods\\dlss";
     {
         const auto out = a::with_frame_generation(shipped, "off");
@@ -81,8 +81,8 @@ void ini_edits() {
 }
 
 void settings_model() {
-    namespace m = mhw::alpha::menu_model;
-    namespace c = mhw::alpha::capabilities;
+    namespace m = mhw::settings::menu_model;
+    namespace c = mhw::settings::capabilities;
     using mhw::dlss_sdk::ReconstructionMode;
     std::string why;
     {
@@ -246,7 +246,7 @@ void settings_model() {
                   lock(m::Row::mode, s, other) == lock(m::Row::dlss, s, other),
               "not NVIDIA: DLSS locked");
     }
-    using mhw::alpha::ReflexMode;
+    using mhw::settings::ReflexMode;
     check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 &&
               m::choice_of(ReflexMode::off) == 2,
           "reflex choices, on first");
@@ -296,7 +296,7 @@ void settings_model() {
 }
 
 void status_lines() {
-    namespace s = mhw::alpha::status;
+    namespace s = mhw::settings::status;
     check(s::reason_text("DLSS-G-support:3") == "this graphics card or driver has no DLSS Frame Generation",
           "api reason with code");
     check(s::reason_text("presentation") == "presentation stopped", "exact reason");
@@ -443,6 +443,6 @@ int main() {
     settings_model();
     status_lines();
     if (failures) return 1;
-    std::printf("alpha menu tests passed\n");
+    std::printf("settings menu tests passed\n");
     return 0;
 }

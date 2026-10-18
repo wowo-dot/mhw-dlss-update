@@ -1710,7 +1710,7 @@ void write_summary(std::ostream &o) {
     a(rejection_counts);
     o << ",\"readiness\":";
     a(readiness.reasons());
-    // v0.24.10: in the summary (the full report is quiet in the alpha); each
+    // v0.24.10: in the summary (the full report is quiet in the plugin); each
     // census sample is written once.
     o << ",\"post_census\":";
     census_write(o);

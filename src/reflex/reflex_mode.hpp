@@ -1,7 +1,7 @@
 #pragma once
 
 namespace mhw::reflex {
-// The Reflex mode the player chose (alpha). The ini sets it at start and the
+// The Reflex mode the player chose. The ini sets it at start and the
 // menu changes it live; the worker applies it to Streamline
 // (slReflexSetOptions) at arming and then on its next poll (100 ms). Values
 // are sl::ReflexMode: 0 off, 1 low latency, 2 low latency with boost. The

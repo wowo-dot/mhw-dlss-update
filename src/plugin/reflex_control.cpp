@@ -1,7 +1,7 @@
 // Reflex: the player's mode, applied by the worker under sdk_mutex, and the
 // driver's sleep status that confirms it.
 #include "plugin.hpp"
-#include "../alpha/status.hpp"
+#include "../settings/status.hpp"
 #include "../reflex/driver_status.hpp"
 #include "../reflex/reflex_mode.hpp"
 
@@ -25,11 +25,11 @@ void mode_options(const char *phase, sl::ReflexMode mode, sl::Result result) {
 }
 // sl::ReflexMode is numbered as the ini's modes (off, on, boost), so the
 // applied mode reads with the ini mode's name.
-static_assert(unsigned(sl::ReflexMode::eOff) == unsigned(mhw::alpha::ReflexMode::off) &&
-              unsigned(sl::ReflexMode::eLowLatency) == unsigned(mhw::alpha::ReflexMode::on) &&
-              unsigned(sl::ReflexMode::eLowLatencyWithBoost) == unsigned(mhw::alpha::ReflexMode::boost));
+static_assert(unsigned(sl::ReflexMode::eOff) == unsigned(mhw::settings::ReflexMode::off) &&
+              unsigned(sl::ReflexMode::eLowLatency) == unsigned(mhw::settings::ReflexMode::on) &&
+              unsigned(sl::ReflexMode::eLowLatencyWithBoost) == unsigned(mhw::settings::ReflexMode::boost));
 const char *reflex_mode_name(unsigned mode) noexcept {
-    return mhw::alpha::reflex_name(static_cast<mhw::alpha::ReflexMode>(mode));
+    return mhw::settings::reflex_name(static_cast<mhw::settings::ReflexMode>(mode));
 }
 // The worker, under sdk_mutex: applies the requested mode if it changed. Off
 // is refused while DLSS-G is loaded (it needs Reflex); the menu already keeps
@@ -48,7 +48,7 @@ bool apply_reflex_mode(bool loaded) {
     mode_options("live", mode, result);
     if (result == sl::Result::eOk) {
         reflex_applied.store(requested);
-        mhw::alpha::status::reflex_mode(reflex_mode_name(requested));
+        mhw::settings::status::reflex_mode(reflex_mode_name(requested));
         return true;
     }
     reflex_requested.store(reflex_applied.load());

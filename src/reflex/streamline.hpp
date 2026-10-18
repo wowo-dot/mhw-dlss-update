@@ -7,7 +7,7 @@
 #include <filesystem>
 
 namespace mhw::reflex {
-// Research builds log Streamline verbosely with the DLSS-G plugin; the alpha
+// Research builds log Streamline verbosely with the DLSS-G plugin; the plugin
 // sets this to false before initialize() (default level: errors, warnings, info).
 inline bool sdk_verbose_log = true;
 enum class StreamlineFeatures { reflex_only, reflex_and_frame_generation };

@@ -21,7 +21,7 @@ std::ostream &removal(std::ostream &log) {
     return log << "\"disable_result\":[" << r[0] << ',' << r[1] << ',' << r[2] << ',' << r[3]
                << "],\"hook_service\":\"al\"";
 }
-fs::path preset_output, preset_runtime; // use_paths() (alpha); empty: research sidecars
+fs::path preset_output, preset_runtime; // use_paths() (the plugin); empty: research sidecars
 startup::Slots slots(std::uintptr_t base) noexcept {
     bool unreadable = false;
     for (unsigned i = 0; i < 7; ++i) {
@@ -106,7 +106,7 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, bool shared_prov
         wchar_t dll_name[32768]{}, host_name[32768]{};
         require(GetModuleFileNameW(module, dll_name, 32768) > 0 && GetModuleFileNameW(nullptr, host_name, 32768) > 0,
                 "module-path");
-        // The alpha's paths (use_paths) are absolute and lexically normal, from
+        // The plugin's paths (use_paths) are absolute and lexically normal, from
         // the DLL's own folder, and stay that way (v0.28.5). Under MO2 a game
         // folder that also exists in overwrite (the log folder's parent, after
         // the first launch) canonicalizes to overwrite's copy, which has no

@@ -1,5 +1,5 @@
-// mhw_dlss.ini parsing for the alpha build.
-#include "../src/alpha/config.hpp"
+// mhw_dlss.ini parsing.
+#include "../src/settings/config.hpp"
 #include <cstdio>
 
 namespace {
@@ -15,93 +15,93 @@ void check(bool ok, const char *what) {
 int main() {
     const std::filesystem::path folder = L"D:\\mods\\dlss";
     {
-        const auto c = mhw::alpha::parse_config("", folder);
-        check(!c.dlss && !c.frame_generation && c.multiplier == 2 && c.reflex == mhw::alpha::ReflexMode::off &&
+        const auto c = mhw::settings::parse_config("", folder);
+        check(!c.dlss && !c.frame_generation && c.multiplier == 2 && c.reflex == mhw::settings::ReflexMode::off &&
                   c.warnings.empty(),
               "defaults: the shipped ini's, DLSS, frame generation and Reflex off");
         check(c.dlss_mode == mhw::dlss_sdk::ReconstructionMode::performance, "DLSS turns on in Performance");
         check(c.runtime_dir == folder && c.log_dir == folder / "logs", "default folders");
     }
     {
-        const auto c = mhw::alpha::parse_config(
+        const auto c = mhw::settings::parse_config(
             "# comment\r\n FRAME_GENERATION = 4X ; inline\r\nreflex=on\r\nruntime_dir = \"C:\\SL Runtime\" \r\nlog_dir=..\\Logs\r\n",
             folder);
-        check(c.frame_generation && c.multiplier == 4 && c.reflex == mhw::alpha::ReflexMode::on && c.warnings.empty(),
+        check(c.frame_generation && c.multiplier == 4 && c.reflex == mhw::settings::ReflexMode::on && c.warnings.empty(),
               "values, case, comments, CRLF");
         check(c.runtime_dir == std::filesystem::path(L"C:\\SL Runtime"), "absolute runtime folder keeps its case");
         check(c.log_dir == std::filesystem::path(L"D:\\mods\\Logs"), "relative log folder");
     }
     {
-        const auto c = mhw::alpha::parse_config("frame_generation = off\nreflex = off\n", folder);
-        check(!c.frame_generation && c.reflex == mhw::alpha::ReflexMode::off && c.warnings.empty(),
+        const auto c = mhw::settings::parse_config("frame_generation = off\nreflex = off\n", folder);
+        check(!c.frame_generation && c.reflex == mhw::settings::ReflexMode::off && c.warnings.empty(),
               "reflex off with frame generation off");
     }
     {
-        const auto c = mhw::alpha::parse_config(
+        const auto c = mhw::settings::parse_config(
             "frame_generation = 5x\nreflex = off\nsharpness = 1\nnot a pair\nlog_dir =\n", folder);
         check(!c.frame_generation && c.multiplier == 2, "bad multiplier keeps the default (off, 2x)");
-        check(c.reflex == mhw::alpha::ReflexMode::off, "reflex off kept: frame generation is off");
+        check(c.reflex == mhw::settings::ReflexMode::off, "reflex off kept: frame generation is off");
         check(c.warnings.size() == 4, "four warnings");
         check(c.log_dir == folder / "logs", "empty folder keeps the default");
     }
     {
         using mhw::dlss_sdk::ReconstructionMode;
-        const auto c = mhw::alpha::parse_config("dlss_mode = Quality\n", folder);
+        const auto c = mhw::settings::parse_config("dlss_mode = Quality\n", folder);
         check(c.dlss_mode == ReconstructionMode::quality && c.warnings.empty(), "dlss_mode quality, any case");
-        check(mhw::alpha::parse_config("dlss_mode=dlaa", folder).dlss_mode == ReconstructionMode::dlaa,
+        check(mhw::settings::parse_config("dlss_mode=dlaa", folder).dlss_mode == ReconstructionMode::dlaa,
               "dlss_mode dlaa");
-        check(mhw::alpha::parse_config("dlss_mode = balanced", folder).dlss_mode == ReconstructionMode::balanced,
+        check(mhw::settings::parse_config("dlss_mode = balanced", folder).dlss_mode == ReconstructionMode::balanced,
               "dlss_mode balanced");
-        const auto bad = mhw::alpha::parse_config("dlss_mode = ultra_performance\n", folder);
+        const auto bad = mhw::settings::parse_config("dlss_mode = ultra_performance\n", folder);
         check(bad.dlss_mode == ReconstructionMode::performance && !bad.dlss && bad.warnings.size() == 1,
               "unknown mode keeps the default (off, Performance) with a warning");
-        const auto off = mhw::alpha::parse_config("dlss_mode = Off\n", folder);
+        const auto off = mhw::settings::parse_config("dlss_mode = Off\n", folder);
         check(!off.dlss && off.dlss_mode == ReconstructionMode::performance && off.warnings.empty(), "dlss_mode off");
-        check(mhw::alpha::parse_config("dlss_mode = off\ndlss_mode = quality\n", folder).dlss,
+        check(mhw::settings::parse_config("dlss_mode = off\ndlss_mode = quality\n", folder).dlss,
               "a later mode turns DLSS on");
-        check(std::string(mhw::alpha::dlss_setting_value(false, ReconstructionMode::dlaa)) == "off" &&
-                  std::string(mhw::alpha::dlss_setting_value(true, ReconstructionMode::dlaa)) == "dlaa",
+        check(std::string(mhw::settings::dlss_setting_value(false, ReconstructionMode::dlaa)) == "off" &&
+                  std::string(mhw::settings::dlss_setting_value(true, ReconstructionMode::dlaa)) == "dlaa",
               "the setting's ini value");
-        check(mhw::alpha::parse_config("dlss_mode = performance\n", folder).dlss, "a mode turns DLSS on");
+        check(mhw::settings::parse_config("dlss_mode = performance\n", folder).dlss, "a mode turns DLSS on");
         for (const auto m : {ReconstructionMode::dlaa, ReconstructionMode::quality, ReconstructionMode::balanced,
                              ReconstructionMode::performance}) {
             ReconstructionMode back{};
-            check(mhw::alpha::parse_dlss_mode(mhw::alpha::dlss_mode_value(m), back) && back == m,
+            check(mhw::settings::parse_dlss_mode(mhw::settings::dlss_mode_value(m), back) && back == m,
                   "mode values round-trip");
         }
     }
     {
-        using mhw::alpha::ReflexMode;
-        check(mhw::alpha::parse_config("reflex = Boost\n", folder).reflex == ReflexMode::boost,
+        using mhw::settings::ReflexMode;
+        check(mhw::settings::parse_config("reflex = Boost\n", folder).reflex == ReflexMode::boost,
               "reflex boost, any case");
-        const auto early = mhw::alpha::parse_config("reflex = off\nframe_generation = off\n", folder);
+        const auto early = mhw::settings::parse_config("reflex = off\nframe_generation = off\n", folder);
         check(early.reflex == ReflexMode::off && early.warnings.empty(),
               "reflex off before frame_generation off: order does not matter");
-        const auto alone = mhw::alpha::parse_config("reflex = off\n", folder);
+        const auto alone = mhw::settings::parse_config("reflex = off\n", folder);
         check(alone.reflex == ReflexMode::off && alone.warnings.empty(),
               "reflex off with the default frame generation (off)");
-        const auto on = mhw::alpha::parse_config("frame_generation = 2x\nreflex = off\n", folder);
+        const auto on = mhw::settings::parse_config("frame_generation = 2x\nreflex = off\n", folder);
         check(on.reflex == ReflexMode::on && on.warnings.size() == 1,
               "a written reflex off with frame generation on: on, with a warning");
-        const auto follows = mhw::alpha::parse_config("frame_generation = 3x\n", folder);
+        const auto follows = mhw::settings::parse_config("frame_generation = 3x\n", folder);
         check(follows.reflex == ReflexMode::on && follows.warnings.empty(),
               "reflex unset follows frame generation, no warning");
-        const auto bad = mhw::alpha::parse_config("reflex = ultra\n", folder);
+        const auto bad = mhw::settings::parse_config("reflex = ultra\n", folder);
         check(bad.reflex == ReflexMode::off && bad.warnings.size() == 1,
               "unknown reflex value keeps the default (off)");
         for (const auto m : {ReflexMode::off, ReflexMode::on, ReflexMode::boost}) {
             ReflexMode back{};
-            check(mhw::alpha::parse_reflex(mhw::alpha::reflex_value(m), back) && back == m, "reflex values round-trip");
+            check(mhw::settings::parse_reflex(mhw::settings::reflex_value(m), back) && back == m, "reflex values round-trip");
         }
-        check(mhw::alpha::with_reflex("reflex = on   ; comment\r\n", ReflexMode::boost) ==
+        check(mhw::settings::with_reflex("reflex = on   ; comment\r\n", ReflexMode::boost) ==
                   "reflex = boost   ; comment\r\n",
               "reflex edited in place");
-        check(mhw::alpha::parse_config(mhw::alpha::with_reflex("frame_generation = off\n", ReflexMode::off), folder)
+        check(mhw::settings::parse_config(mhw::settings::with_reflex("frame_generation = off\n", ReflexMode::off), folder)
                       .reflex == ReflexMode::off,
               "reflex appended and read back");
     }
     {
-        namespace a = mhw::alpha;
+        namespace a = mhw::settings;
         const auto d = a::parse_config("frame_generation = Dynamic\n", folder);
         check(d.frame_generation && d.dynamic && d.multiplier == 2 && d.dynamic_target == 0 && !d.generation_auto &&
                   d.warnings.empty(),
@@ -159,6 +159,6 @@ int main() {
         check(e.dynamic_target == 165 && e.generation_auto && e.warnings.empty(), "appended keys read back");
     }
     if (failures) return 1;
-    std::printf("alpha config tests passed\n");
+    std::printf("settings config tests passed\n");
     return 0;
 }

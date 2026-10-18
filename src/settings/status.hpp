@@ -4,13 +4,13 @@
 #include <string_view>
 #include "capabilities.hpp"
 
-// What the mod is doing, for CMFM's Status page (alpha).
+// What the mod is doing, for CMFM's Status page.
 // - The worker and the Astera Loader entry report it (status.cpp keeps it
 //   under a short lock).
 // - The menu thread takes a snapshot and adds the live values: DLSS health
 //   and the frame generation session.
-// - The line functions below are pure (tests/alpha_menu_tests.cpp).
-namespace mhw::alpha::status {
+// - The line functions below are pure (tests/settings_menu_tests.cpp).
+namespace mhw::settings::status {
 
 enum class Loader : unsigned { active, degraded, disabled }; // as reported to Astera Loader
 // player_off: DLSS only, the player's Off (the game renders as without the mod).
@@ -183,4 +183,4 @@ inline std::string generated_line(const View &v) {
     return v.generation == Generation::off ? "None" : count_text(v.presented_generated);
 }
 
-} // namespace mhw::alpha::status
+} // namespace mhw::settings::status

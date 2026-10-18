@@ -2,7 +2,7 @@
 // and the game's own aspect change, each with frame generation paused around
 // it.
 #include "plugin.hpp"
-#include "../alpha/status.hpp"
+#include "../settings/status.hpp"
 #include "../render_resolution/runtime.hpp"
 #include "../reflex/temporal_coexistence.hpp"
 #include <cstdint>
@@ -12,15 +12,15 @@ namespace mhw::plugin {
 void dlss_status() {
     namespace cd = mhw::continuous_dlaa;
     if (cd::dlss_off()) {
-        mhw::alpha::status::dlss(mhw::alpha::status::Stage::player_off);
+        mhw::settings::status::dlss(mhw::settings::status::Stage::player_off);
         return;
     }
     unsigned rw{}, rh{}, sw{}, sh{}, ww{}, wh{};
     mhw::reflex::temporal::render_extent(rw, rh);
     mhw::reflex::temporal::scene_extent(sw, sh, ww, wh);
-    mhw::alpha::status::dlss_sizes(rw, rh, sw, sh);
-    mhw::alpha::status::dlss_mode(mhw::alpha::dlss_mode_name(cd::reconstruction_mode()));
-    mhw::alpha::status::dlss(mhw::alpha::status::Stage::running);
+    mhw::settings::status::dlss_sizes(rw, rh, sw, sh);
+    mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(cd::reconstruction_mode()));
+    mhw::settings::status::dlss(mhw::settings::status::Stage::running);
 }
 // Worker: a live preset change (continuous_dlaa::change_mode), the player's
 // Off (turn_off) or the way back from it. Frame generation pauses for it:
@@ -55,9 +55,9 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry
     }
     const bool running = cd::live_modes() && !cd::dlss_off();
     if (fg_ready && fg_loaded && !generation_fault && running && released && configured) fg::arm(true);
-    log << "{\"event\":\"dlss_mode_change\",\"from\":" << quoted(from_off ? "off" : mhw::alpha::dlss_mode_value(from))
-        << ",\"requested\":" << quoted(wanted.off ? "off" : mhw::alpha::dlss_mode_value(wanted.mode))
-        << ",\"mode\":" << quoted(r.off ? "off" : mhw::alpha::dlss_mode_value(r.mode)) << ",\"scene\":" << r.scene
+    log << "{\"event\":\"dlss_mode_change\",\"from\":" << quoted(from_off ? "off" : mhw::settings::dlss_mode_value(from))
+        << ",\"requested\":" << quoted(wanted.off ? "off" : mhw::settings::dlss_mode_value(wanted.mode))
+        << ",\"mode\":" << quoted(r.off ? "off" : mhw::settings::dlss_mode_value(r.mode)) << ",\"scene\":" << r.scene
         << ",\"ok\":" << r.ok << ",\"unchanged\":" << r.unchanged << ",\"resumed\":" << r.resumed
         << ",\"phase\":" << r.phase << ",\"reason\":" << quoted(r.reason) << ",\"render\":[" << r.render_width << ','
         << r.render_height << "],\"barrier\":" << r.barrier << ",\"phase_us\":[";
@@ -78,10 +78,10 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry
         retry = {};
     if (fg_ready && !released) {
         fg_ready = false;
-        mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped, "mode-change-inputs");
+        mhw::settings::status::generation(mhw::settings::status::Generation::stopped, "mode-change-inputs");
     } else if (fg_ready && !configured) {
         fg_ready = false;
-        mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "scene_rect");
+        mhw::settings::status::generation(mhw::settings::status::Generation::unavailable, "scene_rect");
     }
 }
 // Worker: the game changed its scene size with its aspect option
@@ -117,7 +117,7 @@ void change_dlss_scene(SceneRetry &retry) {
         // off left it unavailable for the session).
         if (!configured) {
             fg_ready = false;
-            mhw::alpha::status::generation(mhw::alpha::status::Generation::unavailable, "scene_rect");
+            mhw::settings::status::generation(mhw::settings::status::Generation::unavailable, "scene_rect");
         } else if (fg_loaded && !generation_fault)
             fg::arm(true);
     }
@@ -126,7 +126,7 @@ void change_dlss_scene(SceneRetry &retry) {
         log << "{\"event\":\"dlss_scene_change\",\"ok\":" << r.ok << ",\"retry\":" << r.retry
             << ",\"attempt\":" << retry.count + 1 << ",\"phase\":" << r.phase << ",\"reason\":" << quoted(r.reason)
             << ",\"scene\":[" << r.scene_width << ',' << r.scene_height << "],\"render\":[" << r.render_width << ','
-            << r.render_height << "],\"mode\":" << quoted(mhw::alpha::dlss_mode_value(r.mode))
+            << r.render_height << "],\"mode\":" << quoted(mhw::settings::dlss_mode_value(r.mode))
             << ",\"barrier\":" << r.barrier << ",\"phase_us\":[";
         for (unsigned i = 1; i < r.us.size(); ++i) log << (i > 1 ? "," : "") << r.us[i];
         log << "],\"frame_generation\":{\"paused\":" << generation << ",\"settled\":" << settled
@@ -147,10 +147,10 @@ void change_dlss_scene(SceneRetry &retry) {
         // generation stays off with it.
         retry.at = UINT64_MAX;
         if (r.retry) cd::stop();
-        mhw::alpha::status::dlss(mhw::alpha::status::Stage::off, "scene-change");
+        mhw::settings::status::dlss(mhw::settings::status::Stage::off, "scene-change");
         if (fg_ready) {
             fg_ready = false;
-            mhw::alpha::status::generation(mhw::alpha::status::Generation::stopped, "scene-change");
+            mhw::settings::status::generation(mhw::settings::status::Generation::stopped, "scene-change");
         }
     }
 }

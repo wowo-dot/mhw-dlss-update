@@ -47,7 +47,7 @@ void back_buffer(unsigned format) noexcept;
 // at the next Present (Streamline itself stays alive until process exit).
 void arm(bool armed) noexcept;
 // Any thread: the player's frame generation setting (the ini at start, the
-// alpha menu live), independent of arm(). Off: DLSS-G Off from the next
+// CMFM menu live), independent of arm(). Off: DLSS-G Off from the next
 // Present, no inputs prepared, and its resources freed a few Presents later
 // (DLSS-G guide 6.4); On again: DLSS-G allocates them at its next On (one
 // short stutter).
@@ -76,7 +76,7 @@ void multiplier(unsigned total) noexcept;
 //   DLSS-G accepted it; otherwise the fixed multiplier, counted as a fallback.
 enum class Mode : unsigned { fixed, automatic, dynamic };
 void mode(Mode mode, unsigned target_fps) noexcept;
-// Any thread, lock-free: the session as status lines show it (alpha menu).
+// Any thread, lock-free: the session as status lines show it (CMFM menu).
 struct Status {
     bool armed{}, on{};
     unsigned requested{};                // total multiplier asked for

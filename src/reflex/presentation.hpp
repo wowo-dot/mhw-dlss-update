@@ -119,7 +119,7 @@ public:
     // Ends routing: without AL the host's later calls on the identity chain
     // reach its own methods, which cannot present with a game's flags
     // (tifa-6), so only for a host done with its chain (the fixtures). Under
-    // AL false while the identity chain exists. The alpha never stops while
+    // AL false while the identity chain exists. The plugin never stops while
     // the game runs (frame generation Off only, routing until exit).
     bool stop() noexcept;
     // Requires successful stop and SDK shutdown. False retains all pins.

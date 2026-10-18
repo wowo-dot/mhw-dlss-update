@@ -9,7 +9,7 @@
 namespace mhw::perf::hook_timing {
 inline constexpr unsigned period = 64;
 inline std::atomic<bool> enabled{};
-// Hook timing (v0.23.7, diagnostic: the alpha's "hook_timing = on"). Every
+// Hook timing (v0.23.7, diagnostic: the ini's "hook_timing = on"). Every
 // 64th hooked call of a thread is timed with the time-stamp counter: the
 // hook's own time (entry to exit, less the forwarded native call) and the
 // forwarded call itself. Calls are estimated at 64 per timed call. Untimed

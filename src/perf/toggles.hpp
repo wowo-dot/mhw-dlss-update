@@ -6,7 +6,7 @@ namespace mhw::perf {
 // bit keeps the original fail-closed contract and only changes how it is
 // checked; 0 keeps the original path. The research build starts at 0 and
 // switches live ("<log>.perf-N" markers) so one session can compare them; the
-// alpha build starts with every bit set.
+// plugin starts with every bit set.
 enum Toggle : unsigned {
     cached_reads = 1U,        // validated memory regions reused for about one frame per thread
     cached_methods = 2U,      // system-module method targets remembered after the first check

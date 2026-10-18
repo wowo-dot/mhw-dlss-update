@@ -17,7 +17,7 @@
 #include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
 
-namespace mhw::alpha::menu {
+namespace mhw::settings::menu {
 namespace {
 namespace mm = menu_model;
 namespace fg = frame_generation::game;
@@ -748,4 +748,4 @@ void card_ready() noexcept {
     if (const auto ready = state.ready.load()) SetEvent(ready);
 }
 
-} // namespace mhw::alpha::menu
+} // namespace mhw::settings::menu

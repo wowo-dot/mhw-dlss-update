@@ -1,7 +1,7 @@
 #include "status.hpp"
 #include <mutex>
 
-namespace mhw::alpha::status {
+namespace mhw::settings::status {
 namespace {
 std::mutex mutex;
 View state;
@@ -84,4 +84,4 @@ View snapshot() {
     std::lock_guard lock(mutex);
     return state;
 }
-} // namespace mhw::alpha::status
+} // namespace mhw::settings::status

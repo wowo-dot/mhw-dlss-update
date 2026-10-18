@@ -6,9 +6,9 @@
 // waits until it accepts the device. No vendor call runs under DllMain.
 #include "plugin.hpp"
 #include "../astera/astera_hooks.hpp"
-#include "../alpha/menu.hpp"
-#include "../alpha/status.hpp"
-#include "../alpha/version.hpp"
+#include "../settings/menu.hpp"
+#include "../settings/status.hpp"
+#include "../settings/version.hpp"
 #include "../projection_binding/recorder.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../scaled_temporal/stream_route.hpp"
@@ -30,7 +30,7 @@ void loader_end(void *self) {
 }
 void loader_status(al_status_t status, const std::string &reason) noexcept {
     if (loader_api) loader_api->set_status(loader_self, status, reason.empty() ? nullptr : reason.c_str());
-    namespace st = mhw::alpha::status;
+    namespace st = mhw::settings::status;
     st::loader(status == AL_STATUS_DISABLED   ? st::Loader::disabled
                : status == AL_STATUS_DEGRADED ? st::Loader::degraded
                                               : st::Loader::active,
@@ -89,7 +89,7 @@ const al_plugin_info_t plugin_info{sizeof(al_plugin_info_t),
                                    AL_API_VERSION,
                                    "mhw_dlss",
                                    "MHW DLSS / Frame Generation",
-                                   mhw::alpha::version,
+                                   mhw::settings::version,
                                    AL_PHASE_BIT(AL_PHASE_DEVICE_CREATED) | AL_PHASE_BIT(AL_PHASE_SWAPCHAIN_CREATED),
                                    0,
                                    nullptr,
@@ -144,7 +144,7 @@ al_result_t start(const al_api_t *api, const al_init_t *init) {
         return refuse(startup_failure.empty() ? "startup failed (see the mod's log)" : startup_failure);
     loader_status(AL_STATUS_ACTIVE, {});
     // CMFM's Mods menu, when installed (optional; the ini is read by now).
-    mhw::alpha::menu::add_pages(api, init->self, alpha_config, alpha_base, alpha_config.generation_plugin);
+    mhw::settings::menu::add_pages(api, init->self, config, config_folder, config.generation_plugin);
     return AL_OK;
 }
 } // namespace
