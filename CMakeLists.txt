@@ -98,7 +98,7 @@ target_compile_features(mhw_ngx_startup PUBLIC cxx_std_20)
 target_include_directories(mhw_ngx_startup PRIVATE src/game_memory)
 target_include_directories(mhw_ngx_startup SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_compile_definitions(mhw_ngx_startup PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid "${MHW_NGX_LIBRARY}")
+target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid version "${MHW_NGX_LIBRARY}")
 
 # Presentation through Streamline: the identity chain, the live FG switch.
 add_library(mhw_fg_reflex_presentation STATIC src/reflex/presentation.cpp)
@@ -224,6 +224,7 @@ if(BUILD_TESTING)
     mhw_test(file_digest_tests SOURCES tests/file_digest_tests.cpp INCLUDES src/projection_binding src/game_memory
         LIBS mhw_ngx_startup TEST file_digest)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
+    mhw_test(ngx_providers_tests SOURCES tests/ngx_providers_tests.cpp TEST ngx_providers)
 
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
     mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm tests/fake_astera.cpp

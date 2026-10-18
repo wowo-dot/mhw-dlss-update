@@ -7,13 +7,17 @@
 #include "../projection_binding/memory.hpp"
 #include <nvsdk_ngx.h>
 #include <dxgi.h>
+#include <psapi.h>
+#include <winver.h>
 #include <wrl/client.h>
 #include <intrin.h>
+#include <algorithm>
 #include <atomic>
 #include <iomanip>
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace mhw::ngx_startup {
 namespace {
@@ -186,6 +190,56 @@ bool shared_provider_verified() noexcept {
     return length && length < 32768 && std::filesystem::equivalent(loaded, provider, error) && !error &&
            projection_binding::file_sha256(loaded) == provider_sha;
 }
+// v0.30.1 (jgb2003-1): when NGX did not load this mod's provider, every
+// loaded DLSS candidate (providers.hpp) with its path and file version, once.
+std::atomic_uint foreign{};
+bool providers_logged{};
+std::string file_version(const wchar_t *path) {
+    DWORD ignored{};
+    const auto size = GetFileVersionInfoSizeW(path, &ignored);
+    if (!size) return {};
+    std::vector<unsigned char> data(size);
+    VS_FIXEDFILEINFO *info{};
+    UINT length{};
+    if (!GetFileVersionInfoW(path, 0, size, data.data()) ||
+        !VerQueryValueW(data.data(), L"\\", reinterpret_cast<void **>(&info), &length) || !info ||
+        length < sizeof *info)
+        return {};
+    return std::to_string(HIWORD(info->dwFileVersionMS)) + '.' + std::to_string(LOWORD(info->dwFileVersionMS)) + '.' +
+           std::to_string(HIWORD(info->dwFileVersionLS)) + '.' + std::to_string(LOWORD(info->dwFileVersionLS));
+}
+void log_providers(const char *phase) {
+    if (providers_logged) return;
+    providers_logged = true;
+    std::vector<HMODULE> modules(512);
+    DWORD needed{};
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        const auto bytes = static_cast<DWORD>(modules.size() * sizeof(HMODULE));
+        if (!K32EnumProcessModules(GetCurrentProcess(), modules.data(), bytes, &needed)) needed = 0;
+        if (needed <= bytes) break;
+        modules.resize(needed / sizeof(HMODULE) + 64);
+    }
+    modules.resize(std::min<std::size_t>(needed / sizeof(HMODULE), modules.size()));
+    auto strongest = Provider::none;
+    *out << "{\"event\":\"dlss_providers\",\"phase\":\"" << phase << "\",\"modules\":[";
+    bool first = true;
+    for (const auto module : modules) {
+        wchar_t path[32768]{};
+        const auto length = GetModuleFileNameW(module, path, 32768);
+        if (!length || length >= 32768) continue;
+        const auto kind = provider_kind(path);
+        if (kind == Provider::none) continue;
+        std::error_code error;
+        const bool mod =
+            std::filesystem::equivalent(std::filesystem::path(path).parent_path(), cfg.runtime, error) && !error;
+        if (!mod) strongest = stronger(strongest, kind);
+        *out << (first ? "" : ",") << "{\"path\":" << std::quoted(mhw::log_path(path)) << ",\"kind\":" << unsigned(kind)
+             << ",\"mod\":" << mod << ",\"version\":\"" << file_version(path) << "\"}";
+        first = false;
+    }
+    foreign = static_cast<unsigned>(strongest);
+    *out << "],\"enumerated\":" << modules.size() << ",\"foreign\":" << unsigned(strongest) << "}\n" << std::flush;
+}
 bool capabilities(const char *phase) {
     NVSDK_NGX_Parameter *p{};
     const auto get = NVSDK_NGX_D3D12_GetCapabilityParameters(&p);
@@ -205,7 +259,10 @@ bool capabilities(const char *phase) {
     std::error_code error;
     const bool identity = length && length < 32768 && std::filesystem::equivalent(path, provider, error) && !error &&
                           projection_binding::file_sha256(path) == provider_sha;
-    if (identity) pinned_provider = loaded;
+    if (identity)
+        pinned_provider = loaded;
+    else
+        log_providers(phase);
     // Finish all queries before emitting a complete record, including failures.
     *out << "{\"event\":\"capabilities\",\"phase\":\"" << phase << "\",\"get_result\":" << unsigned(get)
          << ",\"get_values\":[" << unsigned(results[0]) << ',' << unsigned(results[1]) << ',' << unsigned(results[2])
@@ -382,6 +439,9 @@ bool settled() noexcept {
 }
 bool supported() noexcept {
     return allowed.load();
+}
+Provider foreign_provider() noexcept {
+    return static_cast<Provider>(foreign.load());
 }
 unsigned calls() noexcept {
     return count.load();

@@ -56,7 +56,9 @@ void prepare(HMODULE module, const std::filesystem::path &output, std::uintptr_t
     require(runtime.is_absolute() && std::filesystem::is_directory(runtime), "NGX-runtime-directory");
     // Streamline initializes NGX first when DLSS-G is loaded; both share one runtime folder.
     mhw::ngx_startup::decline_game_dlss(); // its own DLSS 1: never with this mod
-    require(mhw::ngx_startup::run(module, temporal_version, directory, runtime), "coexistence-NGX-startup");
+    const bool started = mhw::ngx_startup::run(module, temporal_version, directory, runtime);
+    // NGX loaded another DLSS than the mod's (jgb2003-1): its own reason.
+    require(started, mhw::ngx_startup::provider_reason(mhw::ngx_startup::foreign_provider()));
     events << "{\"event\":\"ready\",\"hooks_installed\":false}\n" << std::flush;
     prepared = true;
 }

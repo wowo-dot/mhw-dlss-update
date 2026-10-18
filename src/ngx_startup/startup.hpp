@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iosfwd>
 #include "../dlss_sdk/initialization.hpp"
+#include "providers.hpp"
 
 namespace mhw::ngx_startup {
 inline constexpr unsigned entry_rva = 0x273f230, caller_rva = 0x23842dc;
@@ -36,6 +37,9 @@ std::array<int, 4> disable_result() noexcept;
 bool verify_entry(std::uintptr_t base, unsigned rva, unsigned bytes, const char *sha, const char *head) noexcept;
 bool settled() noexcept;
 bool supported() noexcept;
+// v0.30.1: when NGX did not load this mod's provider, what it loaded instead
+// (logged as "dlss_providers"); none until then.
+Provider foreign_provider() noexcept;
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
