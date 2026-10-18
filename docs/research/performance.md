@@ -664,3 +664,28 @@ baseline. The user called it an outlier and it was not chased.
 `presentmon_summary.py` now follows a launch's swap chains one after another
 (live frame generation rebuilds the chain). Before, it kept only the
 busiest one.
+
+## perf14: the tech-debt pass (0.29.0-dev.5, 2026-10-18)
+
+The check that the 0.30.0 cleanup costs nothing: the DLSS runtime became
+eight translation units and the build has no link-time code generation, so
+calls across them no longer inline. Same spot and settings as perf13 (hub
+start, windowed 2560x1440, Image Quality High, Reflex On, diagnostics off),
+one launch of 0.29.0-dev.5 (`20261018-perf14`, pid 36000), cut with
+`presentmon_summary.py --log` on the plugin log; perf13 cut the same way from
+its saved `mhw_dlss-launch1.log`. The user chose not to run 0.28.6 again, so
+perf13 (v0.28.0, four days earlier) is the baseline.
+
+| Stretch | perf13: fps / 1% low / CPU busy / GPU busy | perf14 |
+|---|---|---|
+| Quality, frame generation off | 254.6 / 163.5 / 3.81 / 2.54 ms | 261-268 / 202-208 / 3.62-3.72 / 2.86 ms (settled 15 s slices) |
+| DLAA | 237.3 / 171.3 / 4.09 / 4.08 ms | 252.7 / 189.5 / 3.84 / 3.80 ms |
+| Balanced | 252.3 / 183.3 / 3.84 / 2.95 ms | 261.3 / 211.0 / 3.71 / 2.65 ms |
+| Performance | 252.9 / 182.6 / 3.83 / 2.79 ms | 257.4 / 208.9 / 3.77 / 2.47 ms |
+| Frame generation 2x (Performance) | (perf13 ran 2x then 6x) | 509.7 shown / 270.2 / 1.82 / 1.91 ms |
+
+CPU busy is equal or lower at every preset, and the frame rate and 1% lows
+are higher: no cost from the split. The difference to perf13 is not
+attributed to the cleanup (other days, the 0.28.x changes in between); the
+result is only that nothing got slower. No DLSS Off stretch was taken.
+Link-time code generation is not needed.
