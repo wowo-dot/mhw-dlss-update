@@ -85,7 +85,7 @@ void projection_after(bool admitted, bool returned, NativeFrame &f) {
     auto &s = projection.source;
     // Restore regardless of stop, failed validation, or an exception in native code.
     s.projection =
-        bridge_probe::capture_projection_snapshot(cfg.image, s.anchor, bridge_probe::read_bounded_scalar, nullptr);
+        game_memory::capture_projection_snapshot(cfg.image, s.anchor, game_memory::read_bounded_scalar, nullptr);
     const auto &p = s.projection;
     const bool restored = pb::jitter_exchange(s.camera + 0x38, projection.candidate, 0);
     if (restored)

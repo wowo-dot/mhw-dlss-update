@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace b = mhw::bridge_probe;
+namespace b = mhw::game_memory;
 using A = std::uintptr_t;
 void require(bool ok, const char *why) {
     if (!ok) throw std::runtime_error(why);

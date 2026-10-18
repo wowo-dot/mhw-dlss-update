@@ -69,8 +69,8 @@ struct Source {
     unsigned bytes{}, thread{};
     std::uint64_t order{}, tick{};
     std::uintptr_t camera{}, camera_type{};
-    bridge_probe::ProjectionAnchor anchor{};
-    bridge_probe::ProjectionSnapshot projection{};
+    game_memory::ProjectionAnchor anchor{};
+    game_memory::ProjectionSnapshot projection{};
     MatrixSet matrices{};
     std::array<std::byte, max_constants> data{};
 };

@@ -1,5 +1,5 @@
 #include "memory.hpp"
-#include "../bridge_probe/readable_region.hpp"
+#include "../game_memory/readable_region.hpp"
 #include <windows.h>
 #include <algorithm>
 #include <cstring>
@@ -8,7 +8,7 @@ namespace mhw::projection_binding {
 bool copy_memory(std::uintptr_t at, void *out, unsigned bytes) noexcept {
     if (!at || !out || !bytes || bytes > max_shader || at > UINTPTR_MAX - bytes) return false;
     for (unsigned done = 0; done < bytes;) {
-        const auto p = at + done, end = bridge_probe::readable_end(p);
+        const auto p = at + done, end = game_memory::readable_end(p);
         if (!end) return false;
         done += static_cast<unsigned>((std::min)(static_cast<std::uintptr_t>(bytes - done), end - p));
     }

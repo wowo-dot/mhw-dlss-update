@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace mhw::bridge_probe {
+namespace mhw::game_memory {
 // End of the committed, readable, non-guard region holding address, or 0.
 // With perf::cached_reads one shared answer per 64 KB block of address space
 // (16,384 lock-free entries, direct-mapped) is reused for 100 ms of
@@ -26,4 +26,4 @@ ReadCacheStats read_cache_stats() noexcept;
 // thread (idempotent); the 100 ms contract is unchanged.
 unsigned refresh_regions(std::uint32_t now_tick) noexcept;
 void start_region_refresher() noexcept;
-} // namespace mhw::bridge_probe
+} // namespace mhw::game_memory

@@ -39,7 +39,7 @@
 #include "../temporal_bindings/depth_routes.hpp"
 #include "../temporal_bindings/shader.hpp"
 #include "../projection_binding/memory.hpp"
-#include "../bridge_probe/readable_region.hpp"
+#include "../game_memory/readable_region.hpp"
 #include "../perf/hook_timing.hpp"
 #include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"

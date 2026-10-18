@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <span>
 
-namespace mhw::bridge_probe {
+namespace mhw::game_memory {
 
 enum class ScalarReadResult : std::uint8_t { success, unreadable, fault };
 using ScalarReader = ScalarReadResult (*)(void *, std::uintptr_t, std::span<std::byte>) noexcept;
@@ -12,4 +12,4 @@ using ScalarReader = ScalarReadResult (*)(void *, std::uintptr_t, std::span<std:
 // region.
 ScalarReadResult read_bounded_scalar(void *, std::uintptr_t, std::span<std::byte>) noexcept;
 
-} // namespace mhw::bridge_probe
+} // namespace mhw::game_memory

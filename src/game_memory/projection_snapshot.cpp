@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-namespace mhw::bridge_probe {
+namespace mhw::game_memory {
 namespace {
 struct Reader {
     ScalarReader read;
@@ -152,4 +152,4 @@ ProjectionSnapshot capture_projection_snapshot(std::uintptr_t base, const Projec
     s.matrix_relation = projection_relation_matches(s);
     return s;
 }
-} // namespace mhw::bridge_probe
+} // namespace mhw::game_memory

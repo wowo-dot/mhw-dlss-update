@@ -12,7 +12,7 @@
 #include <cstring>
 #include <windows.h>
 
-namespace mhw::bridge_probe {
+namespace mhw::game_memory {
 namespace {
 bool readable(const MEMORY_BASIC_INFORMATION &memory) noexcept {
     if (memory.State != MEM_COMMIT || (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0U) return false;
@@ -240,4 +240,4 @@ ScalarReadResult read_bounded_scalar(void *, const std::uintptr_t address, const
     return ScalarReadResult::success;
 }
 
-} // namespace mhw::bridge_probe
+} // namespace mhw::game_memory

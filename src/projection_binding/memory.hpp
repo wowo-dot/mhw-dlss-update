@@ -6,7 +6,7 @@ namespace mhw::projection_binding {
 bool executable(std::uintptr_t at, std::uintptr_t base) noexcept;
 
 template <class T> bool read(std::uintptr_t at, T &out) noexcept {
-    return bridge_probe::read_bounded_scalar(nullptr, at, std::as_writable_bytes(std::span(&out, 1))) ==
-           bridge_probe::ScalarReadResult::success;
+    return game_memory::read_bounded_scalar(nullptr, at, std::as_writable_bytes(std::span(&out, 1))) ==
+           game_memory::ScalarReadResult::success;
 }
 } // namespace mhw::projection_binding

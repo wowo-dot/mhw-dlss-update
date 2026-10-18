@@ -1,8 +1,8 @@
 // v0.12 overhead work: frame-interval statistics and the cached region check.
 #include "../src/perf/frame_stats.hpp"
 #include "../src/perf/toggles.hpp"
-#include "../src/bridge_probe/readable_region.hpp"
-#include "../src/bridge_probe/bounded_scalar_read.hpp"
+#include "../src/game_memory/readable_region.hpp"
+#include "../src/game_memory/bounded_scalar_read.hpp"
 #include <windows.h>
 #include <array>
 #include <atomic>
@@ -55,7 +55,7 @@ void frame_stats_tests() {
 }
 
 void region_tests() {
-    namespace bp = mhw::bridge_probe;
+    namespace gm = mhw::game_memory;
     SYSTEM_INFO info{};
     GetSystemInfo(&info);
     const auto page = info.dwPageSize;
@@ -68,39 +68,39 @@ void region_tests() {
     const auto base = reinterpret_cast<std::uintptr_t>(block);
     std::uint64_t value{};
     const auto read = [&](std::uintptr_t at) {
-        return bp::read_bounded_scalar(nullptr, at, std::as_writable_bytes(std::span(&value, 1)));
+        return gm::read_bounded_scalar(nullptr, at, std::as_writable_bytes(std::span(&value, 1)));
     };
     for (const unsigned mask : {0U, unsigned(mhw::perf::cached_reads)}) {
         mhw::perf::toggles.store(mask);
-        check(bp::readable_end(base + 8) == base + page * 2, "region end");
-        check(bp::readable_end(base + page * 2) == 0, "reserved page is not readable");
-        check(read(base + 8) == bp::ScalarReadResult::success && value == 42, "read inside the region");
-        check(read(base + page * 2 - 4) == bp::ScalarReadResult::unreadable, "read across the region end");
-        check(read(0) == bp::ScalarReadResult::unreadable, "null");
+        check(gm::readable_end(base + 8) == base + page * 2, "region end");
+        check(gm::readable_end(base + page * 2) == 0, "reserved page is not readable");
+        check(read(base + 8) == gm::ScalarReadResult::success && value == 42, "read inside the region");
+        check(read(base + page * 2 - 4) == gm::ScalarReadResult::unreadable, "read across the region end");
+        check(read(0) == gm::ScalarReadResult::unreadable, "null");
     }
     // With the cache on, a region made inaccessible within the cache window is
     // still reported readable, and the guarded read fails instead of crashing.
     mhw::perf::toggles.store(mhw::perf::cached_reads);
-    check(bp::readable_end(base + 8) == base + page * 2, "cached region");
+    check(gm::readable_end(base + 8) == base + page * 2, "cached region");
     DWORD old{};
     check(VirtualProtect(block, page * 2, PAGE_NOACCESS, &old) != FALSE, "protect");
-    const auto cached = bp::readable_end(base + 8);
+    const auto cached = gm::readable_end(base + 8);
     const auto result = read(base + 8);
-    check(cached == base + page * 2 ? result == bp::ScalarReadResult::fault
-                                    : result == bp::ScalarReadResult::unreadable,
+    check(cached == base + page * 2 ? result == gm::ScalarReadResult::fault
+                                    : result == gm::ScalarReadResult::unreadable,
           "stale cache entry: guarded read fails");
     Sleep(150); // past the cache window
-    check(bp::readable_end(base + 8) == 0 && read(base + 8) == bp::ScalarReadResult::unreadable, "cache entry expires");
+    check(gm::readable_end(base + 8) == 0 && read(base + 8) == gm::ScalarReadResult::unreadable, "cache entry expires");
     // Without the cache the protection change is seen at once.
     mhw::perf::toggles.store(0);
-    check(bp::readable_end(base + 8) == 0, "uncached check");
+    check(gm::readable_end(base + 8) == 0, "uncached check");
     VirtualFree(block, 0, MEM_RELEASE);
 }
 // Sixteen one-page regions (alternating protection) inside one 64 KB block
 // share one cache slot with sixteen different answers. Eight threads read
 // them concurrently; a torn seqlock read would return a wrong region end.
 void shared_cache_tests() {
-    namespace bp = mhw::bridge_probe;
+    namespace gm = mhw::game_memory;
     mhw::perf::toggles.store(mhw::perf::cached_reads);
     auto *block = static_cast<unsigned char *>(VirtualAlloc(nullptr, 65536, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(block != nullptr, "block");
@@ -129,7 +129,7 @@ void shared_cache_tests() {
                 for (unsigned n = 0; n < 200000; ++n) {
                     x = x * 1103515245U + 12345U;
                     const unsigned page = (x >> 16) & 15U, offset = (x >> 4) & 4095U;
-                    if (bp::readable_end(j.base + page * 4096 + offset) != j.base + (page + 1) * 4096) ++*j.wrong;
+                    if (gm::readable_end(j.base + page * 4096 + offset) != j.base + (page + 1) * 4096) ++*j.wrong;
                 }
                 ++*j.done;
                 return 0;
@@ -146,7 +146,7 @@ void shared_cache_tests() {
 // v0.23.4: the second level answers every 64 KB block of one region with one
 // region query, also when the first level has expired.
 void region_level_tests() {
-    namespace bp = mhw::bridge_probe;
+    namespace gm = mhw::game_memory;
     mhw::perf::toggles.store(mhw::perf::cached_reads);
     Sleep(150);                                        // earlier answers (possibly for this address range) expire
     constexpr std::size_t size = std::size_t{4} << 20; // 64 blocks
@@ -157,31 +157,31 @@ void region_level_tests() {
     // From the top down, so the first query starts in the region's last block.
     const auto touch = [&] {
         bool ok = true;
-        for (std::size_t b = size / 65536; b-- > 0;) ok = ok && bp::readable_end(base + b * 65536 + 100) == base + size;
+        for (std::size_t b = size / 65536; b-- > 0;) ok = ok && gm::readable_end(base + b * 65536 + 100) == base + size;
         return ok;
     };
-    auto before = bp::read_cache_stats();
+    auto before = gm::read_cache_stats();
     check(touch(), "every block reports the region end");
-    auto after = bp::read_cache_stats();
+    auto after = gm::read_cache_stats();
     check(after.queries - before.queries == 2, "one region: its run and its allocation base");
     check(after.level1_misses - before.level1_misses == 64 && after.region_hits - before.region_hits == 63,
           "each block missed the first level once; the region answered all but the first");
     before = after;
     check(touch(), "first level hits");
-    after = bp::read_cache_stats();
+    after = gm::read_cache_stats();
     check(after.level1_misses == before.level1_misses && after.queries == before.queries,
           "no misses within the window");
     Sleep(150);
-    before = bp::read_cache_stats();
+    before = gm::read_cache_stats();
     check(touch(), "after the window");
-    after = bp::read_cache_stats();
+    after = gm::read_cache_stats();
     check(after.queries - before.queries == 1 && after.refreshes - before.refreshes == 1,
           "expired blocks refresh through one query from the region's base");
     // A region made inaccessible is seen once the window has passed.
     DWORD old{};
     check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");
     Sleep(150);
-    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + size - 100) == 0,
+    check(gm::readable_end(base + 100) == 0 && gm::readable_end(base + size - 100) == 0,
           "expired region is queried again");
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);
@@ -191,7 +191,7 @@ void region_level_tests() {
 // inaccessible is dropped and its next read queries again. Timing checks are
 // skipped (not failed) when the machine stalls past their margins.
 void refresher_tests() {
-    namespace bp = mhw::bridge_probe;
+    namespace gm = mhw::game_memory;
     mhw::perf::toggles.store(mhw::perf::cached_reads);
     Sleep(150);
     constexpr std::size_t size = std::size_t{1} << 20;
@@ -201,19 +201,19 @@ void refresher_tests() {
     const auto base = reinterpret_cast<std::uintptr_t>(block);
     const auto tick = [] { return static_cast<std::uint32_t>(GetTickCount64()); };
     const auto first = tick();
-    check(bp::readable_end(base + 100) == base + size, "first read");
+    check(gm::readable_end(base + 100) == base + size, "first read");
     Sleep(60);
-    auto before = bp::read_cache_stats();
+    auto before = gm::read_cache_stats();
     const auto refreshed_at = tick();
-    check(bp::refresh_regions(refreshed_at) >= 1, "the refresher renews the region in use");
-    auto after = bp::read_cache_stats();
+    check(gm::refresh_regions(refreshed_at) >= 1, "the refresher renews the region in use");
+    auto after = gm::read_cache_stats();
     check(after.background_queries > before.background_queries && after.queries == before.queries,
           "the refresher's queries are its own");
     Sleep(60);
-    before = bp::read_cache_stats();
+    before = gm::read_cache_stats();
     const auto read_at = tick();
-    check(bp::readable_end(base + 5 * 65536 + 8) == base + size, "the renewed region answers");
-    after = bp::read_cache_stats();
+    check(gm::readable_end(base + 5 * 65536 + 8) == base + size, "the renewed region answers");
+    after = gm::read_cache_stats();
     if (read_at - first >= 100 && read_at - refreshed_at < 90)
         check(after.queries == before.queries && after.region_hits == before.region_hits + 1,
               "past the first window, no read-path query");
@@ -222,9 +222,9 @@ void refresher_tests() {
     DWORD old{};
     check(VirtualProtect(block, size, PAGE_NOACCESS, &old) != FALSE, "protect");
     Sleep(50);
-    bp::refresh_regions(tick());
+    gm::refresh_regions(tick());
     Sleep(110);
-    check(bp::readable_end(base + 100) == 0 && bp::readable_end(base + 5 * 65536 + 8) == 0,
+    check(gm::readable_end(base + 100) == 0 && gm::readable_end(base + 5 * 65536 + 8) == 0,
           "a dropped region is queried again");
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);

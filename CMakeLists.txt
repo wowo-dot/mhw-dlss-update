@@ -92,10 +92,10 @@ target_link_libraries(mhw_scaled_resolve PUBLIC mhw_dlss_inline)
 
 # NGX start-up inside the game's own NGX init; the game's DLSS 1 declined.
 add_library(mhw_ngx_startup STATIC src/ngx_startup/startup.cpp src/ngx_startup/worker.cpp src/projection_binding/identity.cpp
-    src/bridge_probe/bounded_scalar_read.cpp)
+    src/game_memory/bounded_scalar_read.cpp)
 mhw_library(mhw_ngx_startup)
 target_compile_features(mhw_ngx_startup PUBLIC cxx_std_20)
-target_include_directories(mhw_ngx_startup PRIVATE src/bridge_probe)
+target_include_directories(mhw_ngx_startup PRIVATE src/game_memory)
 target_include_directories(mhw_ngx_startup SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_compile_definitions(mhw_ngx_startup PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid "${MHW_NGX_LIBRARY}")
@@ -122,7 +122,7 @@ add_library(mhw_dlss_alpha SHARED
     src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm
     src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
     src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
-    src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp
+    src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/game_memory/projection_snapshot.cpp src/game_memory/bounded_scalar_read.cpp
     src/scaled_temporal/stream_route.cpp src/scaled_temporal/stream_entry.asm
     src/render_resolution/runtime.cpp src/render_resolution/resolution_entry.asm
     # The plugin: Astera Loader's entry, the game's device, the worker and
@@ -141,7 +141,7 @@ add_library(mhw_dlss_alpha SHARED
     src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp)
 mhw_cxx(mhw_dlss_alpha)
 target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
-target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/bridge_probe)
+target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/game_memory)
 target_compile_definitions(mhw_dlss_alpha PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_link_libraries(mhw_dlss_alpha PRIVATE bcrypt d3d12 dxgi dxguid
     mhw_ngx_startup mhw_temporal_state mhw_dlss_inline mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
@@ -185,10 +185,10 @@ if(BUILD_TESTING)
     target_include_directories(minhook PUBLIC third_party/minhook/include PRIVATE third_party/minhook/src third_party/minhook/src/hde)
 
     # The game-hook code under test compiles with these, as in the shipped DLL.
-    set(binding_includes src/projection_binding src/bridge_probe)
+    set(binding_includes src/projection_binding src/game_memory)
     set(binding_common src/projection_binding/memory.cpp src/projection_binding/policy.cpp src/projection_binding/attachments.cpp
         src/projection_binding/contract.cpp src/projection_binding/stimulus.cpp
-        src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/bridge_probe/projection_snapshot.cpp src/bridge_probe/bounded_scalar_read.cpp)
+        src/projection_binding/identity.cpp src/projection_binding/discovery.cpp src/projection_binding/entry.asm src/game_memory/projection_snapshot.cpp src/game_memory/bounded_scalar_read.cpp)
     set(temporal_binding_sources src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
         src/temporal_bindings/temporal_entry.asm src/temporal_bindings/depth_route_entry.asm src/temporal_bindings/jitter_entry.asm)
 
@@ -214,10 +214,10 @@ if(BUILD_TESTING)
     mhw_test(continuous_history_tests SOURCES tests/continuous_history_tests.cpp TEST temporal_continuous_history)
     mhw_test(continuous_retention_tests SOURCES tests/continuous_retention_tests.cpp TEST temporal_continuous_retention)
     mhw_test(history_comparison_tests SOURCES tests/history_comparison_tests.cpp TEST temporal_history_comparison)
-    mhw_test(native_taa_resolve_tests SOURCES tests/native_taa_resolve_tests.cpp INCLUDES src/projection_binding src/bridge_probe
+    mhw_test(native_taa_resolve_tests SOURCES tests/native_taa_resolve_tests.cpp INCLUDES src/projection_binding src/game_memory
         TEST native_taa_resolve)
     mhw_test(gpu_memory_tests SOURCES tests/gpu_memory_tests.cpp LIBS dxgi)
-    mhw_test(file_digest_tests SOURCES tests/file_digest_tests.cpp INCLUDES src/projection_binding src/bridge_probe
+    mhw_test(file_digest_tests SOURCES tests/file_digest_tests.cpp INCLUDES src/projection_binding src/game_memory
         LIBS mhw_ngx_startup TEST file_digest)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
 
@@ -233,15 +233,15 @@ if(BUILD_TESTING)
     mhw_test(temporal_inputs_tests SOURCES tests/temporal_inputs_tests.cpp tests/temporal_fixture.asm
         src/temporal_bindings/inputs.cpp src/temporal_bindings/shader.cpp src/temporal_bindings/depth_route_contract.cpp
         src/projection_binding/policy.cpp src/temporal_bindings/temporal_entry.asm src/projection_binding/entry.asm
-        INCLUDES src/bridge_probe TEST temporal_inputs_contract)
+        INCLUDES src/game_memory TEST temporal_inputs_contract)
     mhw_test(depth_schedule_trace_tests SOURCES tests/depth_schedule_trace_tests.cpp src/temporal_bindings/inputs.cpp
-        src/temporal_bindings/depth_route_contract.cpp INCLUDES src/bridge_probe src/projection_binding TEST depth_schedule_trace)
+        src/temporal_bindings/depth_route_contract.cpp INCLUDES src/game_memory src/projection_binding TEST depth_schedule_trace)
     mhw_test(depth_consumer_tests SOURCES tests/depth_consumer_tests.cpp src/temporal_bindings/inputs.cpp
-        src/temporal_bindings/depth_route_contract.cpp INCLUDES src/bridge_probe src/projection_binding TEST depth_consumer)
+        src/temporal_bindings/depth_route_contract.cpp INCLUDES src/game_memory src/projection_binding TEST depth_consumer)
     mhw_test(depth_lease_tests SOURCES tests/depth_lease_tests.cpp TEST depth_lease)
     mhw_test(depth_consumer_gpu SOURCES tests/depth_consumer_gpu.cpp LIBS d3d12 dxgi dxguid NO_TEST)  # run by hand
-    mhw_test(projection_snapshot_tests SOURCES tests/projection_snapshot_tests.cpp src/bridge_probe/projection_snapshot.cpp
-        src/bridge_probe/bounded_scalar_read.cpp INCLUDES src/bridge_probe src/projection_binding LIBS bcrypt)
+    mhw_test(projection_snapshot_tests SOURCES tests/projection_snapshot_tests.cpp src/game_memory/projection_snapshot.cpp
+        src/game_memory/bounded_scalar_read.cpp INCLUDES src/game_memory src/projection_binding LIBS bcrypt)
 
     # The full-size post chain: plans, readiness, recording states, the frame
     # handoff, the upscaled inputs, silhouettes.
@@ -301,8 +301,8 @@ if(BUILD_TESTING)
     mhw_test(mhw_reflex_startup_fixture SOURCES tools/reflex_startup_fixture.cpp LIBS mhw_streamline_reflex d3d12 dxgi dxguid NO_TEST)
 
     # Diagnostics: perf toggles, hook timing, the stack sampler.
-    mhw_test(perf_tests SOURCES tests/perf_tests.cpp src/bridge_probe/bounded_scalar_read.cpp src/projection_binding/identity.cpp
-        INCLUDES src/projection_binding src/bridge_probe LIBS bcrypt)
+    mhw_test(perf_tests SOURCES tests/perf_tests.cpp src/game_memory/bounded_scalar_read.cpp src/projection_binding/identity.cpp
+        INCLUDES src/projection_binding src/game_memory LIBS bcrypt)
     mhw_test(sampler_tests SOURCES tests/sampler_tests.cpp src/perf/sampler.cpp)
 
     # The log and release tools' Python tests (tests/test_*.py): fg_game,

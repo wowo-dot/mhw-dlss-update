@@ -3,7 +3,7 @@
 #include <array>
 #include <cstdint>
 
-namespace mhw::bridge_probe {
+namespace mhw::game_memory {
 struct ProjectionAnchor {
     std::uintptr_t renderer{}, context{}, view{}, table{};
     std::uint64_t frame{}, epoch{};
@@ -34,4 +34,4 @@ struct ProjectionSnapshot {
 ProjectionSnapshot capture_projection_snapshot(std::uintptr_t base, const ProjectionAnchor &, ScalarReader,
                                                void *) noexcept;
 bool projection_relation_matches(const ProjectionSnapshot &) noexcept;
-} // namespace mhw::bridge_probe
+} // namespace mhw::game_memory

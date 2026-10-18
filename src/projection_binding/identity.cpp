@@ -67,8 +67,8 @@ bool verify_code_with_head(std::uintptr_t base, unsigned rva, unsigned length, c
     for (unsigned n = head_size; n < length;) {
         std::uint64_t data{};
         const auto count = (std::min)(8U, length - n);
-        if (bridge_probe::read_bounded_scalar(nullptr, base + rva + n, {reinterpret_cast<std::byte *>(&data), count}) !=
-                bridge_probe::ScalarReadResult::success ||
+        if (game_memory::read_bounded_scalar(nullptr, base + rva + n, {reinterpret_cast<std::byte *>(&data), count}) !=
+                game_memory::ScalarReadResult::success ||
             !hash.add(&data, count))
             return false;
         n += count;

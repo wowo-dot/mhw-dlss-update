@@ -44,7 +44,7 @@ the shipped configuration.
 | Frame generation | `frame_generation/game_session*.cpp` (0.29.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
 | Settings and menu | `settings/*` (0.29.0; `alpha/` up to 0.28.6: config, menu, menu_model, status, capabilities, version) | ini, the CMFM pages, Status lines, the card's capabilities |
 | NGX startup | `ngx_startup/startup.cpp`, `worker.cpp` | Initializes the mod's NGX inside the game's own NGX init; declines the game's DLSS 1 |
-| Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy,trampoline_pool}`, `bridge_probe/{bounded_scalar_read,projection_snapshot}` | Code gates, structure discovery, guarded reads, matrices and jitter |
+| Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy}`, `game_memory/{bounded_scalar_read,projection_snapshot}` (`bridge_probe/` up to 0.28.6), `common/` (0.29.0: `require`, `quoted`, the stubs' frame macros) | Code gates, structure discovery, guarded reads, matrices and jitter |
 
 **Compiled in but unused by the shipped mod:**
 - the capture machinery of `projection_binding/recorder.cpp` and
@@ -441,3 +441,6 @@ Behaviour stays the same; the log fields stay.
     `alpha_config`, `alpha_waiting` and `alpha_arm` events, `"build":
     "alpha"`, the ini's "(alpha)" header (88 event and 1,833 field
     writes compared before and after).
+  - `src/bridge_probe/` (the research's bridge probe) is
+    `src/game_memory/` (`mhw::game_memory`): the guarded reads of game
+    memory and the camera projection snapshot.

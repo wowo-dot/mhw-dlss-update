@@ -7,7 +7,7 @@
 #include "../settings/capabilities.hpp"
 #include "../settings/status.hpp"
 #include "../settings/version.hpp"
-#include "../bridge_probe/readable_region.hpp"
+#include "../game_memory/readable_region.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
 #include "../perf/frame_stats.hpp"
@@ -230,7 +230,7 @@ std::uint64_t start_frames(const Session &session) {
     mhw::perf::host_frames.take();
     if (config.profile) mhw::perf::sampler::start();
     // Hot game-memory regions stay validated off the render thread.
-    mhw::bridge_probe::start_region_refresher();
+    mhw::game_memory::start_region_refresher();
     if (config.hook_timing) mhw::perf::hook_timing::enable();
     return wait_start;
 }
