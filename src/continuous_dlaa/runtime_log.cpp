@@ -4,6 +4,23 @@
 
 namespace mhw::continuous_dlaa {
 using namespace detail;
+namespace {
+// The projection capture's first refusal, or null; the caller holds the lock.
+void write_projection_refusal(std::ostream &out) {
+    const auto &r = projection_refusal;
+    if (!r.recorded) {
+        out << "null";
+        return;
+    }
+    out << "{\"frame\":" << r.frame << ",\"failed\":" << r.failed << ",\"rejection\":" << r.rejection
+        << ",\"checkpoint\":" << r.checkpoint << ",\"reads\":" << r.reads << ",\"words\":" << r.words
+        << ",\"constants\":" << r.constants << ",\"readable_end\":" << r.readable_end << ",\"queried\":" << r.queried
+        << ",\"region\":{\"base\":" << reinterpret_cast<std::uintptr_t>(r.region.BaseAddress)
+        << ",\"allocation\":" << reinterpret_cast<std::uintptr_t>(r.region.AllocationBase)
+        << ",\"size\":" << r.region.RegionSize << ",\"state\":" << r.region.State << ",\"protect\":" << r.region.Protect
+        << ",\"type\":" << r.region.Type << "}}";
+}
+} // namespace
 void write_summary(std::ostream &out) {
     Lock lock;
     const auto &h = history_telemetry;
@@ -38,6 +55,8 @@ void write_summary(std::ostream &out) {
         out << "],\"producer_last\":{\"frame\":" << l.frame << ",\"reason\":" << l.reason << ",\"values\":["
             << l.values[0] << ',' << l.values[1] << ',' << l.values[2] << ',' << l.values[3] << "]}";
     }
+    out << ",\"projection_refusal\":";
+    write_projection_refusal(out);
     out << ",\"projection_viewports\":[";
     for (unsigned i = 0; i < projection_viewports.size(); ++i) {
         if (i) out << ',';
@@ -141,6 +160,8 @@ void write(std::ostream &out) {
     out << ",\"zero_jitter_projections\":" << zero_jitter_projections.load() << ",\"dispatch_reasons\":[";
     for (unsigned i = 0; i < dispatch_reasons.size(); ++i) out << (i ? "," : "") << dispatch_reasons[i];
     out << ']';
+    out << ",\"projection_refusal\":";
+    write_projection_refusal(out);
     out << ",\"forwarded_requests\":";
     forwarded_telemetry.write(out);
     out << ",\"activation\":";

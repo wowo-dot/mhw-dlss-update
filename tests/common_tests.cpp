@@ -1,9 +1,11 @@
-// The shared helpers in src/common: require/hr, quoted, log_path.
+// The shared helpers in src/common: require/hr, quoted, log_path, platform.
 #include "../src/common/require.hpp"
 #include "../src/common/json.hpp"
 #include "../src/common/log_path.hpp"
+#include "../src/common/platform.hpp"
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
 
 namespace {
 void check(bool ok, const char *what) {
@@ -41,5 +43,15 @@ int main() {
     check(mhw::log_path(L"c:\\users\\player") == "%USERPROFILE%", "case-insensitive, the profile itself");
     check(mhw::log_path(L"C:\\Users\\Player2\\x") == "C:\\Users\\Player2\\x", "only the whole folder name");
     check(mhw::log_path(L"D:\\MO2\\MHW\\mods") == "D:\\MO2\\MHW\\mods", "other paths unchanged");
+
+    // On Windows: no Wine exports, then the NGX core, all on one line.
+    std::ostringstream platform;
+    platform << std::boolalpha;
+    mhw::write_platform(platform);
+    const auto line = platform.str();
+    check(line.rfind("{\"event\":\"platform\",\"wine\":false,\"ngx_core_registered\":", 0) == 0,
+          "platform: wine false, then the NGX core");
+    check(line.ends_with("}\n") && line.find('\n') == line.size() - 1, "platform is one line");
+    std::printf("%s", line.c_str());
     std::printf("common tests passed\n");
 }
