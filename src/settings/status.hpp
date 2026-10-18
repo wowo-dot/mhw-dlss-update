@@ -89,6 +89,10 @@ inline std::string reason_text(std::string_view raw) {
         {"latency waitable", "the game's frame pacing is not as expected"},
         {"switch failed", "it could not be loaded; see the mod's log"},
         {"reflex unconfirmed", "the graphics driver did not confirm Reflex"},
+        // v0.30.1: start-up refusals the player can fix (jgb2003-1 and -2).
+        {"fidelityfx-cas", "turn FidelityFX CAS off in the game's display settings"},
+        {"dlss-override", "NVIDIA's DLSS override is on (NVIDIA App); turn it off for this game"},
+        {"dlss-provider-foreign", "another DLSS file was loaded instead of the mod's; see the mod's log"},
     };
     for (const auto &k : known)
         if (raw == k.key || (raw.size() > k.key.size() && raw.starts_with(k.key) && raw[k.key.size()] == ':'))

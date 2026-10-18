@@ -4,6 +4,7 @@
 #include "../src/settings/menu_model.hpp"
 #include "../src/settings/status.hpp"
 #include "../src/continuous_dlaa/game_options.hpp"
+#include "../src/ngx_startup/providers.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <vector>
@@ -98,6 +99,10 @@ void settings_model() {
         check(go::anti_aliasing_off == 0 && go::resolution_scaling_high == 2 && go::anti_aliasing_values == 4 &&
                   go::resolution_scaling_values == 5,
               "Off, High and the value ranges");
+        // v0.30.1: the display menu's CAS rows (kind 2: the display options).
+        check(go::locked_display_row(2, 13) && go::locked_display_row(2, 14) && !go::locked_display_row(2, 2) &&
+                  !go::locked_display_row(2, 3) && !go::locked_display_row(1, 13) && !go::locked_display_row(0, 14),
+              "locked display rows: CAS and its sharpness");
     }
     // Mode: no Off among the modes any more (DLSS is its own switch, v0.28.0).
     check(m::choice_of(ReconstructionMode::dlaa) == 0 && m::choice_of(ReconstructionMode::performance) == 3,
@@ -308,6 +313,20 @@ void status_lines() {
               "see the mod's log (presentation-al-device-factory-chains)",
           "a longer reason is not a known one");
     check(s::reason_text("") == "see the mod's log", "no reason");
+    // v0.30.1: what the player can fix at start (jgb2003-1 and -2).
+    check(s::reason_text("fidelityfx-cas") == "turn FidelityFX CAS off in the game's display settings",
+          "CAS the mod could not take");
+    check(s::reason_text("dlss-override").starts_with("NVIDIA's DLSS override is on") &&
+              s::reason_text("dlss-provider-foreign").starts_with("another DLSS file was loaded"),
+          "another DLSS loaded");
+    {
+        namespace ngx = mhw::ngx_startup;
+        check(s::reason_text(ngx::provider_reason(ngx::Provider::nvidia_store)) == s::reason_text("dlss-override") &&
+                  s::reason_text(ngx::provider_reason(ngx::Provider::file)) ==
+                      s::reason_text("dlss-provider-foreign") &&
+                  s::reason_text(ngx::provider_reason(ngx::Provider::none)).starts_with("see the mod's log"),
+              "the provider reasons have words");
+    }
     check(s::count_text(0) == "0" && s::count_text(999) == "999" && s::count_text(1234567) == "1,234,567", "counts");
 
     s::View v;
