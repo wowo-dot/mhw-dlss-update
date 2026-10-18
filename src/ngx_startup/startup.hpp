@@ -9,7 +9,7 @@
 namespace mhw::ngx_startup {
 inline constexpr unsigned entry_rva = 0x273f230, caller_rva = 0x23842dc;
 inline constexpr std::uint64_t native_app = 0x05f8a85f;
-// v0.29.0: both startup hooks' first 16 original bytes (clean image), for
+// v0.30.0: both startup hooks' first 16 original bytes (clean image), for
 // Astera Loader's al.hooks and for the code gates while AL's chain owns the
 // entries: NVSDK_NGX_D3D12_Init and the game's DLSS 1 builder (0x23842a0).
 inline constexpr unsigned head_size = 16, game_dlss_rva = 0x23842a0;

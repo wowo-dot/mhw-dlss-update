@@ -301,7 +301,7 @@ std::array<bool, 9> enabled{};
 // AL: hook 2 (CopyTextureRegion) is an AL chain, live while the runtime
 // has the stream hooks applied (chains_live), otherwise continuing straight on.
 constexpr unsigned api_hook = 2;
-// v0.29.0: the game hooks (3-5, 7, 8) on al.hooks under AL (astera::OwnedHook),
+// v0.30.0: the game hooks (3-5, 7, 8) on al.hooks under AL (astera::OwnedHook),
 // first in their chains (the stubs read their caller); live as each goes in,
 // passing everything on until begin(). Patterns: each target's first 16
 // original bytes (clean image; the gates in prepare() cover them).

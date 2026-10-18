@@ -29,7 +29,7 @@ namespace mhw::continuous_dlaa::activation {
 namespace {
 namespace pb = projection_binding;
 std::uintptr_t image{}, renderer{};
-// v0.29.0: the eight hooks on al.hooks under AL (astera::OwnedHook), first in
+// v0.30.0: the eight hooks on al.hooks under AL (astera::OwnedHook), first in
 // their chains (the stubs read their caller). Patterns: each target's first 16
 // original bytes (clean image; the gates in prepare() cover them). The two
 // leaf sites are TAA2's comparisons inside 0x2392150, mid-function: AL's entry

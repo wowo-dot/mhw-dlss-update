@@ -123,7 +123,7 @@ inline std::array<bool, hook_count> enabled{};
 // and otherwise continue straight on.
 constexpr unsigned first_api_hook = 5;
 inline std::atomic<bool> chain_live{};
-// v0.29.0: hooks 0-4 (game functions) on al.hooks under AL (astera::OwnedHook),
+// v0.30.0: hooks 0-4 (game functions) on al.hooks under AL (astera::OwnedHook),
 // first in their chains (the stubs read their caller); live as each goes in,
 // passing everything on until `accepting`. Patterns: each function's first 16
 // original bytes (clean image; the gates in qualified() cover them).

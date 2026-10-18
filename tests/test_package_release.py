@@ -78,7 +78,7 @@ class PackageRelease(unittest.TestCase):
         notices = (data / 'THIRD-PARTY-NOTICES.txt').read_text(encoding='utf-8')
         for component, _, dst in pr.BUILT_IN:
             self.assertIn(component, notices); self.assertIn(f'licenses/{dst}', notices)
-        self.assertFalse((data / 'licenses' / 'MinHook-LICENSE.txt').exists())  # not in the DLL since v0.29.0
+        self.assertFalse((data / 'licenses' / 'MinHook-LICENSE.txt').exists())  # not in the DLL since v0.30.0
         with zipfile.ZipFile(self.out / 'mhw-dlss-9.8.7.zip') as z:
             self.assertEqual(sorted(z.namelist()),
                              sorted([e['path'] for e in manifest['files']] + ['AsteraLoader/plugins/mhw_dlss/manifest.json']))

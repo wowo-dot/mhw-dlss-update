@@ -1,6 +1,6 @@
 # Architecture of the shipped mod (v0.28.6, 2026-10-17)
 
-The map behind the 0.29.0 cleanup: what `mhw_dlss.dll` (CMake target
+The map behind the 0.30.0 cleanup: what `mhw_dlss.dll` (CMake target
 `mhw_dlss`, `mhw_dlss_alpha` up to 0.28.6) is made of, how it starts, what runs per frame, every hook,
 how it fails, and which log output players send us. Line numbers refer to
 `ddb7ab9` (v0.28.6). Since then the research targets were retired (tag
@@ -32,19 +32,19 @@ the shipped configuration.
 
 | Area | Files | Job |
 |---|---|---|
-| Plugin entry, worker | `plugin/` (0.29.0; `reflex/presentation_probe.cpp`, 1,909 lines, up to 0.28.6) | `plugin.hpp` (the shared state), `plugin.cpp` (AL exports, start, phases), `device.cpp` (device attach, shutdown), `worker.cpp` (the worker's stages and the session loop), `reflex_control.cpp`, `generation.cpp` (the FG switch), `dlss_control.cpp` (mode and aspect changes), `log_events.cpp` (most of the main log) |
+| Plugin entry, worker | `plugin/` (0.30.0; `reflex/presentation_probe.cpp`, 1,909 lines, up to 0.28.6) | `plugin.hpp` (the shared state), `plugin.cpp` (AL exports, start, phases), `device.cpp` (device attach, shutdown), `worker.cpp` (the worker's stages and the session loop), `reflex_control.cpp`, `generation.cpp` (the FG switch), `dlss_control.cpp` (mode and aspect changes), `log_events.cpp` (most of the main log) |
 | Presentation | `reflex/presentation.cpp` (1,250), `identity_chain.hpp`, `present_result.hpp` | DXGI/D3D12 routing through Streamline's proxies, the identity chain the game holds, the live FG chain switch |
 | Reflex | `reflex/live_frames.cpp` (419), `frame_boundaries_entry.asm`, `streamline.cpp`, `frame_session.cpp`, `driver_status.cpp` | Frame boundary hooks (simulation, render submit, present), Streamline loading (pinned SHA-256 and signature), PCL markers |
 | AL glue | `astera/astera_hooks.cpp` | al.d3d12 chains, al.hooks wrappers, internal-call scopes |
-| DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.29.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
+| DLSS runtime | `continuous_dlaa/runtime*.cpp` (0.30.0; one `runtime.cpp`, 1,654 lines, up to 0.28.6), `activation.cpp` (316), `temporal_bindings/*`, `dlss_sdk/inline.cpp` | `runtime_state.hpp` (the shared state), `runtime.cpp` (qualification, install, stop, finish), `runtime_projection.cpp` (the jittered projection), `runtime_requests.cpp` (TAA's request and depth packets), `runtime_resolve.cpp` (the Dispatch replacement that evaluates DLSS), `runtime_lists.cpp` (the D3D12 hooks, list and fence tracking), `runtime_native.cpp` (the game stubs' dispatch, AL's chains), `runtime_modes.cpp` (live preset, aspect and Off), `runtime_log.cpp` |
 | Game options | `continuous_dlaa/game_options.cpp` | The game's own DLSS rules: AA Off, resolution scaling High, locked menu rows |
 | Render resolution | `render_resolution/runtime.cpp` (432) | Sets the game's render scale on its render thread; detects aspect switches |
 | Post chain at output size | `scaled_temporal/stream_route.cpp` (990) + five `.inl` (one translation unit: see its head), `full_post_inputs.cpp`, `silhouette_draw.cpp`, `screen_shader.cpp`, `silhouette_shader.cpp`, `resolve.cpp` | full_post: the game's post chain at output size after DLSS, upscaled depth and GBuffers, silhouette replay |
 | Observer | `temporal_present/observer.cpp` (387), `bindings.cpp`, `output.cpp`, `unfiltered.cpp` | A CPU mirror of each command list's bindings, raster state and predicate; binding restore after injected work |
-| Frame generation | `frame_generation/game_session*.cpp` (0.29.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
-| Settings and menu | `settings/*` (0.29.0; `alpha/` up to 0.28.6: config, menu, menu_model, status, capabilities, version) | ini, the CMFM pages, Status lines, the card's capabilities |
+| Frame generation | `frame_generation/game_session*.cpp` (0.30.0; one `game_session.cpp`, 1,145 lines, up to 0.28.6), `hudless_pass.cpp`, `crash_log.cpp` | `game_session_state.hpp` (the shared state), `game_session.cpp` (the worker's controls, Status), `game_session_inputs.cpp` (staged depth and motion, the HUD-less image), `game_session_present.cpp` (per-Present tags and options, wind-down, window changes), `game_session_log.cpp`; the process crash log |
+| Settings and menu | `settings/*` (0.30.0; `alpha/` up to 0.28.6: config, menu, menu_model, status, capabilities, version) | ini, the CMFM pages, Status lines, the card's capabilities |
 | NGX startup | `ngx_startup/startup.cpp`, `worker.cpp` | Initializes the mod's NGX inside the game's own NGX init; declines the game's DLSS 1 |
-| Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy}`, `game_memory/{bounded_scalar_read,projection_snapshot}` (`bridge_probe/` up to 0.28.6), `common/` (0.29.0: `require`, `quoted`, the stubs' frame macros) | Code gates, structure discovery, guarded reads, matrices and jitter |
+| Helpers | `projection_binding/{identity,discovery,contract,stimulus,policy}`, `game_memory/{bounded_scalar_read,projection_snapshot}` (`bridge_probe/` up to 0.28.6), `common/` (0.30.0: `require`, `quoted`, the stubs' frame macros) | Code gates, structure discovery, guarded reads, matrices and jitter |
 
 **Compiled in but unused by the shipped mod:**
 - the capture machinery of `projection_binding/recorder.cpp` and
@@ -62,7 +62,7 @@ the shipped configuration.
    - checks the exe hash and refuses DirectX 11;
    - claims the presentation role and registers every al.d3d12 detour at order
      0;
-   - requires al.hooks and hands it over (0.29.0: refuses without it, as
+   - requires al.hooks and hands it over (0.30.0: refuses without it, as
      without al.d3d12);
    - starts the worker and waits up to 30 s for it to accept;
    - adds the CMFM pages.
@@ -146,7 +146,7 @@ instructions, and on 2026-10-17 the clean database showed r11 dead after both:
 every path reaches a call or a return before r11 is read. So every hook below
 can go to al.hooks.
 
-**Game functions** (al.hooks chains since 0.29.0; MinHook up to 0.28.6, except
+**Game functions** (al.hooks chains since 0.30.0; MinHook up to 0.28.6, except
 the frame boundaries):
 
 | Target | What | Module | Stub | Site |
@@ -237,7 +237,7 @@ event's `schema`.
   `render_resolution::finish`.
 - An install that fails after queueing MinHook enables leaves them in
   MinHook's global queue; game_options and render_resolution stay enabled.
-  (Gone with MinHook in 0.29.0; under AL each hook is live as registered.)
+  (Gone with MinHook in 0.30.0; under AL each hook is live as registered.)
 - Under AL, `presentation_hook_restoration` reports `restored:false` and the
   hash of an all-zero head for every presentation method: AL owns those
   patches, so nothing restores or records them.
@@ -288,7 +288,10 @@ event's `schema`.
 - "identity" means four things.
 - The `"build":"alpha"` marker is checked by `package_release.py`.
 
-## 9. The 0.29.0 plan
+## 9. The 0.30.0 plan
+
+The pass ships as 0.30.0 (the user's call); its test builds were
+0.29.0-dev.1 to dev.5, archived with their maps under `local/release/builds/`.
 
 Behaviour stays the same; the log fields stay.
 1. This map.
@@ -450,7 +453,7 @@ Behaviour stays the same; the log fields stay.
     `{"event":"start","schema":1,"version":"<version>",` instead. The
     `alpha_config`, `alpha_waiting` and `alpha_arm` event names stay, so
     old and new logs read the same.
-- Step 5, the bugs of section 8 (0.29.0):
+- Step 5, the bugs of section 8 (0.30.0):
   - the exit summary's `fg_status` and `dlss_summary` print booleans as
     `true`/`false`, as the heartbeat's do;
   - `provider_check`'s path and `alpha_config`'s `runtime_dir`/`log_dir`

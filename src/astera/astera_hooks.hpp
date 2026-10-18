@@ -113,7 +113,7 @@ std::uint32_t game_hook(const GameHook &hook) noexcept;
 // Detours that read their caller ([rsp] at entry: the asm stubs' caller,
 // _ReturnAddress()) must run first in their chain: AL's entry stub jumps
 // straight to the first detour, and each later one is called by the one
-// before. The mod's own game hooks use this order (v0.29.0).
+// before. The mod's own game hooks use this order (v0.30.0).
 inline constexpr std::int32_t first_in_chain = -1000000;
 // One of the mod's own game-function hooks, in its al.hooks chain.
 // hook_owned() registers it, live at once, so `next` must be the very pointer

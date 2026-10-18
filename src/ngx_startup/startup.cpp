@@ -42,7 +42,7 @@ GenericFree generic_free{};
 void *game_dlss_target{};
 bool decline_requested{}, game_dlss_hooked{};
 std::atomic_uint game_dlss_state{};
-// v0.29.0: both hooks join al.hooks chains (AL patches each entry once, with
+// v0.30.0: both hooks join al.hooks chains (AL patches each entry once, with
 // its own thread handling; removal is set_enabled). Both detours run first in
 // their chains (astera::first_in_chain): hook() checks _ReturnAddress() against
 // the game's DLSS 1 builder. The removal is logged in detail (disable_result),

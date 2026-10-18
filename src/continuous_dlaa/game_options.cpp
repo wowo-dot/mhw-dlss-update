@@ -43,7 +43,7 @@ RowEnabled row_original{};
 PageRefresh page_original{};
 RowBuild build_original{};
 RestoreDefaults defaults_original{};
-// v0.29.0: al.hooks under AL (astera::OwnedHook). Patterns: each function's
+// v0.30.0: al.hooks under AL (astera::OwnedHook). Patterns: each function's
 // first 16 original bytes (clean image, checked against the gates in install()).
 struct HookSpec {
     unsigned rva;

@@ -7,7 +7,7 @@ Source: <https://github.com/TsudaKageyu/minhook>
 Pinned revision: `c3fcafdc10146beb5919319d0683e44e3c30d537` (v1.3.4),
 vendored in `third_party/minhook` as in Astera Loader (since v0.28.6). Every
 file is unchanged except `src/hook.c`, which has Astera Loader's one adapter
-(`AL_MINHOOK_PROCESS_THREADS`, not defined here). Since v0.29.0 only the
+(`AL_MINHOOK_PROCESS_THREADS`, not defined here). Since v0.30.0 only the
 tests use it (their stand-in loader, `tests/fake_astera.cpp`); the shipped
 DLL links no hooking library.
 
@@ -170,4 +170,4 @@ those projects; their folders' README files record the commits. MIT licenses:
 `tools/package_release.py` lists every component above that is compiled into
 `mhw_dlss.dll` in the package's `THIRD-PARTY-NOTICES.txt` and copies its license
 file into the package's `licenses` folder. MinHook is not among them since
-v0.29.0.
+v0.30.0.

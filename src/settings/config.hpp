@@ -10,7 +10,7 @@ namespace mhw::settings {
 // mhw_dlss.ini next to the DLL. Lines are "key = value"; '#' or ';'
 // starts a comment; keys and values are case-insensitive; unknown keys and bad
 // values are reported as warnings and keep the default. Relative folders are
-// relative to the DLL's folder. The defaults are the shipped ini's (v0.29.0):
+// relative to the DLL's folder. The defaults are the shipped ini's (v0.30.0):
 // DLSS, frame generation and Reflex off; the mode (Performance) and the
 // multiplier (2x) are what turning them on starts with.
 //

@@ -27,7 +27,7 @@ pb::Runtime discovered;
 std::uintptr_t image{}, renderer{}, expected_return{};
 std::array<std::uintptr_t, 2> targets{};
 void *original{};
-// v0.29.0: the renderer update on al.hooks under AL; its first 16 original
+// v0.30.0: the renderer update on al.hooks under AL; its first 16 original
 // bytes (clean image; gate 0x229ed30 in sizing_code()). The stub reads its
 // caller, so the hook runs first in its chain (OwnedHook).
 constexpr char update_head[] = "40 53 48 83 EC 20 80 B9 F4 B3 07 00 00 48 8B D9";
@@ -734,7 +734,7 @@ void write(std::ostream &out) {
         << ",\"quantized_scale\":" << target.quantized << ",\"swapchain_format\":" << discovered.format
         << ",\"adapter_luid\":[" << discovered.luid_high << ',' << discovered.luid_low
         << "],\"render_thread\":" << render_thread
-        << ",\"shared_viewport\":true,\"owned_hooks\":1" // the observer forwards viewports (v0.29.0: always)
+        << ",\"shared_viewport\":true,\"owned_hooks\":1" // the observer forwards viewports (v0.30.0: always)
         << ",\"scene_changes\":" << scene_changes << ",\"scene_pending\":" << scene_pending << ",\"viewport_counts\":["
         << viewport_counts[0] << ',' << viewport_counts[1] << ',' << viewport_counts[2]
         << "],\"viewport_unreadable\":" << viewport_unreadable << ",\"baseline\":";
