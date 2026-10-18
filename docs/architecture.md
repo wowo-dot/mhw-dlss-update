@@ -422,3 +422,14 @@ Behaviour stays the same; the log fields stay.
     `src/common/native_frame.inc` holds the stubs' frame macros (SAVE and
     RESTORE in six `.asm`, the shared stub in four as `NATIVE_ENTRY`);
     every stub assembles to the same code and unwind data as before.
+  - The FG session's Off (DLSS-G off, applied and shown state reset) is
+    one `switch_off()` for `turn_off()` and `lifecycle_guard()`; the unload
+    path stays separate on purpose (no SDK call, no mode change counted).
+    The plugin's Reflex mode name is the ini mode's name (`sl::ReflexMode`
+    is numbered the same, checked at compile time).
+  - Left as they are: the command-queue scans in the stream route's plan
+    builder, census and post chain each keep their own failure counts
+    (`plan_rejection` 9/10, the census's `unreadable`, the commands'
+    `error`), which the logs report; a shared visitor would have to carry
+    each, in code only the game exercises. The hex/SHA-256 helpers differ
+    (memoized code hashes, file digests, Streamline's pinned DLLs).

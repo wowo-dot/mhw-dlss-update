@@ -11,6 +11,21 @@ sl::float4x4 matrix(const std::array<float, 16> &m) {
     return r;
 }
 
+// Owner thread, under the session lock: DLSS-G Off, and the session's applied
+// and shown state with it.
+void switch_off(Session &s) {
+    const auto result = s.sdk->frame_generation_off(viewport, true);
+    if (result != sl::Result::eOk) s.last_sdk_error = result;
+    s.on.store(false);
+    s.applied_generated = 0;
+    s.applied_mode = sl::DLSSGMode::eOff;
+    s.applied_target = 0;
+    s.shown_generated.store(0);
+    s.shown_dynamic.store(false);
+    s.single_streak.store(0);
+    ++s.mode_changes;
+}
+
 // Owner thread, under the session lock. Null tags release SDK references.
 void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
     ++s.off[static_cast<unsigned>(reason)];
@@ -23,16 +38,7 @@ void turn_off(Session &s, const sl::FrameToken *token, Off reason) {
             {nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &extent}};
         if (s.sdk->tags(*token, viewport, tags, 3) == sl::Result::eOk) ++s.null_tags;
     }
-    const auto result = s.sdk->frame_generation_off(viewport, true);
-    if (result != sl::Result::eOk) s.last_sdk_error = result;
-    s.on.store(false);
-    s.applied_generated = 0;
-    s.applied_mode = sl::DLSSGMode::eOff;
-    s.applied_target = 0;
-    s.shown_generated.store(0);
-    s.shown_dynamic.store(false);
-    s.single_streak.store(0);
-    ++s.mode_changes;
+    switch_off(s);
 }
 
 // Owner thread, under the session lock, after a presented tagged Present's
@@ -158,16 +164,7 @@ bool lifecycle_guard(unsigned) noexcept {
         if (!s.sdk || !s.on.load()) return false;
         // No frame token here: depth/motion/HUD-less stay tagged until the next
         // Present (eValidUntilPresent) and are re-tagged or nulled there.
-        const auto result = s.sdk->frame_generation_off(viewport, true);
-        if (result != sl::Result::eOk) s.last_sdk_error = result;
-        s.on.store(false);
-        s.applied_generated = 0;
-        s.applied_mode = sl::DLSSGMode::eOff;
-        s.applied_target = 0;
-        s.shown_generated.store(0);
-        s.shown_dynamic.store(false);
-        s.single_streak.store(0);
-        ++s.mode_changes;
+        switch_off(s);
         ++s.lifecycle_offs;
         return true;
     } catch (...) {

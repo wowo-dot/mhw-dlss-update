@@ -23,8 +23,13 @@ void mode_options(const char *phase, sl::ReflexMode mode, sl::Result result) {
         << (mode == sl::ReflexMode::eLowLatencyWithBoost) << "}\n"
         << std::flush;
 }
+// sl::ReflexMode is numbered as the ini's modes (off, on, boost), so the
+// applied mode reads with the ini mode's name.
+static_assert(unsigned(sl::ReflexMode::eOff) == unsigned(mhw::alpha::ReflexMode::off) &&
+              unsigned(sl::ReflexMode::eLowLatency) == unsigned(mhw::alpha::ReflexMode::on) &&
+              unsigned(sl::ReflexMode::eLowLatencyWithBoost) == unsigned(mhw::alpha::ReflexMode::boost));
 const char *reflex_mode_name(unsigned mode) noexcept {
-    return mode == 0 ? "Off" : mode == 2 ? "Boost" : "On";
+    return mhw::alpha::reflex_name(static_cast<mhw::alpha::ReflexMode>(mode));
 }
 // The worker, under sdk_mutex: applies the requested mode if it changed. Off
 // is refused while DLSS-G is loaded (it needs Reflex); the menu already keeps
