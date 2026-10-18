@@ -2,3 +2,5 @@
 # git config blame.ignoreRevsFile .git-blame-ignore-revs).
 # clang-format over every C++ source; the DLL is identical apart from its link timestamp.
 0b270468b2bdbf70db0d7e880a1758360b83b3c1
+# clang-format after the settings rename (four files).
+add454e41c43b436ab06d9af9e3d643016cad0bc
