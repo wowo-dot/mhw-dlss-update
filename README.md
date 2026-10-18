@@ -99,11 +99,11 @@ the build needs no download.
 
 ```powershell
 cmake -S . -B build -A x64 -DMHW_NGX_SDK_ROOT=<dlss sdk> -DMHW_STREAMLINE_SDK_ROOT=<streamline sdk>
-cmake --build build --config Release --target mhw_dlss_alpha
+cmake --build build --config Release --target mhw_dlss
 ```
 
-The mod is `build/bin/Release/mhw_dlss_alpha.dll`, renamed `mhw_dlss.dll` in
-the package. Leave out `--target` to build the tests as well.
+The mod is `build/bin/Release/mhw_dlss.dll` (the target was `mhw_dlss_alpha`
+up to 0.28.6). Leave out `--target` to build the tests as well.
 
 **Tests:** run `ctest --test-dir build -C Release -j 32` (84 tests, about ten
 seconds: the C++ tests and one for the Python tools). They come in two tiers:
@@ -117,7 +117,7 @@ Run the whole suite before handing out a build.
 **Packaging** needs a committed tree:
 
 ```powershell
-py -3 -B tools/package_release.py --dll build/bin/Release/mhw_dlss_alpha.dll --version <x.y.z> --streamline-sdk <streamline sdk> --dlss-sdk <dlss sdk> --out <folder>
+py -3 -B tools/package_release.py --dll build/bin/Release/mhw_dlss.dll --version <x.y.z> --streamline-sdk <streamline sdk> --dlss-sdk <dlss sdk> --out <folder>
 ```
 
 It copies NVIDIA's runtime DLLs only if they match the tested runtime's
@@ -126,7 +126,7 @@ everything compiled into the DLL.
 
 ## Repository layout
 
-- **`src/`**: the mod. The `mhw_dlss_alpha` target in `CMakeLists.txt` lists
+- **`src/`**: the mod. The `mhw_dlss` target in `CMakeLists.txt` lists
   every source file it compiles; [`docs/architecture.md`](docs/architecture.md)
   maps how they fit together. The main parts:
   - `continuous_dlaa/`, `temporal_bindings/`, `scaled_temporal/`,

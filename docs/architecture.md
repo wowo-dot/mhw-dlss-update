@@ -1,7 +1,7 @@
 # Architecture of the shipped mod (v0.28.6, 2026-10-17)
 
 The map behind the 0.29.0 cleanup: what `mhw_dlss.dll` (CMake target
-`mhw_dlss_alpha`) is made of, how it starts, what runs per frame, every hook,
+`mhw_dlss`, `mhw_dlss_alpha` up to 0.28.6) is made of, how it starts, what runs per frame, every hook,
 how it fails, and which log output players send us. Line numbers refer to
 `ddb7ab9` (v0.28.6). Since then the research targets were retired (tag
 `research-final`, `docs/research/history/retired-targets.md`) and the

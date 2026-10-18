@@ -1,6 +1,6 @@
 """Assemble a release package of the alpha DLL with the NVIDIA runtime it was tested with.
 
-  python -B tools/package_release.py --dll <built mhw_dlss_alpha.dll> --version X.Y.Z
+  python -B tools/package_release.py --dll <built mhw_dlss.dll> --version X.Y.Z
       --streamline-sdk <Streamline SDK root> --dlss-sdk <DLSS SDK root> --out <folder>
 
 Writes <out>/mhw-dlss-<version>/ and <out>/mhw-dlss-<version>.zip, laid out as

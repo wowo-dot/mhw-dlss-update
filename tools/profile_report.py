@@ -10,9 +10,9 @@ v0.12.3+; before that the outermost mod frame), and that hook with the module
 the time was spent in; and the innermost game frame (v0.12.3+). Counts are wall-clock samples
 (waiting included) at about 1 kHz for the Present thread.
 
-Symbols: the mod from the linker map (<run>/mhw_fg_game_probe.map or the
-alpha's mhw_dlss_alpha.map, else the build's map when the installed DLL
-matches the build); system and SDK DLLs
+Symbols: the mod from the linker map (<run>/mhw_dlss.map, mhw_dlss_alpha.map
+up to 0.28.6 or the research build's mhw_fg_game_probe.map, else the build's
+map when the installed DLL matches the build); system and SDK DLLs
 from their exports via dbghelp (an export name is the nearest exported
 symbol, so internal functions show as export+offset); the game by RVA.
 """
@@ -130,14 +130,18 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+map_names = ('mhw_dlss', 'mhw_dlss_alpha', 'mhw_fg_game_probe')
+
+
 def mod_symbols(run, header):
-    # The research build (mhw_fg_game_probe) or the alpha (mhw_dlss_alpha).
-    for name in ('mhw_fg_game_probe', 'mhw_dlss_alpha'):
+    # The mod (mhw_dlss; mhw_dlss_alpha up to 0.28.6) or the research build
+    # (mhw_fg_game_probe).
+    for name in map_names:
         local = run / f'{name}.map'
         if local.exists():
             return MapSymbols(local), str(local)
     build = REPO / 'build/bin/Release'
-    for name in ('mhw_fg_game_probe', 'mhw_dlss_alpha'):
+    for name in map_names:
         if (build / f'{name}.map').exists() and sha(build / f'{name}.dll') == header.get('dll_sha256'):
             return MapSymbols(build / f'{name}.map'), 'build (sha matches)'
     return None, 'no matching map: RVAs only'

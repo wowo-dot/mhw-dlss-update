@@ -114,7 +114,7 @@ target_link_libraries(mhw_fg_reflex_presentation PUBLIC mhw_streamline_reflex d3
 set(continuous_runtime_sources src/continuous_dlaa/runtime.cpp src/continuous_dlaa/runtime_projection.cpp
     src/continuous_dlaa/runtime_requests.cpp src/continuous_dlaa/runtime_lists.cpp src/continuous_dlaa/runtime_resolve.cpp
     src/continuous_dlaa/runtime_native.cpp src/continuous_dlaa/runtime_modes.cpp src/continuous_dlaa/runtime_log.cpp)
-add_library(mhw_dlss_alpha SHARED
+add_library(mhw_dlss SHARED
     # Continuous DLSS on the game's TAA pass.
     ${continuous_runtime_sources}
     src/continuous_dlaa/activation.cpp src/continuous_dlaa/activation_entry.asm
@@ -139,15 +139,15 @@ add_library(mhw_dlss_alpha SHARED
     # The status lines and the optional CMFM pages (third_party/cmfm); the
     # game's own DLSS rules for its AA and resolution scaling options.
     src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp)
-mhw_cxx(mhw_dlss_alpha)
-target_compile_options(mhw_dlss_alpha PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
-target_include_directories(mhw_dlss_alpha PRIVATE src/projection_binding src/game_memory)
-target_compile_definitions(mhw_dlss_alpha PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_dlss_alpha PRIVATE bcrypt d3d12 dxgi dxguid
+mhw_cxx(mhw_dlss)
+target_compile_options(mhw_dlss PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
+target_include_directories(mhw_dlss PRIVATE src/projection_binding src/game_memory)
+target_compile_definitions(mhw_dlss PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+target_link_libraries(mhw_dlss PRIVATE bcrypt d3d12 dxgi dxguid
     mhw_ngx_startup mhw_temporal_state mhw_dlss_inline mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
 # The map file names this DLL's functions in crash stacks and stack-sampler
 # profiles (tools/profile_report.py; keep it with each handed-out build).
-target_link_options(mhw_dlss_alpha PRIVATE /guard:cf /OPT:NOICF /MAP)
+target_link_options(mhw_dlss PRIVATE /guard:cf /OPT:NOICF /MAP)
 
 # --- Tests ----------------------------------------------------------------------
 

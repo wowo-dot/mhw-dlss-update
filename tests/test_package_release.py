@@ -31,7 +31,7 @@ class PackageRelease(unittest.TestCase):
             write(self.sl / src, f'license {src}'.encode())
         for src, _ in pr.LICENSES['dlss']:
             write(self.dlss / src, f'license {src}'.encode())
-        self.dll = root / 'mhw_dlss_alpha.dll'
+        self.dll = root / 'mhw_dlss.dll'
         write(self.dll, b'MZ ... {"event":"start","schema":1,"version":"9.8.7","build":"alpha"} ...')
 
     def tearDown(self):
