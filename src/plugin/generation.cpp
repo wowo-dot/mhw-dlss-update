@@ -3,6 +3,7 @@
 // a presentation fault turns it off for the session, and an aspect change
 // gives it a new scene rectangle.
 #include "plugin.hpp"
+#include "../game_memory/layout.hpp"
 #include "../settings/status.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../reflex/temporal_coexistence.hpp"
@@ -27,19 +28,21 @@ bool game_chain_qualified() noexcept {
                            "a4a09901e108fe38dabfb6d9df3a52f9d5ccd68a12b8b8e6f7a9ea671cbf5e90") &&
            pb::verify_code(image, 0x23a48e0, 11101,
                            "8757a054cc1c203128fdfb73ac88975dda7dc73ef5ef1a53a80f22cd0eb8e500") &&
-           pb::read(image + 0x51c4480, renderer) && renderer && pb::read(renderer + 0x78, backend) && backend;
+           pb::read(image + layout::image::renderer, renderer) && renderer &&
+           pb::read(renderer + layout::renderer::backend, backend) && backend;
 }
 std::uintptr_t game_waitable_slot() noexcept {
     std::uintptr_t renderer{}, backend{};
-    return pb::read(image + 0x51c4480, renderer) && renderer && pb::read(renderer + 0x78, backend) && backend
-               ? backend + 0x10F0
+    return pb::read(image + layout::image::renderer, renderer) && renderer &&
+                   pb::read(renderer + layout::renderer::backend, backend) && backend
+               ? backend + layout::d3d_render::latency_waitable
                : 0;
 }
 bool game_resize_request() noexcept {
     std::uintptr_t renderer{};
-    if (!pb::read(image + 0x51c4480, renderer) || !renderer) return false;
+    if (!pb::read(image + layout::image::renderer, renderer) || !renderer) return false;
     __try {
-        _InterlockedOr(reinterpret_cast<volatile long *>(renderer + 0x1F548), 0x4000);
+        _InterlockedOr(reinterpret_cast<volatile long *>(renderer + layout::renderer::display_changes), 0x4000);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;

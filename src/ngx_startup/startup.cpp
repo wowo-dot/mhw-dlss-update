@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "../game_memory/layout.hpp"
 #include "../common/require.hpp"
 #include "../common/log_path.hpp"
 #include "../astera/astera_hooks.hpp"
@@ -124,9 +125,9 @@ void graphics(ID3D12Device *expected) {
     require(cfg.backend_slot && expected, "startup-no-graphics");
     std::uintptr_t backend{}, native_device{}, swap_address{}, table{}, qi{}, desc_method{};
     require(projection_binding::read(cfg.backend_slot, backend) && backend && backend < UINTPTR_MAX - 0x42720 &&
-                projection_binding::read(backend + 0x18, native_device) &&
+                projection_binding::read(backend + layout::d3d_render::device, native_device) &&
                 native_device == reinterpret_cast<std::uintptr_t>(expected) &&
-                projection_binding::read(backend + 0x1470, swap_address) && swap_address &&
+                projection_binding::read(backend + layout::d3d_render::swap_chain, swap_address) && swap_address &&
                 projection_binding::read(swap_address, table) && table && table < UINTPTR_MAX - 13 * 8 &&
                 projection_binding::read(table, qi) && projection_binding::read(table + 12 * 8, desc_method),
             "startup-graphics-pointers");
@@ -154,7 +155,8 @@ void graphics(ID3D12Device *expected) {
                 desc.BufferDesc.Format != DXGI_FORMAT_UNKNOWN,
             "startup-swap-desc");
     std::uintptr_t stable{};
-    require(projection_binding::read(backend + 0x1470, stable) && stable == swap_address, "startup-swap-changed");
+    require(projection_binding::read(backend + layout::d3d_render::swap_chain, stable) && stable == swap_address,
+            "startup-swap-changed");
     *out << "{\"event\":\"graphics\",\"api\":\"D3D12\",\"backend\":" << backend << ",\"device\":" << native_device
          << ",\"swapchain\":" << swap_address << ",\"width\":" << desc.BufferDesc.Width
          << ",\"height\":" << desc.BufferDesc.Height << ",\"swapchain_format\":" << unsigned(desc.BufferDesc.Format)

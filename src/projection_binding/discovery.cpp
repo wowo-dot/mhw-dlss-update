@@ -1,4 +1,5 @@
 #include "memory.hpp"
+#include "../game_memory/layout.hpp"
 #include "code_gates.hpp"
 #include <windows.h>
 #include <d3d12.h>
@@ -151,7 +152,7 @@ bool discover_objects(Runtime &r, std::string &reason) {
     return true;
 }
 // MHW's aspect-ratio option (e.g. 21:9 in a 16:9 window) renders the scene
-// into a rectangle: renderer+0x198 holds the scene size, while the config
+// into a rectangle: renderer + layout::renderer::scene_width holds the scene size, while the config
 // keeps the window size as its scale basis with the override flag set
 // (game-17: scene 2560x1080, basis 2560x1440). Without the option the scene
 // is the window. On entry r.width/r.height hold the swap chain's size.
@@ -162,16 +163,18 @@ bool scene_extent(std::uintptr_t base, std::uintptr_t renderer, Runtime &r, std:
     std::uintptr_t config{};
     unsigned char override_width{};
     unsigned scene_width{}, scene_height{}, basis_width{}, basis_height{};
-    if (!read(renderer + 0x198, scene_width) || !read(renderer + 0x19c, scene_height) ||
-        !read(base + 0x51c5320, config) || !config || config > UINTPTR_MAX - 0x2cdb ||
-        !read(config + 0x2cda, override_width)) {
+    if (!read(renderer + layout::renderer::scene_width, scene_width) ||
+        !read(renderer + layout::renderer::scene_height, scene_height) ||
+        !read(base + layout::image::app_ext, config) || !config || config > UINTPTR_MAX - 0x2cdb ||
+        !read(config + layout::app_ext::window_from_display, override_width)) {
         reason = "scene-extent-read";
         return false;
     }
     if (scene_width != r.width || scene_height != r.height) {
-        if (override_width != 1 || !read(config + 0x2cd0, basis_width) || !read(config + 0x2cd4, basis_height) ||
-            basis_width != r.window_width || basis_height != r.window_height || !scene_width || !scene_height ||
-            scene_width > r.window_width || scene_height > r.window_height) {
+        if (override_width != 1 || !read(config + layout::app_ext::basis_width, basis_width) ||
+            !read(config + layout::app_ext::basis_height, basis_height) || basis_width != r.window_width ||
+            basis_height != r.window_height || !scene_width || !scene_height || scene_width > r.window_width ||
+            scene_height > r.window_height) {
             reason = "scene-extent";
             return false;
         }
@@ -194,10 +197,12 @@ bool system_method(std::uintptr_t object, unsigned slot, std::uintptr_t &target)
 bool refresh_scene(std::uintptr_t base, const Runtime &current, Runtime &r, std::string &reason) {
     std::uintptr_t renderer{}, backend{}, device{}, swapchain{}, wrapper{};
     unsigned sizing{};
-    if (!read(base + 0x51c4480, renderer) || !renderer || renderer > UINTPTR_MAX - 0x1f570 ||
-        !read(renderer + 0x78, backend) || !backend || backend != current.backend || !read(renderer + 0xb4, sizing) ||
-        (sizing & 1) || !read(backend + 0x42700, wrapper) || wrapper || !read(backend + 0x18, device) ||
-        device != current.device || !read(backend + 0x1470, swapchain) || swapchain != current.swapchain) {
+    if (!read(base + layout::image::renderer, renderer) || !renderer || renderer > UINTPTR_MAX - 0x1f570 ||
+        !read(renderer + layout::renderer::backend, backend) || !backend || backend != current.backend ||
+        !read(renderer + layout::renderer::sizing_flags, sizing) || (sizing & 1) ||
+        !read(backend + layout::d3d_render::game_dlss, wrapper) || wrapper ||
+        !read(backend + layout::d3d_render::device, device) || device != current.device ||
+        !read(backend + layout::d3d_render::swap_chain, swapchain) || swapchain != current.swapchain) {
         reason = "dx12-provider-gate";
         return false;
     }
@@ -234,7 +239,7 @@ bool discover(std::uintptr_t base, Runtime &r, std::string &reason) {
         }
     for (const auto vt : {0x350d188U, 0x33f82a8U}) {
         std::uintptr_t p{};
-        if (!read(base + vt + 0x48, p) || p != base + 0x228e770) {
+        if (!read(base + vt + layout::camera::draw_slot, p) || p != base + 0x228e770) {
             reason = "camera-vtable";
             return false;
         }
@@ -242,11 +247,12 @@ bool discover(std::uintptr_t base, Runtime &r, std::string &reason) {
     unsigned char api{};
     std::uintptr_t renderer{}, wrapper{};
     unsigned sizing{};
-    if (!read(base + 0x51cc080, api) || !api || !read(base + 0x51c4480, renderer) || !renderer ||
-        renderer > UINTPTR_MAX - 0x1f570 || !read(renderer + 0x78, r.backend) || !r.backend ||
-        r.backend > UINTPTR_MAX - 0x42708 || !read(renderer + 0xb4, sizing) || (sizing & 1) ||
-        !read(r.backend + 0x42700, wrapper) || wrapper || !read(r.backend + 0x18, r.device) ||
-        !read(r.backend + 0x1470, r.swapchain)) {
+    if (!read(base + layout::image::graphics_api, api) || !api || !read(base + layout::image::renderer, renderer) ||
+        !renderer || renderer > UINTPTR_MAX - 0x1f570 || !read(renderer + layout::renderer::backend, r.backend) ||
+        !r.backend || r.backend > UINTPTR_MAX - 0x42708 || !read(renderer + layout::renderer::sizing_flags, sizing) ||
+        (sizing & 1) || !read(r.backend + layout::d3d_render::game_dlss, wrapper) || wrapper ||
+        !read(r.backend + layout::d3d_render::device, r.device) ||
+        !read(r.backend + layout::d3d_render::swap_chain, r.swapchain)) {
         reason = "dx12-provider-gate";
         return false;
     }
@@ -261,9 +267,10 @@ bool discover(std::uintptr_t base, Runtime &r, std::string &reason) {
     if (!discover_objects(r, reason) || !scene_extent(base, renderer, r, reason)) return false;
     Arena b{};
     std::uintptr_t after{}, device_after{}, swap_after{};
-    if (!read(renderer + 0x78, after) || after != r.backend || !read_arena(r.backend, b) ||
-        !read(r.backend + 0x18, device_after) || device_after != r.device || !read(r.backend + 0x1470, swap_after) ||
-        swap_after != r.swapchain || a.mode != b.mode || a.stride != b.stride || a.cpu != b.cpu || a.gpu != b.gpu ||
+    if (!read(renderer + layout::renderer::backend, after) || after != r.backend || !read_arena(r.backend, b) ||
+        !read(r.backend + layout::d3d_render::device, device_after) || device_after != r.device ||
+        !read(r.backend + layout::d3d_render::swap_chain, swap_after) || swap_after != r.swapchain ||
+        a.mode != b.mode || a.stride != b.stride || a.cpu != b.cpu || a.gpu != b.gpu ||
         a.cpu_resource != b.cpu_resource || a.gpu_resource != b.gpu_resource || b.gpu[0] != r.gpu_base ||
         static_cast<std::uint64_t>(b.stride) * 3 > r.cpu_bytes ||
         static_cast<std::uint64_t>(b.stride) * 3 > r.gpu_bytes) {

@@ -1,4 +1,5 @@
 #include "activation.hpp"
+#include "../game_memory/layout.hpp"
 #include "../scaled_temporal/stream_route.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
@@ -92,10 +93,13 @@ bool primary(std::uintptr_t ctx, std::uintptr_t view) noexcept {
     std::uintptr_t r{}, primary_view{}, backend{}, wrapper{};
     unsigned flags{}, sizing{};
     unsigned char api{};
-    return ctx == renderer + 0x710 && pb::read(image + 0x51cc080, api) && api == 1 && pb::read(image + 0x51c4480, r) &&
-           r == renderer && pb::read(renderer + 0x1f450, primary_view) && primary_view && view == primary_view &&
-           pb::read(view + 0x58, flags) && !(flags & 0x840000) && pb::read(renderer + 0xb4, sizing) && !(sizing & 1) &&
-           pb::read(renderer + 0x78, backend) && backend && pb::read(backend + 0x42700, wrapper) && !wrapper;
+    return ctx == renderer + layout::renderer::context && pb::read(image + layout::image::graphics_api, api) &&
+           api == 1 && pb::read(image + layout::image::renderer, r) && r == renderer &&
+           pb::read(renderer + layout::renderer::primary_view, primary_view) && primary_view && view == primary_view &&
+           pb::read(view + layout::view::flags, flags) && !(flags & 0x840000) &&
+           pb::read(renderer + layout::renderer::sizing_flags, sizing) && !(sizing & 1) &&
+           pb::read(renderer + layout::renderer::backend, backend) && backend &&
+           pb::read(backend + layout::d3d_render::game_dlss, wrapper) && !wrapper;
 }
 bool begin_frame(const pb::Frame &f) noexcept {
     // R8 is the incoming view. The native body binds context+1d0 later;
@@ -103,9 +107,10 @@ bool begin_frame(const pb::Frame &f) noexcept {
     if (!owning() || f.gpr[4] != 0 || !primary(f.gpr[2], f.gpr[3])) return false;
     std::uintptr_t camera{}, type{}, table{};
     unsigned char taa{}, fxaa{};
-    if (!pb::read(image + 0x51c4400, camera) || camera != f.gpr[1] || !camera || !pb::read(camera, type) ||
-        (type != image + 0x350d188 && type != image + 0x33f82a8) || !pb::read(image + 0x51c4368, table) || !table ||
-        !pb::read(table + 0xe9e4, taa) || taa > 1 || !pb::read(table + 0xe9e5, fxaa) || fxaa > 1)
+    if (!pb::read(image + layout::image::camera, camera) || camera != f.gpr[1] || !camera || !pb::read(camera, type) ||
+        (type != image + layout::image::camera_vtable && type != image + layout::image::scene_camera_vtable) ||
+        !pb::read(image + layout::image::scene, table) || !table || !pb::read(table + layout::scene::taa, taa) ||
+        taa > 1 || !pb::read(table + layout::scene::fxaa, fxaa) || fxaa > 1)
         return false;
     if (frame_owned || InterlockedCompareExchange64(&mhw_aa_context, static_cast<LONG64>(f.gpr[2]), 0) != 0) {
         fail(1);
@@ -126,8 +131,8 @@ void end_frame(bool owned, bool returned) noexcept {
     if (!returned) fail(2);
     InterlockedExchange64(&mhw_aa_thread, 0);
     if (!frame_owned || frame_thread != GetCurrentThreadId() ||
-        InterlockedCompareExchange64(&mhw_aa_context, 0, static_cast<LONG64>(renderer + 0x710)) !=
-            static_cast<LONG64>(renderer + 0x710))
+        InterlockedCompareExchange64(&mhw_aa_context, 0, static_cast<LONG64>(renderer + layout::renderer::context)) !=
+            static_cast<LONG64>(renderer + layout::renderer::context))
         fail(3);
     frame_owned = false;
     frame_thread = 0;
@@ -136,15 +141,17 @@ void end_frame(bool owned, bool returned) noexcept {
 bool owned_context(std::uintptr_t ctx) noexcept {
     std::uintptr_t view{};
     return frame_owned && frame_thread == GetCurrentThreadId() && ctx == static_cast<std::uintptr_t>(context()) &&
-           pb::read(ctx + 0x1d0, view) && view == frame_view && primary(ctx, view);
+           pb::read(ctx + layout::context::view, view) && view == frame_view && primary(ctx, view);
 }
 bool native_gates(std::uintptr_t unit, std::uintptr_t ctx, std::uintptr_t registry) noexcept {
     unsigned state{}, flags{}, mask{}, displays{};
     std::uint16_t ctx_mask{}, display{};
     unsigned category{}, excluded{};
-    if (!pb::read(unit + 0xc, state) || !pb::read(unit + 0x14, flags) || !pb::read(unit + 0x48, mask) ||
-        !pb::read(unit + 0x1c, displays) || !pb::read(ctx + 0x152, ctx_mask) || !pb::read(ctx + 0x15a, display) ||
-        !pb::read(unit + 0x40, category) || !pb::read(registry + 0x4a50, excluded))
+    if (!pb::read(unit + layout::unit::state, state) || !pb::read(unit + layout::unit::flags, flags) ||
+        !pb::read(unit + layout::unit::mask, mask) || !pb::read(unit + layout::unit::displays, displays) ||
+        !pb::read(ctx + layout::context::unit_mask, ctx_mask) || !pb::read(ctx + layout::context::display, display) ||
+        !pb::read(unit + layout::unit::category, category) ||
+        !pb::read(registry + layout::unit_manager::excluded, excluded))
         return false;
     return state == 8 && (flags & 0x10) && (mask & ctx_mask) && (displays & (1U << (display & 15))) &&
            !(category & ~excluded);
@@ -164,22 +171,24 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
     std::uintptr_t queue{}, registry{}, type{}, node{}, taa{};
     unsigned count{};
     unsigned char collecting{}, enabled_queue{};
-    if (!pb::read(image + 0x51cc238, queue) || queue != f.gpr[1] || !queue || !pb::read(queue + 0x38, enabled_queue) ||
-        enabled_queue != 1 || !pb::read(queue + 0x39, collecting) || collecting != 1 ||
-        !pb::read(queue + 0x3c, count) || count > 16)
+    if (!pb::read(image + layout::image::post_queue, queue) || queue != f.gpr[1] || !queue ||
+        !pb::read(queue + layout::post_queue::enabled, enabled_queue) || enabled_queue != 1 ||
+        !pb::read(queue + layout::post_queue::collecting, collecting) || collecting != 1 ||
+        !pb::read(queue + layout::post_queue::count, count) || count > 16)
         return reject_queue(0);
     if (!bypass) {
-        if (!pb::read(image + 0x51238c8, registry) || !registry || !pb::read(registry, type) ||
-            type != image + 0x33fcde8 || !pb::read(registry + 0x15d0, node))
+        if (!pb::read(image + layout::image::unit_manager, registry) || !registry || !pb::read(registry, type) ||
+            type != image + layout::image::unit_manager_vtable ||
+            !pb::read(registry + layout::unit_manager::units, node))
             return reject_queue(1);
         unsigned nodes = 0;
         while (node && nodes++ < 1024) {
             if (!pb::read(node, type)) return reject_queue(1);
-            if (type == image + 0x351bda8) {
+            if (type == image + layout::image::taa2_vtable) {
                 if (taa) return reject_queue(1);
                 taa = node;
             }
-            if (!pb::read(node + 0x30, node)) return reject_queue(1);
+            if (!pb::read(node + layout::unit::next, node)) return reject_queue(1);
         }
         if (node || !taa) return reject_queue(1);
         if (!native_gates(taa, f.gpr[2], registry)) return reject_queue(2);
@@ -187,8 +196,9 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
     std::uintptr_t owner{};
     unsigned char skip{}, passthrough{};
     if (!bypass) {
-        if (!pb::read(taa + 0x148, owner) || owner != taa || !pb::read(taa + 0x160, skip) || skip ||
-            !pb::read(taa + 0x161, passthrough) || passthrough)
+        if (!pb::read(taa + layout::taa_filter::owner, owner) || owner != taa ||
+            !pb::read(taa + layout::taa_filter::skip, skip) || skip ||
+            !pb::read(taa + layout::taa_filter::passthrough, passthrough) || passthrough)
             return reject_queue(3);
     }
     // The native queue has sixteen pointer slots, followed by its two scratch
@@ -197,19 +207,22 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
     unsigned kept = 0, removed = 0, found = 0;
     for (unsigned i = 0; i < count; ++i) {
         std::uintptr_t entry{}, unit{}, vt{};
-        if (!pb::read(queue + 0x40 + 8 * i, entry) || !entry || !pb::read(entry + 0x20, skip)) return reject_queue(3);
+        if (!pb::read(queue + layout::post_queue::entries + 8 * i, entry) || !entry ||
+            !pb::read(entry + layout::post_entry::skip, skip))
+            return reject_queue(3);
         if (!skip) {
-            if (!pb::read(entry + 8, unit)) return reject_queue(3);
+            if (!pb::read(entry + layout::post_entry::unit, unit)) return reject_queue(3);
             if (unit && !pb::read(unit, vt)) return reject_queue(3);
-            if (vt == image + 0x351c1a8 || vt == image + 0x354dd78 || vt == image + 0x354df48 ||
-                (bypass && vt == image + 0x351bda8)) {
+            if (vt == image + layout::image::fxaa_vtable || vt == image + layout::image::taa_vtable ||
+                vt == image + layout::image::taa3_vtable || (bypass && vt == image + layout::image::taa2_vtable)) {
                 ++removed;
                 continue;
             }
-            if (vt == image + 0x351bda8) {
+            if (vt == image + layout::image::taa2_vtable) {
                 unsigned stage{}, order{};
-                if (unit != taa || entry != taa + 0x140 || ++found != 1 || !pb::read(entry, stage) || stage != 15 ||
-                    !pb::read(entry + 4, order) || order != 2)
+                if (unit != taa || entry != taa + layout::taa_filter::queue_entry || ++found != 1 ||
+                    !pb::read(entry, stage) || stage != 15 || !pb::read(entry + layout::post_entry::order, order) ||
+                    order != 2)
                     return reject_queue(3);
             }
         }
@@ -219,8 +232,9 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
     if (queued_taa) return reject_queue(5);
     // Equivalent to native registration/removal before sorting; no preference,
     // enable flag, cached job list, worker data or persistent resource is edited.
-    for (unsigned i = 0; i < kept; ++i) *reinterpret_cast<std::uintptr_t *>(queue + 0x40 + 8 * i) = keep[i];
-    *reinterpret_cast<unsigned *>(queue + 0x3c) = kept;
+    for (unsigned i = 0; i < kept; ++i)
+        *reinterpret_cast<std::uintptr_t *>(queue + layout::post_queue::entries + 8 * i) = keep[i];
+    *reinterpret_cast<unsigned *>(queue + layout::post_queue::count) = kept;
     if (bypass) {
         TelemetryLock lock;
         competing += removed;
@@ -233,8 +247,9 @@ std::uintptr_t prepare_queue(const pb::Frame &f) {
     }
     unsigned after{};
     std::uintptr_t last{};
-    if (!pb::read(queue + 0x3c, after) || after != kept + (found ? 0U : 1U) ||
-        (!found && (!pb::read(queue + 0x40 + 8 * kept, last) || last != taa + 0x140))) {
+    if (!pb::read(queue + layout::post_queue::count, after) || after != kept + (found ? 0U : 1U) ||
+        (!found && (!pb::read(queue + layout::post_queue::entries + 8 * kept, last) ||
+                    last != taa + layout::taa_filter::queue_entry))) {
         fail(6);
         return reject_queue(3);
     }
@@ -255,7 +270,7 @@ bool suppress_jitter(unsigned kind, const pb::Frame &f) noexcept {
     constexpr std::array<std::uintptr_t, 3> types{0x351bda8, 0x354dd78, 0x354df48};
     std::uintptr_t type{}, r{};
     if (kind < 2 || kind > 4 || !pb::read(f.gpr[1], type) || type != image + types[kind - 2] ||
-        !pb::read(image + 0x51c4480, r) || r != renderer)
+        !pb::read(image + layout::image::renderer, r) || r != renderer)
         return false;
     ++jitter_suppressed;
     return true;

@@ -4,6 +4,7 @@
 // description, and the SDK's shutdown when the worker fails before the game
 // renders through it.
 #include "plugin.hpp"
+#include "../game_memory/layout.hpp"
 #include "../settings/capabilities.hpp"
 #include "../settings/menu.hpp"
 #include "../settings/status.hpp"
@@ -327,9 +328,9 @@ bool describe_swap() {
     const auto began = GetTickCount64();
     while (GetTickCount64() - began < 60000) {
         std::uintptr_t backend{}, swap{}, table{}, qi{}, release{}, desc_method{}, again{};
-        if (pb::read(image + 0x51c7050, backend) && backend && pb::read(backend + 0x1470, swap) && swap &&
-            pb::read(swap, table) && table && pb::read(table, qi) && pb::read(table + 16, release) &&
-            pb::read(table + 96, desc_method)) {
+        if (pb::read(image + layout::image::d3d_render, backend) && backend &&
+            pb::read(backend + layout::d3d_render::swap_chain, swap) && swap && pb::read(swap, table) && table &&
+            pb::read(table, qi) && pb::read(table + 16, release) && pb::read(table + 96, desc_method)) {
             bool native = true;
             for (const auto method : {qi, release, desc_method}) {
                 MEMORY_BASIC_INFORMATION memory{};
@@ -338,7 +339,8 @@ bool describe_swap() {
             }
             Microsoft::WRL::ComPtr<IDXGISwapChain> pin;
             DXGI_SWAP_CHAIN_DESC desc{};
-            if (native && query_swap(swap, &pin, &desc) && pb::read(backend + 0x1470, again) && again == swap) {
+            if (native && query_swap(swap, &pin, &desc) && pb::read(backend + layout::d3d_render::swap_chain, again) &&
+                again == swap) {
                 log << "{\"event\":\"swapchain_snapshot\",\"native_interface\":true,\"swapchain\":" << swap
                     << ",\"width\":" << desc.BufferDesc.Width << ",\"height\":" << desc.BufferDesc.Height
                     << ",\"format\":" << static_cast<unsigned>(desc.BufferDesc.Format)

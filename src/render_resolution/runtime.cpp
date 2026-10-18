@@ -1,4 +1,5 @@
 #include "runtime.hpp"
+#include "../game_memory/layout.hpp"
 #include "control.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
@@ -188,7 +189,7 @@ void fail(unsigned reason) noexcept {
 }
 bool write_request(float value) noexcept {
     __try {
-        *reinterpret_cast<volatile float *>(renderer + 0x1f0) = value;
+        *reinterpret_cast<volatile float *>(renderer + layout::renderer::scale_desired) = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -209,38 +210,45 @@ bool snapshot(Snapshot &s, const Plan &t) noexcept {
     std::uintptr_t root{}, backend{}, view{}, config{}, wrapper{};
     unsigned char api{}, override_width{};
     unsigned sizing{};
-    if (!pb::read(image + 0x51c4480, root) || root != renderer) return stop(1);
-    if (!pb::read(image + 0x51cc080, api) || api != 1) return stop(2);
-    if (!pb::read(renderer + 0x78, backend) || backend != discovered.backend) return stop(3);
-    if (!pb::read(renderer + 0x1f450, view) || !view || view > UINTPTR_MAX - 0x6d8) return stop(4);
-    if (!pb::read(renderer + 0xb4, sizing)) return stop(5);
+    if (!pb::read(image + layout::image::renderer, root) || root != renderer) return stop(1);
+    if (!pb::read(image + layout::image::graphics_api, api) || api != 1) return stop(2);
+    if (!pb::read(renderer + layout::renderer::backend, backend) || backend != discovered.backend) return stop(3);
+    if (!pb::read(renderer + layout::renderer::primary_view, view) || !view || view > UINTPTR_MAX - 0x6d8)
+        return stop(4);
+    if (!pb::read(renderer + layout::renderer::sizing_flags, sizing)) return stop(5);
     s.sizing = sizing;
-    if (!pb::read(backend + 0x42700, wrapper)) return stop(6);
+    if (!pb::read(backend + layout::d3d_render::game_dlss, wrapper)) return stop(6);
     s.wrapper = wrapper != 0;
-    if (!pb::read(image + 0x51c5320, config) || !config || config > UINTPTR_MAX - 0x2cdb ||
-        !pb::read(config + 0x2cda, override_width))
+    if (!pb::read(image + layout::image::app_ext, config) || !config || config > UINTPTR_MAX - 0x2cdb ||
+        !pb::read(config + layout::app_ext::window_from_display, override_width))
         return stop(7);
     s.tick = GetTickCount64();
     s.view = view;
     s.width_override = override_width;
     // Diagnostics only (the aspect capture); a failed read leaves zeros.
-    pb::read(renderer + 0x1f448, s.window_width);
-    pb::read(renderer + 0x1f44c, s.window_height);
-    pb::read(renderer + 0x7b440, s.aspect_requested);
-    pb::read(renderer + 0x7b43c, s.aspect_applied);
-    pb::read(renderer + 0x1f548, s.flags);
-    for (unsigned i = 0; i < 4; ++i) pb::read(renderer + 0x188 + 4 * i, s.rect[i]);
-    if (!pb::read(renderer + 0x1f210, s.frame) || !pb::read(renderer + 0x198, s.width) ||
-        !pb::read(renderer + 0x19c, s.height) || !pb::read(renderer + 0x1f0, s.desired) ||
-        !pb::read(renderer + 0x1f4, s.applied) || !pb::read(renderer + 0x1f8, s.previous) ||
-        !pb::read(renderer + 0x200, s.content_desired) || !pb::read(renderer + 0x204, s.content) ||
-        !pb::read(renderer + 0x208, s.combined) || !pb::read(view + 0x58, s.view_flags) ||
-        !pb::read(view + 0x6b0, s.view_scale) || !pb::read(view + 0x6b4, s.view_content) ||
-        !pb::read(view + 0x6b8, s.view_combined))
+    pb::read(renderer + layout::renderer::window_width, s.window_width);
+    pb::read(renderer + layout::renderer::window_height, s.window_height);
+    pb::read(renderer + layout::renderer::aspect_requested, s.aspect_requested);
+    pb::read(renderer + layout::renderer::aspect_applied, s.aspect_applied);
+    pb::read(renderer + layout::renderer::display_changes, s.flags);
+    for (unsigned i = 0; i < 4; ++i) pb::read(renderer + layout::renderer::scene_rect + 4 * i, s.rect[i]);
+    if (!pb::read(renderer + layout::renderer::frame, s.frame) ||
+        !pb::read(renderer + layout::renderer::scene_width, s.width) ||
+        !pb::read(renderer + layout::renderer::scene_height, s.height) ||
+        !pb::read(renderer + layout::renderer::scale_desired, s.desired) ||
+        !pb::read(renderer + layout::renderer::scale_applied, s.applied) ||
+        !pb::read(renderer + layout::renderer::scale_previous, s.previous) ||
+        !pb::read(renderer + layout::renderer::content_scale_desired, s.content_desired) ||
+        !pb::read(renderer + layout::renderer::content_scale, s.content) ||
+        !pb::read(renderer + layout::renderer::combined_scale, s.combined) ||
+        !pb::read(view + layout::view::flags, s.view_flags) || !pb::read(view + layout::view::scale, s.view_scale) ||
+        !pb::read(view + layout::view::content_scale, s.view_content) ||
+        !pb::read(view + layout::view::combined_scale, s.view_combined))
         return stop(8);
     s.basis_width = s.width;
     s.basis_height = s.height;
-    if (override_width && (!pb::read(config + 0x2cd0, s.basis_width) || !pb::read(config + 0x2cd4, s.basis_height)))
+    if (override_width && (!pb::read(config + layout::app_ext::basis_width, s.basis_width) ||
+                           !pb::read(config + layout::app_ext::basis_height, s.basis_height)))
         return stop(9);
     if (sizing & 1) return stop(10);
     if (wrapper) return stop(11);
@@ -262,23 +270,24 @@ bool snapshot(Snapshot &s, const Plan &t) noexcept {
     if (s.view_flags & 0x840000) return stop(18);
     std::uintptr_t container{}, texture{};
     unsigned packed{};
-    s.depth_metadata = pb::read(view + 0x628, container) && container && container <= UINTPTR_MAX - 0xa8 &&
-                       pb::read(container + 0xa0, texture) && texture && texture <= UINTPTR_MAX - 0x90 &&
-                       pb::read(texture + 0x88, packed);
+    s.depth_metadata = pb::read(view + layout::view::depth, container) && container &&
+                       container <= UINTPTR_MAX - 0xa8 &&
+                       pb::read(container + layout::depth_container::texture, texture) && texture &&
+                       texture <= UINTPTR_MAX - 0x90 && pb::read(texture + 0x88, packed);
     if (s.depth_metadata) {
         s.depth_width = packed & 0xffff;
         s.depth_height = (packed >> 16) & 0x3fff;
     }
     std::uintptr_t again{};
-    if (!pb::read(renderer + 0x1f450, again) || again != view || !pb::read(image + 0x51c4480, again) ||
-        again != renderer)
+    if (!pb::read(renderer + layout::renderer::primary_view, again) || again != view ||
+        !pb::read(image + layout::image::renderer, again) || again != renderer)
         return stop(19);
     s.check = 0;
     return true;
 }
 bool current_renderer() noexcept {
     std::uintptr_t r{};
-    return pb::read(image + 0x51c4480, r) && r == renderer;
+    return pb::read(image + layout::image::renderer, r) && r == renderer;
 }
 void update(pb::Frame *f) {
     const bool matching = f->caller == expected_return && f->gpr[1] == renderer;
@@ -301,7 +310,7 @@ void update(pb::Frame *f) {
     // This is inside the original renderer's update invocation. No worker writes.
     bool read_ok = current_renderer();
     float current{}, restore_value{};
-    read_ok = read_ok && pb::read(renderer + 0x1f0, current);
+    read_ok = read_ok && pb::read(renderer + layout::renderer::scale_desired, current);
     if (!read_ok) {
         fail(2);
         mhw_binding_forward(original, f);
@@ -375,7 +384,7 @@ void update(pb::Frame *f) {
     // unwind without leaving a lock owned by the interrupted render callback.
     setter(renderer, t.requested);
     float written{};
-    if (!pb::read(renderer + 0x1f0, written) || written != t.quantized) {
+    if (!pb::read(renderer + layout::renderer::scale_desired, written) || written != t.quantized) {
         fail(6);
         return;
     }
@@ -485,7 +494,7 @@ bool ready(std::uintptr_t base, float scale, std::string &reason) {
         return false;
     }
     std::uintptr_t root{};
-    if (!pb::read(base + 0x51c4480, root) || !root || root > UINTPTR_MAX - 0x7b3f5) {
+    if (!pb::read(base + layout::image::renderer, root) || !root || root > UINTPTR_MAX - 0x7b3f5) {
         reason = "renderer";
         return false;
     }
@@ -522,7 +531,7 @@ bool install(std::uintptr_t base, float scale, std::string &reason, bool yielded
         reason = "native sizing code gate";
         return false;
     }
-    if (!pb::read(base + 0x51c4480, renderer) || !renderer || renderer > UINTPTR_MAX - 0x7b3f5) {
+    if (!pb::read(base + layout::image::renderer, renderer) || !renderer || renderer > UINTPTR_MAX - 0x7b3f5) {
         reason = "renderer";
         return false;
     }
@@ -576,7 +585,8 @@ bool full_scale(std::uintptr_t base) noexcept {
         const auto planned =
             plan({probe.width, probe.height}, probe.scene_override ? probe.window_width : probe.width, 1.F);
         std::uintptr_t root{};
-        if (!planned.valid || !pb::read(base + 0x51c4480, root) || !root || root > UINTPTR_MAX - 0x7b3f5) return false;
+        if (!planned.valid || !pb::read(base + layout::image::renderer, root) || !root || root > UINTPTR_MAX - 0x7b3f5)
+            return false;
         // As in ready(): no hook reads this state before install().
         image = base;
         renderer = root;

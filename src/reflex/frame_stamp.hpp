@@ -1,5 +1,6 @@
 #pragma once
 #include "frame_policy.hpp"
+#include "../game_memory/layout.hpp"
 #include <cstdint>
 #include <limits>
 
@@ -17,14 +18,17 @@ struct StampRead {
 template <class Read> StampRead read_frame_stamp(Read &&read, std::uintptr_t renderer) noexcept {
     StampRead s;
     if (!renderer || renderer > (std::numeric_limits<std::uintptr_t>::max)() - 0x1f210) return s;
-    if (!read(renderer + 0x1f208, s.value.epoch) || !read(renderer + 0x1f210, s.value.temporal) ||
-        !read(renderer + 0x1f200, s.value.bank))
+    if (!read(renderer + layout::renderer::epoch, s.value.epoch) ||
+        !read(renderer + layout::renderer::frame, s.value.temporal) ||
+        !read(renderer + layout::renderer::bank, s.value.bank))
         return s;
     if (s.value.bank >= 2) {
         s.status = StampReadStatus::invalid_bank;
         return s;
     }
-    if (!read(renderer + 0x1f208, s.epoch_after) || !read(renderer + 0x1f200, s.bank_after)) return s;
+    if (!read(renderer + layout::renderer::epoch, s.epoch_after) ||
+        !read(renderer + layout::renderer::bank, s.bank_after))
+        return s;
     if (s.bank_after >= 2) {
         s.status = StampReadStatus::invalid_bank;
         return s;

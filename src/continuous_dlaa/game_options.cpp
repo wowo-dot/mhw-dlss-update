@@ -1,4 +1,5 @@
 #include "game_options.hpp"
+#include "../game_memory/layout.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -14,7 +15,7 @@ namespace pb = projection_binding;
 // The game's functions (clean image; gates in install()).
 using AaApply = std::uintptr_t (*)(unsigned char); // 0x43dcb0: the anti-aliasing option (TAA under its DLSS)
 using RsApply = __m128 (*)(char);                  // 0x43eeb0: resolution scaling (High under its DLSS); the scale
-using AaSetter = void (*)(std::uintptr_t, char);   // 0x2287a00: the TAA/FXAA bytes at table +0xe9e4
+using AaSetter = void (*)(std::uintptr_t, char);   // 0x2287a00: the TAA/FXAA bytes at table + layout::scene::taa
 using IniRead = char (*)(std::uintptr_t);          // 0x4413e0, 0x442120: the saved choice
 using RowEnabled = std::uint64_t (*)(int, unsigned char);    // 0x53f580: a row takes input
 using PageRefresh = std::uintptr_t (*)(std::uintptr_t, int); // 0x53f440: builds the visible rows, greys the locked ones
@@ -22,10 +23,8 @@ using RowBuild = std::uintptr_t (*)(std::uintptr_t, char, unsigned, int, std::ui
                                     std::uintptr_t);        // 0x53f190
 using RestoreDefaults = std::uintptr_t (*)(std::uintptr_t); // 0x540720: copies the defaults, except locked rows
 using Grey = std::uintptr_t (*)(std::uintptr_t, int);       // 0xb72f00: a row's greyed look (9)
-// The renderer table (TAA byte +0xe9e4, FXAA +0xe9e5) and the renderer
-// (variable resolution byte +0x7b3b0, 0x229bf30); the saved settings' file
-// and section ({"app:\graphics_option.ini", "GraphicsOption"}).
-constexpr std::uintptr_t table_global = 0x51c4368, renderer_global = 0x51c4480, ini_names = 0x2f744b0;
+// The player's TAA and FXAA in sScene, the renderer's variable resolution
+// byte (0x229bf30), and the saved settings' file and section: layout.hpp.
 // uGUIGraphicsOption, as its gated functions use it: 13 visible rows from
 // +11008, 112 bytes each, with the item id at +8 and the row's GUI object at
 // +40; the menu's values of the two rows; the list and its first row.
@@ -84,7 +83,7 @@ bool write_byte(std::uintptr_t at, unsigned char value) noexcept {
 // Worker calls into the game, as its graphics menu makes them.
 bool set_aa(unsigned char value) noexcept {
     std::uintptr_t table{};
-    if (!pb::read(image + table_global, table) || !table) return false;
+    if (!pb::read(image + layout::image::scene, table) || !table) return false;
     __try {
         aa_setter(table, static_cast<char>(value));
         return true;
@@ -103,7 +102,7 @@ bool apply_rs(unsigned char value) noexcept {
 int saved(std::uintptr_t rva, unsigned char values) noexcept {
     char value{};
     __try {
-        value = reinterpret_cast<IniRead>(image + rva)(image + ini_names);
+        value = reinterpret_cast<IniRead>(image + rva)(image + layout::image::graphics_option_ini);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return -1;
     }
@@ -263,22 +262,23 @@ void write(std::ostream &out) {
     std::uintptr_t table{}, renderer{};
     unsigned char taa{}, fxaa{}, variable{};
     float scale{};
-    if (image && pb::read(image + table_global, table) && table) {
-        pb::read(table + 0xe9e4, taa);
-        pb::read(table + 0xe9e5, fxaa);
+    if (image && pb::read(image + layout::image::scene, table) && table) {
+        pb::read(table + layout::scene::taa, taa);
+        pb::read(table + layout::scene::fxaa, fxaa);
     }
-    if (image && pb::read(image + renderer_global, renderer) && renderer) {
-        pb::read(renderer + 0x7b3b0, variable);
-        pb::read(renderer + 0x1f0, scale);
+    if (image && pb::read(image + layout::image::renderer, renderer) && renderer) {
+        pb::read(renderer + layout::renderer::variable_resolution, variable);
+        pb::read(renderer + layout::renderer::scale_desired, scale);
     }
     // The game's own DLSS 1 (0x23842a0 at cD3DRender::initForD3D12): its NGX
-    // context at backend +0x42700, or why it has none (0x51c6c28: 1 NGX
+    // context at backend + layout::d3d_render::game_dlss, or why it has none (0x51c6c28: 1 NGX
     // init, 2 SuperSampling, 3 ImageSignalProcessing unavailable), and this
     // mod's decline of it (ngx_startup::game_dlss(): 2 none made, 3 declined).
     std::uintptr_t backend{}, context{};
     unsigned game_ngx{};
-    if (image && pb::read(image + 0x51c7050, backend) && backend) pb::read(backend + 0x42700, context);
-    if (image) pb::read(image + 0x51c6c28, game_ngx);
+    if (image && pb::read(image + layout::image::d3d_render, backend) && backend)
+        pb::read(backend + layout::d3d_render::game_dlss, context);
+    if (image) pb::read(image + layout::image::game_dlss_state, game_ngx);
     out << "{\"installed\":" << (image != 0) << ",\"refusal\":\"" << refusal << "\",\"taken\":" << taken_now.load()
         << ",\"saved\":[" << saved_aa << ',' << saved_rs << "],\"player\":[" << player_aa.load() << ','
         << player_rs.load() << "],\"table\":[" << unsigned(taa) << ',' << unsigned(fxaa)

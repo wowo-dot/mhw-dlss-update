@@ -1,4 +1,5 @@
 #include "startup.hpp"
+#include "../game_memory/layout.hpp"
 #include "../common/require.hpp"
 #include "readiness.hpp"
 #include "../projection_binding/memory.hpp"
@@ -25,7 +26,7 @@ startup::Slots slots(std::uintptr_t base) noexcept {
     bool unreadable = false;
     for (unsigned i = 0; i < 7; ++i) {
         std::uintptr_t value{};
-        if (!pb::read(base + 0x51d8808 + 8 * i, value))
+        if (!pb::read(base + mhw::layout::image::ngx_slots + 8 * i, value))
             unreadable = true;
         else if (value)
             return startup::Slots::populated;
@@ -119,7 +120,8 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, const fs::path &
                 "client-export");
         wait_for_code(base, log);
         startup::install({reinterpret_cast<void *>(base + startup::entry_rva), base + startup::caller_rva,
-                          base + 0x51d8808, runtime, folder / (name + ".sdk-data"), base + 0x51c7050},
+                          base + mhw::layout::image::ngx_slots, runtime, folder / (name + ".sdk-data"),
+                          base + mhw::layout::image::d3d_render},
                          log);
         const auto began = GetTickCount64();
         while (!startup::done() && GetTickCount64() - began < 600000) Sleep(50);

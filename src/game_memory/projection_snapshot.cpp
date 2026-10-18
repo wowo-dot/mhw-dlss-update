@@ -1,4 +1,5 @@
 #include "projection_snapshot.hpp"
+#include "layout.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -69,7 +70,8 @@ ProjectionSnapshot capture_projection_snapshot(std::uintptr_t base, const Projec
     s.attempted = true;
     s.checkpoint = 1;
     if (!a.renderer || !a.context || !a.view || !a.table || a.bank > 1 || a.async_mode > 1 ||
-        a.renderer > (std::numeric_limits<std::uintptr_t>::max)() - 0x710 || a.context != a.renderer + 0x710) {
+        a.renderer > (std::numeric_limits<std::uintptr_t>::max)() - 0x710 ||
+        a.context != a.renderer + layout::renderer::context) {
         s.rejection = ProjectionReject::anchor;
         return s;
     }

@@ -152,8 +152,9 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
     if (!full_inputs.ready() || !full_copy) return 1;
     std::uintptr_t view{}, container{}, depth{}, gbuffer{}, gb4{}, gb5{}, filters{}, array{};
     unsigned key{}, sub{}, count{}, filter_count{};
-    if (!field(context, 0x1d0, view) || !field(view, 0x628, container) || !field(container, 0xa0, depth) ||
-        !field(view, 0x620, gbuffer) || !field(gbuffer, 0x78, gb4) || !field(gbuffer, 0x80, gb5))
+    if (!field(context, layout::context::view, view) || !field(view, layout::view::depth, container) ||
+        !field(container, layout::depth_container::texture, depth) || !field(view, layout::view::gbuffers, gbuffer) ||
+        !field(gbuffer, layout::gbuffers::gbuffer4, gb4) || !field(gbuffer, layout::gbuffers::gbuffer5, gb5))
         return 2;
     FullSlot slot;
     slot.frame = frame;
@@ -169,17 +170,23 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
         return 3;
     // TAA's key, with no added order (cDraw +0x154 stage | order << 5; the
     // copy helper adds +0x15c >> 5).
-    if (!field(context, 0x154, key) || (key & 31) != 15 || (key >> 5) != 2 || !field(context, 0x15c, sub) || (sub >> 5))
+    if (!field(context, layout::context::sort_stage, key) || (key & 31) != 15 || (key >> 5) != 2 ||
+        !field(context, layout::context::sort_order, sub) || (sub >> 5))
         return 4;
     // No registered post filter shares the slot's order.
-    if (!field(cfg.image, 0x51cc238, filters) || !field(filters, 0x3c, filter_count) || filter_count > 16) return 5;
+    if (!field(cfg.image, layout::image::post_queue, filters) ||
+        !field(filters, layout::post_queue::count, filter_count) || filter_count > 16)
+        return 5;
     for (unsigned i = 0; i < filter_count; ++i) {
         std::uintptr_t e{};
         unsigned stage{}, order{};
-        if (!field(filters, 0x40 + 8 * i, e) || !field(e, 0, stage) || !field(e, 4, order)) return 5;
+        if (!field(filters, layout::post_queue::entries + 8 * i, e) || !field(e, 0, stage) || !field(e, 4, order))
+            return 5;
         if (stage == 15 && order == 3) return 5;
     }
-    if (!field(context, 0x2b80, count) || !field(context, 0x2b78, array) || !array || count >= 65535) return 6;
+    if (!field(context, layout::context::packet_count, count) || !field(context, layout::context::packets, array) ||
+        !array || count >= 65535)
+        return 6;
     // TAA's copy (opcode 13 at (15, 2), recorded by the scheduler's first loop):
     // its source, TAA's output, is the slot's.
     struct Command {
@@ -207,7 +214,7 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
     }
     // The game's own order change (as the scheduler makes for each filter), for
     // this one packet; TAA's key is restored right after.
-    auto *order = reinterpret_cast<volatile unsigned *>(context + 0x154);
+    auto *order = reinterpret_cast<volatile unsigned *>(context + layout::context::sort_stage);
     const unsigned xy[2]{}, rect[4]{0, 0, 1, 1};
     *order = (key & 31) | (3U << 5);
     full_copy(context, slot.gbuffer5.object, 0, xy, slot.source.object, 0, rect, nullptr);
@@ -223,7 +230,7 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
         return 6;
     }
     slot.packet = c.packet;
-    slot.valid = c.key == full_slot_key && field(context, 0x2b80, after) && after == count + 1 &&
+    slot.valid = c.key == full_slot_key && field(context, layout::context::packet_count, after) && after == count + 1 &&
                  field(c.packet, 0, raw) && (raw & 31) == 13;
     if (!slot.valid) ++full_counts.slot_unverified;
     {
@@ -274,8 +281,9 @@ void full_candidate(const pb::Frame &f, unsigned slot) {
     }
     auto &s = full_state;
     s = FullPostState{};
-    if (!q.entered || q.stamp.context != f.gpr[2] || !field(f.gpr[2], 0x154, s.key) ||
-        !field(f.gpr[2], 0x15c, s.order) || !field(f.gpr[2], 0x2b80, s.quad_at)) {
+    if (!q.entered || q.stamp.context != f.gpr[2] || !field(f.gpr[2], layout::context::sort_stage, s.key) ||
+        !field(f.gpr[2], layout::context::sort_order, s.order) ||
+        !field(f.gpr[2], layout::context::packet_count, s.quad_at)) {
         ++full_counts.declined;
         return;
     }
@@ -297,7 +305,7 @@ void full_candidate(const pb::Frame &f, unsigned slot) {
 unsigned full_taa_registered() noexcept {
     std::uintptr_t manager{};
     unsigned count{};
-    if (!field(cfg.image, 0x51cc238, manager) || !field(manager, 0x3c, count) || count > 64) return 1;
+    if (!field(cfg.image, layout::image::post_queue, manager) || !field(manager, 0x3c, count) || count > 64) return 1;
     for (unsigned i = 0; i < count; ++i) {
         std::uintptr_t e{}, unit{}, type{};
         unsigned stage{}, order{};
@@ -307,7 +315,7 @@ unsigned full_taa_registered() noexcept {
             return 1;
         if (!unit || skipped || stage != 15 || order != 2) continue;
         if (!field(unit, 0, type)) return 1;
-        if (type == cfg.image + 0x351bda8) return 0;
+        if (type == cfg.image + layout::image::taa2_vtable) return 0;
     }
     return 2;
 }
@@ -330,7 +338,7 @@ void full_enter(std::uintptr_t context, bool admitted) noexcept {
         ++full_counts.unadmitted;
         return;
     }
-    if (!field(context, 0x5c, rect) || rect != s.render_rect) {
+    if (!field(context, layout::context::viewport, rect) || rect != s.render_rect) {
         ++full_counts.rect_mismatch;
         return;
     }
@@ -338,7 +346,7 @@ void full_enter(std::uintptr_t context, bool admitted) noexcept {
         ++(missing == 1 ? full_counts.taa_unreadable : full_counts.no_taa);
         return;
     }
-    if (!field(context, 0x2b80, s.scheduler_at)) {
+    if (!field(context, layout::context::packet_count, s.scheduler_at)) {
         ++full_counts.declined;
         return;
     }
@@ -362,11 +370,12 @@ bool full_published(std::uint64_t frame, std::uintptr_t context) noexcept {
 bool full_final_record(std::uintptr_t context, const FullPostState &s) noexcept {
     unsigned key{}, order{}, count{};
     std::uintptr_t array{};
-    if (!field(context, 0x154, key) || !field(context, 0x15c, order) || !field(context, 0x2b80, count) ||
-        !field(context, 0x2b78, array) || !array || count >= 65535)
+    if (!field(context, layout::context::sort_stage, key) || !field(context, layout::context::sort_order, order) ||
+        !field(context, layout::context::packet_count, count) || !field(context, layout::context::packets, array) ||
+        !array || count >= 65535)
         return false;
-    auto *k = reinterpret_cast<volatile unsigned *>(context + 0x154),
-         *o = reinterpret_cast<volatile unsigned *>(context + 0x15c);
+    auto *k = reinterpret_cast<volatile unsigned *>(context + layout::context::sort_stage),
+         *o = reinterpret_cast<volatile unsigned *>(context + layout::context::sort_order);
     const unsigned xy[2]{}, full[4]{0, 0, width, height};
     *k = s.key;
     *o = s.order;
@@ -386,8 +395,9 @@ bool full_final_record(std::uintptr_t context, const FullPostState &s) noexcept 
         fail(15);
         return true;
     }
-    if ((c.key >> 27) != 16 || !field(context, 0x2b80, after) || after != count + 1 || !field(c.packet, 0, raw) ||
-        (raw & 31) != 13 || !field(c.packet, 0x38, rect) || rect != std::array<unsigned, 4>{0, 0, width, height})
+    if ((c.key >> 27) != 16 || !field(context, layout::context::packet_count, after) || after != count + 1 ||
+        !field(c.packet, 0, raw) || (raw & 31) != 13 || !field(c.packet, 0x38, rect) ||
+        rect != std::array<unsigned, 4>{0, 0, width, height})
         ++full_counts.final_unverified;
     FullFinal r;
     r.frame = s.frame;
@@ -409,16 +419,18 @@ unsigned full_capture_find(std::uintptr_t context, const FullPostState &s) noexc
     std::uintptr_t scene{}, texture{}, view{}, main_view{}, target{}, source{}, array{};
     std::uint64_t requested{}, epoch{};
     unsigned pass{};
-    if (!field(cfg.image, 0x51c4368, scene) || !scene || !field(scene, 0xe998, requested) ||
+    if (!field(cfg.image, layout::image::scene, scene) || !scene || !field(scene, 0xe998, requested) ||
         !field(cfg.renderer, 0x1f208, epoch))
         return 1;
     if (requested != epoch || !field(scene, 0xe988, texture) || !texture) return 0;
     // sub_142268890 records it only for the renderer's main view.
-    if (!field(context, 0x1d0, view) || !field(cfg.renderer, 0x1f450, main_view) || view != main_view) return 0;
+    if (!field(context, layout::context::view, view) || !field(cfg.renderer, 0x1f450, main_view) || view != main_view)
+        return 0;
     if (!field(scene, 0xe990, pass) || pass != 15) return 2;
     if (!field(view, 0x60 + 0x40 * 15, target) || !target || !field(target, 0x58, source)) return 1;
     if (source != s.source.object) return 2;
-    if (!field(context, 0x2b78, array) || !array || s.scheduler_at < s.quad_at || s.scheduler_at - s.quad_at > 4096)
+    if (!field(context, layout::context::packets, array) || !array || s.scheduler_at < s.quad_at ||
+        s.scheduler_at - s.quad_at > 4096)
         return 1;
     const auto native = full_capture_vertices(s.render_rect, static_cast<float>(width), static_cast<float>(height));
     std::uintptr_t found{};
@@ -535,7 +547,7 @@ void full_tone_map_dispatch(pb::Frame *f) {
     }
 }
 // The projection helper (context, out float4, in position): it returns screen
-// coordinates divided by the view's scale product (view +0x6b8), the render
+// coordinates divided by the view's scale product (view + layout::view::combined_scale), the render
 // rectangle's mapping to the output. With the full rectangle they are already
 // output coordinates.
 void full_project_dispatch(pb::Frame *f) {

@@ -1,4 +1,5 @@
 #include "depth_routes.hpp"
+#include "../game_memory/layout.hpp"
 namespace mhw::temporal_bindings::depth_routes {
 namespace {
 bool pointer(std::uintptr_t p, std::uintptr_t n) {
@@ -41,15 +42,20 @@ bool stamp(const Reader &r, const Config &c, Stamp &s) {
     unsigned sizing{}, flags{};
     unsigned char api{}, async{};
     if (!pointer(c.image, 0x55d3000) || !pointer(c.renderer, 0x1f570) || !pointer(c.backend, 0x42708)) return false;
-    s.context = c.renderer + 0x710;
-    if (!r.get(c.image + 0x51cc080, api) || !api || !r.get(c.image + 0x51c4480, renderer) || renderer != c.renderer ||
-        !r.get(renderer + 0x78, backend) || backend != c.backend || !r.get(backend + 0x18, device) ||
-        device != c.device || !device || !r.get(backend + 0x42700, wrapper) || wrapper ||
-        !r.get(renderer + 0xb4, sizing) || (sizing & 1) || !r.get(s.context + 0x1ea74, flags) || (flags & 0x54) ||
-        !r.get(s.context + 0x1d0, s.view) || !pointer(s.view, 0x630) || !r.get(renderer + 0x1f450, primary) ||
-        primary != s.view || !r.get(s.view + 0x628, s.container) || !pointer(s.container, 0xa8) ||
-        !r.get(renderer + 0x1f210, s.frame) || !s.frame || !r.get(renderer + 0x1f208, s.epoch) ||
-        !r.get(renderer + 0x1f200, s.bank) || s.bank > 1 || !r.get(renderer + 0x93, async) || async > 1)
+    s.context = c.renderer + layout::renderer::context;
+    if (!r.get(c.image + layout::image::graphics_api, api) || !api ||
+        !r.get(c.image + layout::image::renderer, renderer) || renderer != c.renderer ||
+        !r.get(renderer + layout::renderer::backend, backend) || backend != c.backend ||
+        !r.get(backend + layout::d3d_render::device, device) || device != c.device || !device ||
+        !r.get(backend + layout::d3d_render::game_dlss, wrapper) || wrapper ||
+        !r.get(renderer + layout::renderer::sizing_flags, sizing) || (sizing & 1) ||
+        !r.get(s.context + layout::context::flags, flags) || (flags & 0x54) ||
+        !r.get(s.context + layout::context::view, s.view) || !pointer(s.view, 0x630) ||
+        !r.get(renderer + layout::renderer::primary_view, primary) || primary != s.view ||
+        !r.get(s.view + layout::view::depth, s.container) || !pointer(s.container, 0xa8) ||
+        !r.get(renderer + layout::renderer::frame, s.frame) || !s.frame ||
+        !r.get(renderer + layout::renderer::epoch, s.epoch) || !r.get(renderer + layout::renderer::bank, s.bank) ||
+        s.bank > 1 || !r.get(renderer + layout::renderer::parallel_rendering, async) || async > 1)
         return false;
     s.async = async;
     return true;

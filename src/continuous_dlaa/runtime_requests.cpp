@@ -2,6 +2,7 @@
 // resource pins (hook 0), the depth copy packets (hook 2), and their consumers
 // (hooks 1 and 3) that claim them for the dispatch.
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 namespace mhw::continuous_dlaa::detail {
 bool taa_before(const NativeFrame &f) {
@@ -19,8 +20,8 @@ bool taa_before(const NativeFrame &f) {
               gate(2, tb::snapshot(reader, cfg, f.layer, f.call.gpr[1], s)) &&
               gate(3, tb::scene_depth(reader, s, producer.depth)) &&
               gate(4, tb::shader_recipe(reader, s, producer.shader)) &&
-              gate(5, reader.get(s.context + 0x2b80, producer_count) && producer_count < 65535 &&
-                          reader.get(s.context + 0x2b78, producer_array) && producer_array);
+              gate(5, reader.get(s.context + layout::context::packet_count, producer_count) && producer_count < 65535 &&
+                          reader.get(s.context + layout::context::packets, producer_array) && producer_array);
     if (ok) {
         Lock lock;
         producer.projection = projections[s.frame % projections.size()];
@@ -147,9 +148,9 @@ void taa_after(bool admitted, bool returned) {
     const bool ok =
         returned && tb::snapshot(reader, cfg, s.layer, s.context, again) && s == again &&
         tb::scene_depth(reader, s, depth) && depth == producer.depth && tb::shader_recipe(reader, s, shader) &&
-        shader == producer.shader && reader.get(s.context + 0x2b80, count) && count == producer_count + 1 &&
-        reader.get(s.context + 0x2b78, array) && array && reader.get(array + 16ULL * (count - 1) + 8, object) &&
-        tb::packet(reader, object, producer.packet) &&
+        shader == producer.shader && reader.get(s.context + layout::context::packet_count, count) &&
+        count == producer_count + 1 && reader.get(s.context + layout::context::packets, array) && array &&
+        reader.get(array + 16ULL * (count - 1) + 8, object) && tb::packet(reader, object, producer.packet) &&
         tb::packet_matches(s, producer.packet, (render_width() + 15) / 16, (render_height() + 15) / 16, 1);
     if (ok) {
         Lock lock;
@@ -179,7 +180,8 @@ void taa_after(bool admitted, bool returned) {
     publishing.fetch_sub(1);
 }
 bool depth_before(const NativeFrame &f) {
-    if (!accepting.load() || f.call.gpr[1] != cfg.renderer + 0x710 || static_cast<unsigned>(f.call.stack[0]) != 8)
+    if (!accepting.load() || f.call.gpr[1] != cfg.renderer + layout::renderer::context ||
+        static_cast<unsigned>(f.call.stack[0]) != 8)
         return false;
     depth_producer = {};
     auto &d = depth_producer;
@@ -190,14 +192,16 @@ bool depth_before(const NativeFrame &f) {
         return ok;
     };
     const bool ok = gate(1, dr::stamp(reader, cfg, d.stamp)) &&
-                    gate(2, reader.get(d.stamp.container + 0xa0, destination) && destination == f.call.gpr[4]) &&
-                    gate(3, reader.get(d.stamp.context + 0x50, attachment) && attachment &&
+                    gate(2, reader.get(d.stamp.container + layout::depth_container::texture, destination) &&
+                                destination == f.call.gpr[4]) &&
+                    gate(3, reader.get(d.stamp.context + layout::context::attachment, attachment) && attachment &&
                                 reader.get(attachment + 0x58, source)) &&
                     gate(4, tb::read_owner(reader, source, d.source)) &&
                     gate(5, tb::read_owner(reader, destination, d.destination)) &&
-                    gate(6, reader.get(d.stamp.context + 0x2b80, depth_producer_count) && depth_producer_count < 65535);
+                    gate(6, reader.get(d.stamp.context + layout::context::packet_count, depth_producer_count) &&
+                                depth_producer_count < 65535);
     unsigned flags{};
-    const bool flags_read = reader.get(cfg.renderer + 0x710 + 0x1ea74, flags);
+    const bool flags_read = reader.get(cfg.renderer + layout::renderer::context + layout::context::flags, flags);
     note_depth(0, reason, d,
                {f.call.gpr[1], f.call.gpr[4], destination, attachment, source, d.stamp.container, flags_read, flags,
                 depth_producer_count});
@@ -210,8 +214,8 @@ void depth_after(bool admitted, bool returned) {
     std::uintptr_t array{};
     dr::Stamp again;
     if (!returned || !dr::stamp(reader, cfg, again) || again != d.stamp ||
-        !reader.get(d.stamp.context + 0x2b80, count) || count <= depth_producer_count ||
-        count - depth_producer_count > 64 || !reader.get(d.stamp.context + 0x2b78, array) || !array ||
+        !reader.get(d.stamp.context + layout::context::packet_count, count) || count <= depth_producer_count ||
+        count - depth_producer_count > 64 || !reader.get(d.stamp.context + layout::context::packets, array) || !array ||
         !reader.get(array + 16ULL * (count - 1) + 8, d.object) || !dr::packet(reader, d.object, d.packet) ||
         d.packet.source != d.source.object || d.packet.destination != d.destination.object) {
         fail(8);

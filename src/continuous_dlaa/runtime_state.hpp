@@ -11,6 +11,7 @@
 // - runtime_modes.cpp: live preset, aspect and Off changes;
 // - runtime_log.cpp: the log's summary and full state.
 #include "runtime.hpp"
+#include "../game_memory/layout.hpp"
 #include "../scaled_temporal/stream_route.hpp"
 #include "../scaled_temporal/resolve.hpp"
 #include "../render_resolution/runtime.hpp"
@@ -249,8 +250,8 @@ inline void note_depth(unsigned stage, unsigned reason, const Depth &d, ScaledDe
     auto frame = d.stamp.frame, epoch = d.stamp.epoch;
     // An early producer rejection may lack a validated stamp. These two
     // diagnostic reads never grant frame/resource ownership.
-    if (!frame) reader.get(cfg.renderer + 0x1f210, frame);
-    if (!epoch) reader.get(cfg.renderer + 0x1f208, epoch);
+    if (!frame) reader.get(cfg.renderer + layout::renderer::frame, frame);
+    if (!epoch) reader.get(cfg.renderer + layout::renderer::epoch, epoch);
     DepthTraceLock lock;
     scaled_depth_trace.observe({GetTickCount64(), frame, epoch, d.sequence, stage, reason, values});
 }

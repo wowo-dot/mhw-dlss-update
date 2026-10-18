@@ -2,6 +2,7 @@
 // DLSS (or the unfiltered copy) in place of the game's TAA, and stages frame
 // generation's inputs.
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 namespace mhw::continuous_dlaa::detail {
 bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, std::uintptr_t caller) {
@@ -29,7 +30,8 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
     if (!reader.get(current_recording + 0x158, current_packet) || current_packet != consumer.packet.object ||
         !tb::packet(reader, current_packet, packet) || packet != consumer.packet ||
         !tb::packet_matches(s, packet, x, y, z) || !tb::shader_recipe(reader, s, shader) || shader != consumer.shader ||
-        !reader.get(cfg.backend + 0x2a0, root) || !reader.get(current_recording + 0x118, cached) || root != cached ||
+        !reader.get(cfg.backend + layout::d3d_render::compute_root, root) ||
+        !reader.get(current_recording + 0x118, cached) || root != cached ||
         !reader.get(current_recording + 0x108, pipeline))
         return skip(4);
     temporal_present::Bindings state;

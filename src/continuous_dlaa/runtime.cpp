@@ -1,6 +1,7 @@
 // Continuous DLSS on the game's TAA pass: the runtime's qualification,
 // install, stop and finish (runtime_state.hpp lists the other parts).
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 extern "C" void temporal_dispatch_entry();
 extern "C" void temporal_consumer_entry();
@@ -83,7 +84,7 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         }
         if (!qualified(image, runtime, reason)) return false;
         cfg = {image, 0, runtime.backend, runtime.device};
-        if (!pb::read(image + 0x51c4480, cfg.renderer) || !cfg.renderer)
+        if (!pb::read(image + layout::image::renderer, cfg.renderer) || !cfg.renderer)
             throw std::runtime_error("continuous renderer");
         auto *device = reinterpret_cast<ID3D12Device *>(cfg.device);
         {

@@ -92,8 +92,8 @@ bool silhouette_candidates(Plan &p) {
         ++indexed_candidate_reasons[why];
         return false;
     };
-    if (!field(p.stamp.context, 0x2b80, count) || count > 65535 || !field(p.stamp.context, 0x2b78, array) || !array ||
-        array > UINTPTR_MAX - 16ULL * count)
+    if (!field(p.stamp.context, layout::context::packet_count, count) || count > 65535 ||
+        !field(p.stamp.context, layout::context::packets, array) || !array || array > UINTPTR_MAX - 16ULL * count)
         return reject(0);
     std::array<Packet, Plan::late_capacity> selected{};
     unsigned size{}, seen{};
@@ -128,8 +128,8 @@ bool silhouette_candidates(Plan &p) {
     }
     unsigned again{};
     std::uintptr_t pointer{};
-    if (!field(p.stamp.context, 0x2b80, again) || again != count || !field(p.stamp.context, 0x2b78, pointer) ||
-        pointer != array || !same_stamp(p.stamp))
+    if (!field(p.stamp.context, layout::context::packet_count, again) || again != count ||
+        !field(p.stamp.context, layout::context::packets, pointer) || pointer != array || !same_stamp(p.stamp))
         return reject(5);
     p.late_count = size;
     return true;

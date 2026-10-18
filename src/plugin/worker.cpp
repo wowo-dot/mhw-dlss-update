@@ -4,6 +4,7 @@
 // game exits: the menu's live changes, the game's aspect changes, the frame
 // generation switch, and a heartbeat in the log every 20 s.
 #include "plugin.hpp"
+#include "../game_memory/layout.hpp"
 #include "../settings/capabilities.hpp"
 #include "../settings/status.hpp"
 #include "../settings/version.hpp"
@@ -176,10 +177,10 @@ Session open_log(const std::filesystem::path &dll) {
 void accept_device() {
     // Refuse a late load; public API hooks are installed before first use.
     std::uintptr_t backend{};
-    require(pb::read(image + 0x51c7050, backend), "backend-slot");
+    require(pb::read(image + layout::image::d3d_render, backend), "backend-slot");
     if (backend) {
         std::uintptr_t device{};
-        require(pb::read(backend + 0x18, device) && !device, "main-device-already-created");
+        require(pb::read(backend + layout::d3d_render::device, device) && !device, "main-device-already-created");
     }
     // The device arrives through AL's DEVICE_CREATED (on_phase).
     log << "{\"event\":\"prepared\",\"loader\":true,\"sdk_initialized\":false}\n" << std::flush;

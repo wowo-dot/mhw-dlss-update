@@ -15,6 +15,7 @@
 // - silhouette_route.inl: the silhouette replay (recipes, pipelines, the
 //   recorded draws).
 #include "stream_route.hpp"
+#include "../game_memory/layout.hpp"
 #include "filter_shader.hpp"
 #include "stream_lifetime.hpp"
 #include "readiness_trace.hpp"
@@ -397,10 +398,12 @@ bool same_stamp(const tb::Snapshot &s) {
     std::uintptr_t view{}, primary{};
     unsigned bank{};
     unsigned char async{};
-    return field(cfg.renderer, 0x1f210, frame) && frame == s.frame && field(cfg.renderer, 0x1f208, epoch) &&
-           epoch == s.epoch && field(cfg.renderer, 0x1f200, bank) && bank == s.bank &&
-           field(cfg.renderer, 0x93, async) && async == s.async && field(s.context, 0x1d0, view) && view == s.view &&
-           field(cfg.renderer, 0x1f450, primary) && primary == view;
+    return field(cfg.renderer, layout::renderer::frame, frame) && frame == s.frame &&
+           field(cfg.renderer, layout::renderer::epoch, epoch) && epoch == s.epoch &&
+           field(cfg.renderer, layout::renderer::bank, bank) && bank == s.bank &&
+           field(cfg.renderer, layout::renderer::parallel_rendering, async) && async == s.async &&
+           field(s.context, 0x1d0, view) && view == s.view &&
+           field(cfg.renderer, layout::renderer::primary_view, primary) && primary == view;
 }
 bool owner(std::uintptr_t at, tb::Owner &out) {
     return tb::read_owner(reader, at, out) && out.width == width && out.height == height && out.resource;
@@ -415,10 +418,11 @@ bool final_identity(const FinalQuad &q, const tb::Snapshot &s) {
            tb::read_owner(reader, q.destination.object, b) && b == q.destination;
 }
 unsigned final_before(const pb::Frame &f) {
-    if (!accepting.load() || f.caller != cfg.image + 0x23c7b08 || f.gpr[2] != cfg.renderer + 0x710) return UINT_MAX;
+    if (!accepting.load() || f.caller != cfg.image + 0x23c7b08 || f.gpr[2] != cfg.renderer + layout::renderer::context)
+        return UINT_MAX;
     Lock lock;
     std::uint64_t frame{};
-    if (!field(cfg.renderer, 0x1f210, frame) || !frame) return UINT_MAX;
+    if (!field(cfg.renderer, layout::renderer::frame, frame) || !frame) return UINT_MAX;
     const auto slot = static_cast<unsigned>(frame % final_quads.size());
     auto &q = final_quads[slot];
     if ((q.entered || q.valid) && q.stamp.frame == frame) {
@@ -436,13 +440,14 @@ unsigned final_before(const pb::Frame &f) {
     std::array<float, 2> offset{};
     // The stored identity is widened, but the native flag occupies one byte.
     unsigned char async{};
-    if (!field(cfg.renderer, 0x93, async)) {
+    if (!field(cfg.renderer, layout::renderer::parallel_rendering, async)) {
         ++final_rejected;
         return UINT_MAX;
     }
     s.async = async;
-    const bool ok = field(cfg.renderer, 0x1f208, s.epoch) && field(cfg.renderer, 0x1f200, s.bank) &&
-                    field(s.context, 0x1d0, s.view) && same_stamp(s) && field(f.gpr[3], 0, rectangle) &&
+    const bool ok = field(cfg.renderer, layout::renderer::epoch, s.epoch) &&
+                    field(cfg.renderer, layout::renderer::bank, s.bank) && field(s.context, 0x1d0, s.view) &&
+                    same_stamp(s) && field(f.gpr[3], 0, rectangle) &&
                     rectangle == std::array<unsigned, 4>{0, 0, render_w, render_h} && field(f.gpr[4], 0, dimensions) &&
                     dimensions == std::array<unsigned, 2>{width, height} && field(f.stack[0], 0, offset) &&
                     offset == std::array<float, 2>{-.5F / width, -.5F / height} && (f.stack[1] & 255) == 1 &&
@@ -630,8 +635,8 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
     const auto &s = p.stamp;
     std::uintptr_t filters{}, motion_in{}, grade{}, grade_out{}, attachment{}, final_dest{};
     unsigned count{}, taas{}, grades{};
-    if (!same_stamp(s) || !field(cfg.image, 0x51cc238, filters) || !field(filters, 0x3c, count) || !count ||
-        count > 16) {
+    if (!same_stamp(s) || !field(cfg.image, layout::image::post_queue, filters) || !field(filters, 0x3c, count) ||
+        !count || count > 16) {
         plan_rejection = 1;
         return false;
     }
@@ -644,7 +649,7 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
             return false;
         }
         observation.filters[observation.count++] = {e, stage, order, u, type, input, output};
-        if (e == s.layer + 0x140) {
+        if (e == s.layer + layout::taa_filter::queue_entry) {
             if (stage != 15 || order != 2 || u != s.layer || input != s.inputs[0].object) {
                 plan_rejection = 3;
                 return false;
@@ -652,7 +657,7 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
             motion_in = output;
             ++taas;
         }
-        if (type == cfg.image + 0x3538400 && stage == 15 && order == 0) {
+        if (type == cfg.image + layout::image::tone_map_vtable && stage == 15 && order == 0) {
             grade = u;
             ++grades;
         }
@@ -989,8 +994,8 @@ void post_queue_complete(std::uintptr_t manager, std::uintptr_t context, std::ui
     if (!accepting.load()) return;
     std::uint64_t frame{};
     std::uintptr_t current_manager{};
-    if (!field(cfg.renderer, 0x1f210, frame) || !field(cfg.image, 0x51cc238, current_manager) ||
-        manager != current_manager)
+    if (!field(cfg.renderer, layout::renderer::frame, frame) ||
+        !field(cfg.image, layout::image::post_queue, current_manager) || manager != current_manager)
         return;
     {
         const auto &q = plans[frame % plans.size()];

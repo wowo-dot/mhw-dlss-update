@@ -2,15 +2,17 @@
 // viewport's projection (sub_14228F3B0, hook 4); the main scene's gets the
 // frame's jitter injected and is captured with its matrices for TAA's request.
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 namespace mhw::continuous_dlaa::detail {
 namespace {
 bool provider(pb::Provider &p) noexcept {
     unsigned char use{};
-    p.valid = pb::read(cfg.renderer + 0xa5, use) && use <= 1 && pb::read(cfg.renderer + 0xb4, p.sizing) &&
-              !(p.sizing & 1) && pb::read(cfg.renderer + 0x78, p.backend) && p.backend == cfg.backend &&
-              pb::read(p.backend + 0x18, p.device) && p.device == cfg.device &&
-              pb::read(p.backend + 0x42700, p.wrapper) && !p.wrapper;
+    p.valid = pb::read(cfg.renderer + layout::renderer::use_dlss, use) && use <= 1 &&
+              pb::read(cfg.renderer + layout::renderer::sizing_flags, p.sizing) && !(p.sizing & 1) &&
+              pb::read(cfg.renderer + layout::renderer::backend, p.backend) && p.backend == cfg.backend &&
+              pb::read(p.backend + layout::d3d_render::device, p.device) && p.device == cfg.device &&
+              pb::read(p.backend + layout::d3d_render::game_dlss, p.wrapper) && !p.wrapper;
     p.use = use;
     return p.valid;
 }
@@ -29,24 +31,28 @@ bool anchor(pb::Source &s, const NativeFrame &f) noexcept {
     unsigned stamp{}, flags{};
     std::uint64_t zero{};
     std::uintptr_t scene_texture{};
-    if (!pb::read(cfg.image + 0x51c4480, a.renderer) || a.renderer != cfg.renderer ||
-        a.renderer > UINTPTR_MAX - 0x1f570 || !pb::read(cfg.image + 0x51c4368, a.table) || !a.table ||
-        a.table > UINTPTR_MAX - 0xe740 || !pb::read(cfg.image + 0x51c4400, s.camera) || !s.camera ||
-        s.camera > UINTPTR_MAX - 0x2000 || f.call.gpr[1] < s.camera + 0x50 ||
+    if (!pb::read(cfg.image + layout::image::renderer, a.renderer) || a.renderer != cfg.renderer ||
+        a.renderer > UINTPTR_MAX - 0x1f570 || !pb::read(cfg.image + layout::image::scene, a.table) || !a.table ||
+        a.table > UINTPTR_MAX - 0xe740 || !pb::read(cfg.image + layout::image::camera, s.camera) || !s.camera ||
+        s.camera > UINTPTR_MAX - 0x2000 || f.call.gpr[1] < s.camera + layout::camera::viewports ||
         (f.call.gpr[1] - s.camera - 0x50) % 0x1a0 || (f.call.gpr[1] - s.camera - 0x50) / 0x1a0 >= 8 ||
-        f.call.gpr[2] != a.renderer + 0x710)
+        f.call.gpr[2] != a.renderer + layout::renderer::context)
         return false;
     a.context = f.call.gpr[2];
     const auto viewport = f.call.gpr[1];
     if (!pb::read(s.camera, s.camera_type) ||
-        (s.camera_type != cfg.image + 0x350d188 && s.camera_type != cfg.image + 0x33f82a8) ||
+        (s.camera_type != cfg.image + layout::image::camera_vtable &&
+         s.camera_type != cfg.image + layout::image::scene_camera_vtable) ||
         !pb::read(viewport + 0x20, active) || !active || !pb::read(viewport + 0x25, display) || display ||
-        !pb::read(viewport + 0x18, scene_texture) || scene_texture || !pb::read(s.camera + 0x38, zero) || zero ||
-        !pb::read(s.camera + 0x40, stamp) || !pb::read(a.renderer + 0x1f210, a.frame) ||
-        !pb::read(a.renderer + 0x1f208, a.epoch) || stamp != static_cast<unsigned>(a.epoch) ||
-        !pb::read(a.renderer + 0x1f450, a.view) || !a.view || a.view > UINTPTR_MAX - 0x60 ||
-        !pb::read(a.view + 0x58, flags) || (flags & 0x840000) || !pb::read(a.renderer + 0x1f200, a.bank) ||
-        a.bank > 1 || !pb::read(a.renderer + 0x93, async) || async > 1)
+        !pb::read(viewport + 0x18, scene_texture) || scene_texture ||
+        !pb::read(s.camera + layout::camera::jitter, zero) || zero ||
+        !pb::read(s.camera + layout::camera::stamp, stamp) ||
+        !pb::read(a.renderer + layout::renderer::frame, a.frame) ||
+        !pb::read(a.renderer + layout::renderer::epoch, a.epoch) || stamp != static_cast<unsigned>(a.epoch) ||
+        !pb::read(a.renderer + layout::renderer::primary_view, a.view) || !a.view || a.view > UINTPTR_MAX - 0x60 ||
+        !pb::read(a.view + layout::view::flags, flags) || (flags & 0x840000) ||
+        !pb::read(a.renderer + layout::renderer::bank, a.bank) || a.bank > 1 ||
+        !pb::read(a.renderer + layout::renderer::parallel_rendering, async) || async > 1)
         return false;
     a.async_mode = async;
     return true;
@@ -62,7 +68,7 @@ bool projection_before(const NativeFrame &f) {
     pb::Provider provider_state;
     auto &s = projection.source;
     if (!anchor(s, f) || !provider(provider_state) ||
-        !pb::read(s.anchor.table + 0xe6a0 + 8 * (s.anchor.frame % 20), projection.candidate) ||
+        !pb::read(s.anchor.table + layout::scene::jitter_table + 8 * (s.anchor.frame % 20), projection.candidate) ||
         !pb::jitter_finite(projection.candidate)) {
         projection_busy.clear();
         return false;
@@ -72,7 +78,7 @@ bool projection_before(const NativeFrame &f) {
         projection.candidate = 0;
         ++zero_jitter_projections;
     }
-    if (!pb::jitter_exchange(s.camera + 0x38, 0, projection.candidate)) {
+    if (!pb::jitter_exchange(s.camera + layout::camera::jitter, 0, projection.candidate)) {
         fail(3);
         projection_busy.clear();
         return false;
@@ -87,7 +93,7 @@ void projection_after(bool admitted, bool returned, NativeFrame &f) {
     s.projection =
         game_memory::capture_projection_snapshot(cfg.image, s.anchor, game_memory::read_bounded_scalar, nullptr);
     const auto &p = s.projection;
-    const bool restored = pb::jitter_exchange(s.camera + 0x38, projection.candidate, 0);
+    const bool restored = pb::jitter_exchange(s.camera + layout::camera::jitter, projection.candidate, 0);
     if (restored)
         ++restorations;
     else

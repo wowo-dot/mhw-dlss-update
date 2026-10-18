@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include "../game_memory/layout.hpp"
 #include <array>
 #include <cstdint>
 #include <ostream>
@@ -93,8 +94,9 @@ public:
         s.filters = g.filters;
         s.filter_count = g.count;
         const auto context = g.at[3];
-        if (context > UINT64_MAX - 0x2b84 || !read(context + 0x2b80, &s.total, 4) || !s.total || s.total >= 65535 ||
-            !read(context + 0x2b78, &s.queue, 8) || !s.queue || s.queue > UINT64_MAX - 16ULL * s.total) {
+        if (context > UINT64_MAX - 0x2b84 || !read(context + layout::context::packet_count, &s.total, 4) || !s.total ||
+            s.total >= 65535 || !read(context + layout::context::packets, &s.queue, 8) || !s.queue ||
+            s.queue > UINT64_MAX - 16ULL * s.total) {
             s.error = 1;
             return;
         }
@@ -136,8 +138,9 @@ public:
         }
         unsigned total{};
         std::uint64_t queue{};
-        s.stable = !s.error && s.scanned == s.total && read(context + 0x2b80, &total, 4) && total == s.total &&
-                   read(context + 0x2b78, &queue, 8) && queue == s.queue && stamp();
+        s.stable = !s.error && s.scanned == s.total && read(context + layout::context::packet_count, &total, 4) &&
+                   total == s.total && read(context + layout::context::packets, &queue, 8) && queue == s.queue &&
+                   stamp();
     }
     void write(std::ostream &o) const {
         const auto a = [&](const auto &v) {

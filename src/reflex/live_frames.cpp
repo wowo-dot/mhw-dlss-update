@@ -1,4 +1,5 @@
 #include "live_frames.hpp"
+#include "../game_memory/layout.hpp"
 #include "../common/require.hpp"
 #include "frame_session.hpp"
 #include "frame_stamp.hpp"
@@ -121,12 +122,12 @@ struct LiveFrames::State {
     unsigned identity_links() const noexcept {
         std::uintptr_t e{}, r{}, b{}, d{}, link{};
         unsigned failed{};
-        if (!pb::read(image + 0x51c4148, e) || e != engine) failed |= 1;
-        if (!pb::read(image + 0x51c4480, r) || r != renderer) failed |= 2;
-        if (!pb::read(image + 0x51c7050, b) || b != backend) failed |= 4;
-        if (!pb::read(backend + 0x18, d) || d != device) failed |= 8;
-        if (!pb::read(engine + 0xaf7b0, link) || link != renderer) failed |= 16;
-        if (!pb::read(renderer + 0x78, link) || link != backend) failed |= 32;
+        if (!pb::read(image + layout::image::engine, e) || e != engine) failed |= 1;
+        if (!pb::read(image + layout::image::renderer, r) || r != renderer) failed |= 2;
+        if (!pb::read(image + layout::image::d3d_render, b) || b != backend) failed |= 4;
+        if (!pb::read(backend + layout::d3d_render::device, d) || d != device) failed |= 8;
+        if (!pb::read(engine + layout::engine::renderer, link) || link != renderer) failed |= 16;
+        if (!pb::read(renderer + layout::renderer::backend, link) || link != backend) failed |= 32;
         return failed;
     }
     bool identities() const noexcept { return !identity_links(); }
@@ -274,8 +275,8 @@ struct LiveFrames::State {
                 return false;
             }
             std::uintptr_t native{};
-            if (!identities() || GetCurrentThreadId() != stats.owner || !pb::read(backend + 0x1470, native) ||
-                native != swap) {
+            if (!identities() || GetCurrentThreadId() != stats.owner ||
+                !pb::read(backend + layout::d3d_render::swap_chain, native) || native != swap) {
                 fault("present-owner-or-identity");
                 return false;
             }
@@ -298,12 +299,13 @@ struct LiveFrames::State {
             call = 21;
             std::uintptr_t native{};
             // stage: the first failed condition, in order.
-            const unsigned failed = flags & DXGI_PRESENT_TEST                               ? 1u
-                                    : FAILED(result)                                        ? 2u
-                                    : !identities()                                         ? 3u
-                                    : GetCurrentThreadId() != stats.owner                   ? 4u
-                                    : !pb::read(backend + 0x1470, native) || native != swap ? 5u
-                                                                                            : 0u;
+            const unsigned failed = flags & DXGI_PRESENT_TEST             ? 1u
+                                    : FAILED(result)                      ? 2u
+                                    : !identities()                       ? 3u
+                                    : GetCurrentThreadId() != stats.owner ? 4u
+                                    : !pb::read(backend + layout::d3d_render::swap_chain, native) || native != swap
+                                        ? 5u
+                                        : 0u;
             if (failed) {
                 fault("present-return-invariant", static_cast<unsigned>(result), failed);
                 return;
@@ -338,10 +340,11 @@ void LiveFrames::install(std::uintptr_t image, std::uintptr_t sdk_device, std::o
     unsigned attempts{};
     StampRead first{}, last{};
     const char *rejection = "";
-    if (!pb::read(image + 0x51c4148, s.engine) || !s.engine || !pb::read(image + 0x51c4480, s.renderer) ||
-        !s.renderer || !pb::read(image + 0x51c7050, s.backend) || !s.backend)
+    if (!pb::read(image + layout::image::engine, s.engine) || !s.engine ||
+        !pb::read(image + layout::image::renderer, s.renderer) || !s.renderer ||
+        !pb::read(image + layout::image::d3d_render, s.backend) || !s.backend)
         rejection = "live-frame-global-anchors";
-    else if (!pb::read(s.backend + 0x18, s.device) || !s.device || s.device != sdk_device)
+    else if (!pb::read(s.backend + layout::d3d_render::device, s.device) || !s.device || s.device != sdk_device)
         rejection = "live-frame-SDK-device";
     else
         for (;;) {
