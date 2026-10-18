@@ -148,7 +148,7 @@ Session open_log(const std::filesystem::path &dll) {
     log << std::boolalpha;
     session.crash_log = mhw::frame_generation::crash_log::install(output / (name + ".crash.jsonl"), fg_buffers_json);
     log << "{\"event\":\"start\",\"schema\":1,\"version\":\"" MHW_VERSION
-           "\",\"build\":\"alpha\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":"
+           "\",\"experiment\":\"frame-generation-game\",\"target_mode\":1,\"fg_plugin_loaded\":"
         << fg_plugin << ",\"fg_multiplier\":" << fg_multiplier
         << ",\"fg_enabled\":false,\"pid\":" << GetCurrentProcessId() << ",\"creation\":" << session.creation
         << ",\"host_sha256\":" << quoted(pb::host_sha)

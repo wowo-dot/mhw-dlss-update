@@ -19,7 +19,7 @@ void check(bool ok, const char *what) {
 
 // tools/package_release.py's INI, as written (CRLF).
 constexpr std::string_view shipped =
-    "# MHW DLSS / Frame Generation (alpha) configuration.\r\n"
+    "# MHW DLSS / Frame Generation configuration.\r\n"
     "# Lines are \"key = value\"; '#' or ';' starts a comment. Folders are relative to this folder.\r\n"
     "dlss_mode = performance    ; dlaa, quality, balanced, performance (applies from the next start)\r\n"
     "frame_generation = 2x      ; off, 2x, 3x, 4x, 6x (3x and above need an RTX 50 series GPU)\r\n"

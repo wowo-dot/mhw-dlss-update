@@ -32,7 +32,7 @@ class PackageRelease(unittest.TestCase):
         for src, _ in pr.LICENSES['dlss']:
             write(self.dlss / src, f'license {src}'.encode())
         self.dll = root / 'mhw_dlss.dll'
-        write(self.dll, b'MZ ... {"event":"start","schema":1,"version":"9.8.7","build":"alpha"} ...')
+        write(self.dll, b'MZ ... {"event":"start","schema":1,"version":"9.8.7","experiment":"frame-generation-game"} ...')
 
     def tearDown(self):
         pr.STREAMLINE.clear(); pr.STREAMLINE.update(self.saved[0])

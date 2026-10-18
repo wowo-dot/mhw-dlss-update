@@ -286,8 +286,7 @@ event's `schema`.
 - "probe" names the plugin entry (`presentation_probe.cpp`).
 - `silhouette_probe.inl` holds production code.
 - "identity" means four things.
-- The `"build":"alpha"` marker is checked by `package_release.py`, so it
-  stays.
+- The `"build":"alpha"` marker is checked by `package_release.py`.
 
 ## 9. The 0.29.0 plan
 
@@ -444,3 +443,10 @@ Behaviour stays the same; the log fields stay.
   - `src/bridge_probe/` (the research's bridge probe) is
     `src/game_memory/` (`mhw::game_memory`): the guarded reads of game
     memory and the camera projection snapshot.
+  - The mod is no longer labelled alpha (the user's call after checkpoint
+    4): the package's ini header and README drop "(alpha)", the start
+    event drops its constant `"build":"alpha"` (no tool read it), and
+    `package_release.py` checks the DLL for the start event's
+    `{"event":"start","schema":1,"version":"<version>",` instead. The
+    `alpha_config`, `alpha_waiting` and `alpha_arm` event names stay, so
+    old and new logs read the same.

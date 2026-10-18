@@ -45,7 +45,7 @@ const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 // first; it is accepted only from `runtime` with the pinned hash.
 bool run(HMODULE, const char *version, const std::filesystem::path &output,
          const std::filesystem::path &runtime) noexcept;
-// Alpha: the game's own DLSS 1 is declined (docs/research/game-dlss1.md):
+// The plugin declines the game's own DLSS 1 (docs/research/game-dlss1.md):
 // right after the game's NGX init, which this transaction observes, the game
 // builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,
 // as on cards DLSS 1 does not support (RTX 50, where the mod was tested).

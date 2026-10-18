@@ -1,4 +1,4 @@
-"""Assemble a release package of the alpha DLL with the NVIDIA runtime it was tested with.
+"""Assemble a release package of the mod's DLL with the NVIDIA runtime it was tested with.
 
   python -B tools/package_release.py --dll <built mhw_dlss.dll> --version X.Y.Z
       --streamline-sdk <Streamline SDK root> --dlss-sdk <DLSS SDK root> --out <folder>
@@ -53,7 +53,7 @@ BUILT_IN = [
     ('Astera Loader plugin header', 'third_party/al/LICENSE', 'AsteraLoader-MIT-LICENSE.txt'),
     ('CMFM menu header', 'third_party/cmfm/LICENSE', 'CMFM-MIT-LICENSE.txt'),
 ]
-INI = """# MHW DLSS / Frame Generation (alpha) configuration.
+INI = """# MHW DLSS / Frame Generation configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 dlss_mode = off            ; off, dlaa, quality, balanced, performance (off: the game's own anti-aliasing and resolution)
 frame_generation = off     ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
@@ -64,7 +64,7 @@ frame_generation_plugin = auto ; auto: DLSS Frame Generation loads where the GPU
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
 log_dir = logs             ; one log file per launch
 """
-README = """MHW DLSS / Frame Generation {version} (alpha)
+README = """MHW DLSS / Frame Generation {version}
 
 An open-source mod that adds NVIDIA DLSS Super Resolution, DLSS Frame
 Generation and NVIDIA Reflex to Monster Hunter: World (DirectX 12).
@@ -162,8 +162,9 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--allow-dirty', action='store_true', help='package from a working tree with uncommitted changes')
     a = p.parse_args()
-    marker = ('"version":"%s","build":"alpha"' % a.version).encode()
-    require(a.dll.is_file() and marker in a.dll.read_bytes(), f'{a.dll} is not the alpha build of version {a.version}')
+    # The plugin's start event holds its version inside one literal (src/settings/version.hpp).
+    marker = ('{"event":"start","schema":1,"version":"%s",' % a.version).encode()
+    require(a.dll.is_file() and marker in a.dll.read_bytes(), f'{a.dll} is not the mod built as version {a.version}')
     repo = Path(__file__).resolve().parents[1]
     commit, dirty = git_identity(repo)
     require(a.allow_dirty or not dirty, 'the working tree has uncommitted changes')

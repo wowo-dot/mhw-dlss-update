@@ -3,7 +3,7 @@
 // The mod's version, in one place: Astera Loader's plugin info, the log's
 // start event and CMFM's page header. Also a macro, so the start event holds
 // it inside one literal: tools/package_release.py checks the DLL for
-// "version":"<version>","build":"alpha".
+// {"event":"start","schema":1,"version":"<version>",
 #define MHW_VERSION "0.29.0-dev.4"
 
 namespace mhw::settings {
