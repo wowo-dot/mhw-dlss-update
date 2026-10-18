@@ -163,6 +163,9 @@ bool install(std::uintptr_t, std::string &reason) {
     reason = "game options test double";
     return false;
 }
+bool cas_handled() noexcept {
+    return false;
+}
 void take_over() noexcept {}
 void give_back() noexcept {}
 bool taken() noexcept {

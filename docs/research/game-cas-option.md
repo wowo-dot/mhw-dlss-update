@@ -107,6 +107,18 @@ kept and given back.
 Gates: 4 new (`0x43de50`, `0x441520`, `0x229bd20`, `0xeeae80`), 113 in all,
 matched on the clean image.
 
+## dev.1 in game (2026-10-19, run 51208): game_options refused
+
+- **What the log showed:**
+  - `game_options.installed` false, refusal "game options code gate 15642240", which is `0xeeae80`;
+  - CMFM hooks the same function through al.hooks (AL core log: `game_hook target=exe+0xeeae80 name=CMFM:OptionRow::isEnabled state=active`), so the live head is AL's patch and the plain hash fails;
+  - with game_options gone, the AA and resolution-scaling rules were off too.
+- **What happened after:** DLSS ran from the player's Off, then the player turned CAS on. The content scale went to 0.8 (`first_unqualified`: check 16, cas 1) and render_resolution faulted (4). That is the fail-closed path.
+- **dev.2 fixes:**
+  - the hooked functions' gates check the original head (the hook's pattern) with the live rest, as `ngx_startup::verify_entry` and live_frames do;
+  - CAS's part installs on its own after the rest (`cas.installed`, `cas.refusal`), so a CAS refusal leaves the AA and resolution-scaling rules in place. `install()` stops on `fidelityfx-cas` only when CAS's part is missing and CAS is on;
+  - the row id at +20 is read as 32 bits. CMFM's rows are kind 1 with ids from 100 (CMFM's `GameOptionRow`), which its own hook answers before or after ours.
+
 ## To check in game
 
 - CAS On saved, DLSS On at start: arms; `game_options.cas` saved [1,…],

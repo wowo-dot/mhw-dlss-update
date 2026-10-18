@@ -38,9 +38,10 @@ constexpr int locked_help(unsigned item, int help) noexcept {
            : item == anti_aliasing_item    ? anti_aliasing_help
                                            : help;
 }
-// The display menu's rows (0xeeae80's descriptors: kind at +0, index at
-// +20): kind 2 are the display options, of which 13 is FidelityFX CAS and 14
-// its sharpness (0x1e8cb00 and 0x1e8ab40 apply them).
+// The display menu's rows (0xeeae80's descriptors: kind at +0, id at +20, 32
+// bits): kind 2 are the display options, of which 13 is FidelityFX CAS and 14
+// its sharpness (0x1e8cb00 and 0x1e8ab40 apply them). CMFM's rows, which its
+// own hook of 0xeeae80 answers, are kind 1 with ids from 100.
 constexpr unsigned display_option_kind = 2;
 constexpr unsigned char cas_row = 13, cas_sharpness_row = 14;
 constexpr bool locked_display_row(unsigned kind, unsigned index) noexcept {
@@ -50,8 +51,11 @@ constexpr bool locked_display_row(unsigned kind, unsigned index) noexcept {
 // Worker, at the DLSS install: checks the game's code, reads the player's
 // saved choices and hooks the game's apply functions and three menu
 // functions, enabled at once and passing everything through until
-// take_over(). False (nothing hooked) when the code differs.
+// take_over(). False (nothing hooked) when the code differs. CAS's part
+// installs on its own after it: its refusal leaves the rest in place.
 bool install(std::uintptr_t image, std::string &reason);
+// CAS's part installed: take_over() turns CAS off.
+bool cas_handled() noexcept;
 // Worker: this mod's DLSS runs from now (its install, or leaving Off). The
 // game's anti-aliasing Off, CAS Off and resolution scaling High, through the
 // game's own setter and apply functions. Before render_resolution takes the
