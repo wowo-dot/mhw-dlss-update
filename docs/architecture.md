@@ -417,3 +417,8 @@ Behaviour stays the same; the log fields stay.
     log quotes it, the plugin's `code_site()` wraps it). The three
     `same_device` checks stay: the two throwing ones name the step that
     failed, and those strings reach the players' logs.
+  - `astera::Gate` is the one gate in front of the D3D12 chain entries
+    (four `Chained<>` copies; each owner keeps a one-line alias), and
+    `src/common/native_frame.inc` holds the stubs' frame macros (SAVE and
+    RESTORE in six `.asm`, the shared stub in four as `NATIVE_ENTRY`);
+    every stub assembles to the same code and unwind data as before.

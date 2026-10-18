@@ -10,6 +10,11 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 # The hook entry stubs are MASM (src/*/*_entry.asm).
 enable_language(ASM_MASM)
+# Six of them share the frame macros of src/common/native_frame.inc.
+set_source_files_properties(src/projection_binding/entry.asm src/reflex/frame_boundaries_entry.asm
+    src/scaled_temporal/stream_entry.asm src/temporal_bindings/depth_route_entry.asm
+    src/temporal_bindings/jitter_entry.asm src/temporal_bindings/temporal_entry.asm
+    PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/src/common")
 
 # The shipped mod (mhw_dlss.dll in the release package) and the tests of its
 # code. The research probes, fixtures and tools it grew out of were retired on
