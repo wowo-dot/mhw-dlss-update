@@ -59,8 +59,10 @@ bool silhouette_code_stable(const SilhouetteCpu &r) {
         const auto &s = r.identity[i];
         std::uintptr_t entry{}, desc{}, data{};
         unsigned size{};
-        if (!field(r.set, 0x50 + 8 * i, entry) || entry != s.entry || !field(entry, 0x10, desc) ||
-            desc != s.descriptor || !field(desc, 0, size) || size != s.size || !field(desc, 8, data) || data != s.data)
+        if (!field(r.set, layout::shader_set::stages + 8 * i, entry) || entry != s.entry ||
+            !field(entry, layout::shader_stage::code, desc) || desc != s.descriptor ||
+            !field(desc, layout::shader_code::size, size) || size != s.size ||
+            !field(desc, layout::shader_code::bytecode, data) || data != s.data)
             return false;
         std::array<std::byte, 1024> block{};
         for (unsigned at = 0; at < size; at += 1024) {
@@ -111,8 +113,10 @@ std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet, bool
     {
         std::uintptr_t entry{}, descriptor{}, data{};
         unsigned size{};
-        if (field(set, 0x58, entry) && field(entry, 0x10, descriptor) && field(descriptor, 0, size) &&
-            field(descriptor, 8, data))
+        if (field(set, layout::shader_set::pixel_stage, entry) &&
+            field(entry, layout::shader_stage::code, descriptor) &&
+            field(descriptor, layout::shader_code::size, size) &&
+            field(descriptor, layout::shader_code::bytecode, data))
             for (unsigned i = 0; i < silhouette_unknown_count; ++i) {
                 auto &u = silhouette_unknown[i];
                 if (u.set == set && u.data == data && u.size == size) {
@@ -139,8 +143,10 @@ std::shared_ptr<SilhouetteCpu> silhouette_cpu_lookup(std::uintptr_t packet, bool
     if (!layout(r->layout, false)) return {};
     for (unsigned i = 0; i < 2; ++i) {
         auto &s = r->identity[i];
-        if (!field(set, 0x50 + 8 * i, s.entry) || !field(s.entry, 0x10, s.descriptor) ||
-            !field(s.descriptor, 0, s.size) || s.size < 52 || s.size > 131072 || !field(s.descriptor, 8, s.data))
+        if (!field(set, layout::shader_set::stages + 8 * i, s.entry) ||
+            !field(s.entry, layout::shader_stage::code, s.descriptor) ||
+            !field(s.descriptor, layout::shader_code::size, s.size) || s.size < 52 || s.size > 131072 ||
+            !field(s.descriptor, layout::shader_code::bytecode, s.data))
             return {};
         r->bytes[i].resize(s.size);
         if (!pb::copy_memory(s.data, r->bytes[i].data(), s.size) || !pb::dxbc_valid(r->bytes[i].data(), s.size))
@@ -200,7 +206,9 @@ IndexedScope indexed_before(const pb::Frame &f) noexcept {
         scope.draw.packet = f.gpr[3];
         scope.draw.executor = f.gpr[1];
         scope.draw.context = f.gpr[2];
-        if (!field(f.gpr[1], 8, scope.state) || !field(scope.state, 0x20, scope.draw.command)) fail(14);
+        if (!field(f.gpr[1], layout::executor::recording, scope.state) ||
+            !field(scope.state, layout::recording::command, scope.draw.command))
+            fail(14);
     } catch (...) {
         Lock lock;
         fail(14);
@@ -221,9 +229,10 @@ bool silhouette_bindings(const LatePacket &r, std::array<unsigned, 28> &screen, 
     std::uintptr_t words{}, ids{}, modes{};
     unsigned count{};
     std::array<unsigned short, 2> range{};
-    if (!field(set, 0, words) || !field(set, 0x80, ids) || !field(set, 0x88, count) || count > 64 ||
-        !field(graphics, 0x10, modes) || !field(set, 0x14, range) || range[0] > 128 ||
-        unsigned(range[0]) + range[1] > 4096)
+    if (!field(set, layout::shader_set::words, words) || !field(set, layout::shader_set::ids, ids) ||
+        !field(set, layout::shader_set::owner_count, count) || count > 64 ||
+        !field(graphics, layout::binding_state::modes, modes) || !field(set, layout::shader_set::range, range) ||
+        range[0] > 128 || unsigned(range[0]) + range[1] > 4096)
         return false;
     std::array<unsigned, 128> binding{};
     unsigned found{};
@@ -242,7 +251,7 @@ bool silhouette_bindings(const LatePacket &r, std::array<unsigned, 28> &screen, 
         unsigned char mode{};
         std::uintptr_t object{};
         if ((found & (1U << wanted)) || !field(modes, index, mode) || mode ||
-            !field(graphics, 0x30 + 8 * index, object) || !object)
+            !field(graphics, layout::binding_state::objects + 8 * index, object) || !object)
             return false;
         found |= 1U << wanted;
         if (wanted < 2) {
@@ -295,7 +304,7 @@ unsigned silhouette_buffers(const LatePacket &r, const obs::RasterBindings &b,
     std::array<std::uintptr_t, 4> owners{};
     unsigned streams{};
     for (unsigned k = 0; k < 4; ++k) {
-        if (!field(ia, 8 * k, owners[k])) return 6;
+        if (!field(ia, layout::input_assembly::vertex_owners + 8 * k, owners[k])) return 6;
         if (owners[k]) streams = k + 1;
     }
     const auto needed = (1U << streams) - 1;
@@ -314,8 +323,10 @@ unsigned silhouette_buffers(const LatePacket &r, const obs::RasterBindings &b,
         std::uintptr_t backend{}, resource{}, address{};
         unsigned bytes{}, offset{};
         unsigned char stride{};
-        if (!field(owners[k], 0x60, backend) || !field(backend, 0x20, resource) || !field(backend, 0x40, address) ||
-            !field(backend, 0x10, bytes) || !field(ia, 0x24 + 4 * k, offset) || offset > bytes ||
+        if (!field(owners[k], layout::texture_owner::backing, backend) ||
+            !field(backend, layout::backing::resource, resource) ||
+            !field(backend, layout::backing::gpu_address, address) || !field(backend, layout::backing::bytes, bytes) ||
+            !field(ia, layout::input_assembly::offsets + 4 * k, offset) || offset > bytes ||
             address > UINTPTR_MAX - offset)
             return code(k, 0);
         const auto description = indexed_description(resource);
@@ -323,7 +334,7 @@ unsigned silhouette_buffers(const LatePacket &r, const obs::RasterBindings &b,
         if (!description[1] || description[2] != D3D12_RESOURCE_DIMENSION_BUFFER || address < description[13] ||
             address - description[13] > description[3] || bytes > description[3] - (address - description[13]))
             return code(k, 1);
-        if (!field(ia, 0x20 + k, stride)) return code(k, 2);
+        if (!field(ia, layout::input_assembly::strides + k, stride)) return code(k, 2);
         if (stride > 128 || stride % 4 || stride < (k ? 4 : 12)) return code(k, 3);
         if (view.BufferLocation != address + offset) return code(k, 4);
         if (view.SizeInBytes != bytes - offset) return code(k, 5);
@@ -332,9 +343,11 @@ unsigned silhouette_buffers(const LatePacket &r, const obs::RasterBindings &b,
     }
     std::uintptr_t owner{}, backend{}, resource{}, address{};
     unsigned bytes{}, offset{};
-    if (!field(ia, 0x38, owner) || !field(owner, 0x60, backend) || !field(backend, 0x20, resource) ||
-        !field(backend, 0x40, address) || !field(backend, 0x10, bytes) || !field(ia, 0x40, offset) || offset > bytes ||
-        address > UINTPTR_MAX - offset)
+    if (!field(ia, layout::input_assembly::index_owner, owner) ||
+        !field(owner, layout::texture_owner::backing, backend) ||
+        !field(backend, layout::backing::resource, resource) ||
+        !field(backend, layout::backing::gpu_address, address) || !field(backend, layout::backing::bytes, bytes) ||
+        !field(ia, layout::input_assembly::index_offset, offset) || offset > bytes || address > UINTPTR_MAX - offset)
         return 14;
     const auto description = indexed_description(resource);
     seen = {description[1], description[2], description[3], address - description[13], bytes};
@@ -393,12 +406,14 @@ bool record_indexed(ID3D12GraphicsCommandList *list, unsigned n, unsigned instan
     std::uintptr_t packet{}, root{}, pipeline{}, command{};
     if (!p.prepared || ++scope.calls != 1 || caller != cfg.image + 0x259d806 || instances != 1 || instance ||
         reinterpret_cast<std::uintptr_t>(list) != scope.draw.command ||
-        !field(p.late_packets[scope.position], 0x10, bindings) || bindings != r.bindings ||
-        !field(p.late_packets[scope.position], 0x40, arguments) || arguments != r.arguments ||
+        !field(p.late_packets[scope.position], layout::draw_packet::bindings, bindings) || bindings != r.bindings ||
+        !field(p.late_packets[scope.position], layout::draw_packet::arguments, arguments) || arguments != r.arguments ||
         arguments != std::array<unsigned, 3>{n, first, std::bit_cast<unsigned>(base)} || !obs::inspect(list, roots) ||
-        !roots.known || !roots.valid || !field(scope.state, 0x158, packet) || packet != scope.draw.packet ||
-        !field(scope.state, 0x20, command) || command != scope.draw.command || !field(scope.state, 0x110, root) ||
-        root != roots.graphics.signature || !field(scope.state, 0x108, pipeline) || pipeline != roots.pipeline)
+        !roots.known || !roots.valid || !field(scope.state, layout::recording::packet, packet) ||
+        packet != scope.draw.packet || !field(scope.state, layout::recording::command, command) ||
+        command != scope.draw.command || !field(scope.state, layout::recording::graphics_root, root) ||
+        root != roots.graphics.signature || !field(scope.state, layout::recording::pipeline, pipeline) ||
+        pipeline != roots.pipeline)
         throw std::runtime_error("silhouette indexed packet identity");
     // Even unadapted candidates participate in GPU order and selector lifetime.
     if (!track_recording(p, list, roots.generation, true) || !retain_recording(p, list, roots.generation) ||
@@ -473,7 +488,7 @@ bool record_indexed(ID3D12GraphicsCommandList *list, unsigned n, unsigned instan
                           u(rs.ConservativeRaster)});
     for (unsigned i = 0; i < 3; ++i) {
         std::uintptr_t extra{};
-        if (!field(r.recipe->set, 0x60 + 8 * i, extra) || extra) return native(3, {i});
+        if (!field(r.recipe->set, layout::shader_set::extra_stages + 8 * i, extra) || extra) return native(3, {i});
     }
     const auto &v = raster.viewport;
     const auto &sc = raster.scissor;

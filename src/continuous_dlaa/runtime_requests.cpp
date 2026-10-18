@@ -145,13 +145,14 @@ void taa_after(bool admitted, bool returned) {
     unsigned count{};
     std::uintptr_t array{}, object{};
     const auto &s = producer.source;
-    const bool ok =
-        returned && tb::snapshot(reader, cfg, s.layer, s.context, again) && s == again &&
-        tb::scene_depth(reader, s, depth) && depth == producer.depth && tb::shader_recipe(reader, s, shader) &&
-        shader == producer.shader && reader.get(s.context + layout::context::packet_count, count) &&
-        count == producer_count + 1 && reader.get(s.context + layout::context::packets, array) && array &&
-        reader.get(array + 16ULL * (count - 1) + 8, object) && tb::packet(reader, object, producer.packet) &&
-        tb::packet_matches(s, producer.packet, (render_width() + 15) / 16, (render_height() + 15) / 16, 1);
+    const bool ok = returned && tb::snapshot(reader, cfg, s.layer, s.context, again) && s == again &&
+                    tb::scene_depth(reader, s, depth) && depth == producer.depth &&
+                    tb::shader_recipe(reader, s, shader) && shader == producer.shader &&
+                    reader.get(s.context + layout::context::packet_count, count) && count == producer_count + 1 &&
+                    reader.get(s.context + layout::context::packets, array) && array &&
+                    reader.get(array + 16ULL * (count - 1) + layout::packet_entry::packet, object) &&
+                    tb::packet(reader, object, producer.packet) &&
+                    tb::packet_matches(s, producer.packet, (render_width() + 15) / 16, (render_height() + 15) / 16, 1);
     if (ok) {
         Lock lock;
         publish_taa();
@@ -195,7 +196,7 @@ bool depth_before(const NativeFrame &f) {
                     gate(2, reader.get(d.stamp.container + layout::depth_container::texture, destination) &&
                                 destination == f.call.gpr[4]) &&
                     gate(3, reader.get(d.stamp.context + layout::context::attachment, attachment) && attachment &&
-                                reader.get(attachment + 0x58, source)) &&
+                                reader.get(attachment + layout::attachment::owner, source)) &&
                     gate(4, tb::read_owner(reader, source, d.source)) &&
                     gate(5, tb::read_owner(reader, destination, d.destination)) &&
                     gate(6, reader.get(d.stamp.context + layout::context::packet_count, depth_producer_count) &&
@@ -216,8 +217,9 @@ void depth_after(bool admitted, bool returned) {
     if (!returned || !dr::stamp(reader, cfg, again) || again != d.stamp ||
         !reader.get(d.stamp.context + layout::context::packet_count, count) || count <= depth_producer_count ||
         count - depth_producer_count > 64 || !reader.get(d.stamp.context + layout::context::packets, array) || !array ||
-        !reader.get(array + 16ULL * (count - 1) + 8, d.object) || !dr::packet(reader, d.object, d.packet) ||
-        d.packet.source != d.source.object || d.packet.destination != d.destination.object) {
+        !reader.get(array + 16ULL * (count - 1) + layout::packet_entry::packet, d.object) ||
+        !dr::packet(reader, d.object, d.packet) || d.packet.source != d.source.object ||
+        d.packet.destination != d.destination.object) {
         fail(8);
         return;
     }
@@ -422,9 +424,9 @@ bool consumer_before(const NativeFrame &f, bool depth, ForwardedRequest *forward
     }
     if (!found) return false;
     std::uintptr_t backend{}, command{};
-    if (!f.call.gpr[1] || !f.call.gpr[2] || !reader.get(f.call.gpr[2] + 8, backend) || backend != cfg.backend ||
-        !reader.get(f.call.gpr[1] + 8, current_recording) || !current_recording ||
-        !reader.get(current_recording + 0x20, command) || !command) {
+    if (!f.call.gpr[1] || !f.call.gpr[2] || !reader.get(f.call.gpr[2] + layout::executor_device::backend, backend) ||
+        backend != cfg.backend || !reader.get(f.call.gpr[1] + layout::executor::recording, current_recording) ||
+        !current_recording || !reader.get(current_recording + layout::recording::command, command) || !command) {
         if (depth)
             note_depth(3, 2, depth_consumer, {f.call.gpr[1], f.call.gpr[2], backend, current_recording, command});
         return false;

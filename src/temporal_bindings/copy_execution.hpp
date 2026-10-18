@@ -1,5 +1,6 @@
 #pragma once
 #include "inputs.hpp"
+#include "../game_memory/layout.hpp"
 
 namespace mhw::temporal_bindings {
 // Branch operands of the pinned DX12 opcode-10 executor (RVA 0x259df30).
@@ -23,20 +24,25 @@ inline bool read_copy_execution(const Reader &r, std::uintptr_t packet, CopyExec
         return p && p <= UINTPTR_MAX - offset - sizeof(T) && r.get(p + offset, v);
     };
     unsigned raw{};
-    if (!field(packet, 0, raw) || (raw & 31) != 10 || !field(packet, 0x10, s.kind) ||
-        !field(packet, 0x18, s.destination) || !field(packet, 0x20, s.source) ||
-        !field(s.source, 0xf0, s.source_primary) || !field(s.destination, 0xf0, s.destination_primary))
+    if (!field(packet, 0, raw) || (raw & 31) != 10 || !field(packet, layout::copy_packet::kind, s.kind) ||
+        !field(packet, layout::copy_packet::destination, s.destination) ||
+        !field(packet, layout::copy_packet::source, s.source) ||
+        !field(s.source, layout::texture_owner::backing_override, s.source_primary) ||
+        !field(s.destination, layout::texture_owner::backing_override, s.destination_primary))
         return false;
     s.source_backing = s.source_primary;
     s.destination_backing = s.destination_primary;
-    if ((!s.source_backing && !field(s.source, 0x60, s.source_backing)) ||
-        (!s.destination_backing && !field(s.destination, 0x60, s.destination_backing)) ||
-        !field(packet, 0x40, s.child) || !field(s.child, 0x10, s.viewport) || !field(s.viewport, 0x4c, s.rectangle))
+    if ((!s.source_backing && !field(s.source, layout::texture_owner::backing, s.source_backing)) ||
+        (!s.destination_backing && !field(s.destination, layout::texture_owner::backing, s.destination_backing)) ||
+        !field(packet, layout::copy_packet::child, s.child) ||
+        !field(s.child, layout::draw_packet::bindings, s.viewport) ||
+        !field(s.viewport, layout::target_set::rectangle, s.rectangle))
         return false;
     if (s.kind == 8) {
-        if (!field(s.source_backing, 0xb0, s.source_width) || !field(s.source_backing, 0xb4, s.source_height) ||
-            !field(s.destination_backing, 0xb0, s.destination_width) ||
-            !field(s.destination_backing, 0xb4, s.destination_height))
+        if (!field(s.source_backing, layout::backing::width, s.source_width) ||
+            !field(s.source_backing, layout::backing::height, s.source_height) ||
+            !field(s.destination_backing, layout::backing::width, s.destination_width) ||
+            !field(s.destination_backing, layout::backing::height, s.destination_height))
             return false;
         const bool whole = s.source_width == s.destination_width && s.source_height == s.destination_height &&
                            s.rectangle == std::array<unsigned, 4>{0, 0, s.source_width, s.source_height};
@@ -44,12 +50,12 @@ inline bool read_copy_execution(const Reader &r, std::uintptr_t packet, CopyExec
         // branch does not affect whether the child executes its barriers.
         s.path = whole ? CopyExecutionPath::whole_copy : CopyExecutionPath::child_draw;
     } else {
-        if (!field(s.destination, 0x58, s.destination_kind)) return false;
+        if (!field(s.destination, layout::texture_owner::kind, s.destination_kind)) return false;
         if (s.destination_kind == 6)
             s.path = CopyExecutionPath::skipped;
         else {
-            if (!field(s.source_backing, 0xc4, s.source_format) ||
-                !field(s.destination_backing, 0xc4, s.destination_format))
+            if (!field(s.source_backing, layout::backing::format, s.source_format) ||
+                !field(s.destination_backing, layout::backing::format, s.destination_format))
                 return false;
             s.path = s.source_format == s.destination_format ? CopyExecutionPath::region_copy
                                                              : CopyExecutionPath::child_draw;

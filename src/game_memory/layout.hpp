@@ -27,6 +27,8 @@ inline constexpr Offset game_dlss_state = 0x51c6c28;     // why the game has no 
 inline constexpr Offset ngx_slots = 0x51d8808;           // the game's NGX client slots (ngx-startup-capabilities.md)
 inline constexpr Offset graphics_option_ini = 0x2f744b0; // {"app:\\graphics_option.ini", "GraphicsOption"}: the
                                                          // saved settings' file and section (game_options)
+inline constexpr Offset final_base_map_id = 0x4be7450;   // the final quad's tBaseMap binding id (stream_route)
+inline constexpr Offset depth_defaults = 0x51c73d0;      // holds the default depth owner (attachments.cpp)
 
 inline constexpr Offset camera_vtable = 0x350d188;       // the camera's constructor vtable (projection-jitter-probe.md)
 inline constexpr Offset scene_camera_vtable = 0x33f82a8; // sCamera::vft (camera-type-probe.md)
@@ -65,6 +67,8 @@ inline constexpr Offset display_changes = 0x1f548;     // pending display change
 inline constexpr Offset variable_resolution = 0x7b3b0; // byte (game-aa-option.md)
 inline constexpr Offset aspect_applied = 0x7b43c;      // live-aspect.md
 inline constexpr Offset aspect_requested = 0x7b440;
+inline constexpr Offset barrier_plan = 0x7af18;       // the executing frame's packets in execution order
+inline constexpr Offset barrier_plan_count = 0x7af28; // (sub_14229CEE0; full_post_slot.inl)
 } // namespace renderer
 
 // cD3DRender, the D3D12 backend (image::d3d_render, renderer::backend).
@@ -73,11 +77,22 @@ inline constexpr Offset device = 0x18;        // ID3D12Device*
 inline constexpr Offset compute_root = 0x2a0; // the compute root signature recordings cache (dlaa-output-handoff.md)
 inline constexpr Offset latency_waitable = 0x10f0; // the swap chain's frame latency waitable (fg-live-toggle.md)
 inline constexpr Offset swap_chain = 0x1470;       // IDXGISwapChain*
-inline constexpr Offset game_dlss = 0x42700;       // the game's own DLSS 1 NGX context (game-dlss1.md)
+// The per-frame constant arena (memory.cpp read_arena).
+inline constexpr Offset arena_mode = 0xff0; // 2: one resource for the CPU and the GPU
+inline constexpr Offset arena_stride = 0x1000;
+inline constexpr Offset arena_cpu = 0x1018;  // three CPU pointers
+inline constexpr Offset arena_used = 0x1030; // three 4-byte fill levels
+inline constexpr Offset arena_index = 0x103c;
+inline constexpr Offset arena_cpu_resource = 0x1058;
+inline constexpr Offset arena_gpu_resource = 0x1078;
+inline constexpr Offset arena_gpu = 0x1080; // three GPU addresses
+inline constexpr Offset arena_delta = 0x1098;
+inline constexpr Offset game_dlss = 0x42700; // the game's own DLSS 1 NGX context (game-dlss1.md)
 } // namespace d3d_render
 
 // The render context (renderer::context): the frame's draw state.
 namespace context {
+inline constexpr Offset active_targets = 0x10; // the target set last bound (attachments.cpp)
 inline constexpr Offset attachment = 0x50;     // the depth copy's source attachment (depth-copy-frame-map.md)
 inline constexpr Offset viewport = 0x5c;       // int[4]: the rectangle setViewport stores (full-size-post-chain.md)
 inline constexpr Offset unit_mask = 0x152;     // uint16: the units this context draws
@@ -90,6 +105,7 @@ inline constexpr Offset view = 0x1d0;          // the view being drawn (native-a
 inline constexpr Offset bindings = 0x710;      // owners by binding id: +8 * (id & 0xfff) (ordinary-taa-input-map.md)
 inline constexpr Offset packets = 0x2b78;      // the published packets: 16-byte entries, the packet at +8
 inline constexpr Offset packet_count = 0x2b80; // (depth-copy-frame-map.md)
+inline constexpr Offset vertex_arena = 0x2b50; // the frame's vertex data (full_post's final quad)
 inline constexpr Offset flags = 0x1ea74;       // the input readers require 0x54 clear
 } // namespace context
 
@@ -101,6 +117,10 @@ inline constexpr Offset depth = 0x628;    // the scene depth container
 inline constexpr Offset scale = 0x6b0;    // float (dlss-render-resolution-control.md)
 inline constexpr Offset content_scale = 0x6b4;
 inline constexpr Offset combined_scale = 0x6b8;
+inline constexpr Offset targets = 0x60; // the render target slots (attachments), 0x40 bytes each
+inline constexpr Offset target_stride = 0x40;
+inline constexpr Offset scene_target = 0x420; // slot 15: the final quad's tBaseMap (full-size-post-chain.md)
+inline constexpr Offset final_target = 0x460; // slot 16: the view's final attachment (dlaa-identity-path.md)
 } // namespace view
 
 // The G-buffer container (view::gbuffers): texture owners.
@@ -126,9 +146,12 @@ inline constexpr Offset draw_slot = 0x48; // the vtable slot of sCamera::draw (c
 
 // sScene (image::scene).
 namespace scene {
-inline constexpr Offset jitter_table = 0xe6a0; // 20 projection candidates, 8 bytes each
-inline constexpr Offset taa = 0xe9e4;          // byte: the player's TAA (game-aa-option.md)
-inline constexpr Offset fxaa = 0xe9e5;         // byte: the player's FXAA
+inline constexpr Offset jitter_table = 0xe6a0;      // 20 projection candidates, 8 bytes each
+inline constexpr Offset capture_texture = 0xe988;   // the result screen's capture: drawn into this texture
+inline constexpr Offset capture_pass = 0xe990;      // from this view target slot (default 15)
+inline constexpr Offset capture_requested = 0xe998; // at this renderer epoch (full-size-post-chain.md)
+inline constexpr Offset taa = 0xe9e4;               // byte: the player's TAA (game-aa-option.md)
+inline constexpr Offset fxaa = 0xe9e5;              // byte: the player's FXAA
 } // namespace scene
 
 // sAppExt (image::app_ext).
@@ -179,6 +202,227 @@ namespace post_entry {
 inline constexpr Offset stage = 0x0;
 inline constexpr Offset order = 0x4;
 inline constexpr Offset unit = 0x8;
+inline constexpr Offset input = 0x10;
+inline constexpr Offset output = 0x18;
 inline constexpr Offset skip = 0x20; // byte
 } // namespace post_entry
+
+// A camera viewport (camera::viewports).
+namespace camera_viewport {
+inline constexpr Offset scene_texture = 0x18; // null for the scene's viewport
+inline constexpr Offset active = 0x20;        // byte
+inline constexpr Offset display = 0x25;       // byte: zero for the scene's viewport
+} // namespace camera_viewport
+
+// A texture owner: the engine's object for a texture or render target (inputs.cpp owner()).
+namespace texture_owner {
+inline constexpr Offset kind = 0x58;    // 6: a target the copy executor skips
+inline constexpr Offset backing = 0x60; // the backing (below)
+inline constexpr Offset flags = 0x70;
+inline constexpr Offset srv = 0x78;              // its shader resource view (descriptor_view)
+inline constexpr Offset depth_format = 0x74;     // a depth target view's format
+inline constexpr Offset dimensions = 0x88;       // a 16-bit width, a 14-bit height, two flag bits
+inline constexpr Offset format = 0x90;           // the engine's format
+inline constexpr Offset gpu_format = 0x94;       // the DXGI format
+inline constexpr Offset backing_override = 0xf0; // used instead of backing when set
+} // namespace texture_owner
+
+// The backing of a texture or buffer owner: its D3D12 resource.
+namespace backing {
+inline constexpr Offset bytes = 0x10;       // a buffer's size
+inline constexpr Offset resource = 0x20;    // ID3D12Resource*
+inline constexpr Offset gpu_address = 0x40; // a buffer's GPU virtual address
+inline constexpr Offset tracker = 0x70;     // its state tracker (below)
+inline constexpr Offset width = 0xb0;
+inline constexpr Offset height = 0xb4;
+inline constexpr Offset format = 0xc4;
+} // namespace backing
+
+// A backing's state tracker (backing::tracker).
+namespace state_tracker {
+inline constexpr Offset epoch = 0x10;       // the frame epoch it was last set in
+inline constexpr Offset initial = 0x18;     // the state the frame began in
+inline constexpr Offset used = 0x20;        // the epoch it was last used in
+inline constexpr Offset initialized = 0x28; // byte
+inline constexpr Offset immediate = 0x30;   // byte
+} // namespace state_tracker
+
+// A resource state node in the barrier plan (renderer::barrier_plan) and in
+// a packet's state list.
+namespace state_node {
+inline constexpr Offset next = 0x0;
+inline constexpr Offset backing = 0x8;
+inline constexpr Offset before = 0x18; // uint16: the state before
+inline constexpr Offset after = 0x1a;  // uint16: the state after
+} // namespace state_node
+
+// A descriptor view: a shader resource or render target view.
+namespace descriptor_view {
+inline constexpr Offset cpu_handle = 0x10; // D3D12_CPU_DESCRIPTOR_HANDLE
+} // namespace descriptor_view
+
+// A view's render target slot (view::targets) or a context's attachment.
+namespace attachment {
+inline constexpr Offset owner = 0x58; // the texture owner
+} // namespace attachment
+
+// A command recording: the state the executors record into a list with.
+namespace recording {
+inline constexpr Offset command = 0x20;         // ID3D12GraphicsCommandList*
+inline constexpr Offset cached_pipeline = 0x98; // the pipeline last set on the list
+inline constexpr Offset viewport = 0xe0;        // the viewport and scissor last set
+inline constexpr Offset scissor = 0xf0;
+inline constexpr Offset scissor_enabled = 0x100; // byte
+inline constexpr Offset pipeline = 0x108;        // the current pipeline state
+inline constexpr Offset graphics_root = 0x110;   // the current root signatures
+inline constexpr Offset compute_root = 0x118;    // (dlaa-output-handoff.md)
+inline constexpr Offset cached_depth_resource = 0x140;
+inline constexpr Offset packet = 0x158; // the packet being executed
+} // namespace recording
+// A packet executor's first argument (attachments.cpp DrawSite::executor).
+namespace executor {
+inline constexpr Offset recording = 0x8;
+} // namespace executor
+
+// A queued packet: its first word holds the opcode in its low 5 bits.
+namespace packet {
+inline constexpr Offset opcode = 0x0;
+inline constexpr Offset states = 0x8; // its resource state list (state_node)
+} // namespace packet
+// The 16-byte entries of context::packets and renderer::barrier_plan.
+namespace packet_entry {
+inline constexpr Offset key = 0x0; // the sort key
+inline constexpr Offset packet = 0x8;
+} // namespace packet_entry
+// A packet executor's second argument.
+namespace executor_device {
+inline constexpr Offset backend = 0x8; // cD3DRender*
+} // namespace executor_device
+// Opcode 0, a draw.
+namespace draw_packet {
+inline constexpr Offset bindings = 0x10;       // four pointers: the target set (target_set), then:
+inline constexpr Offset input_assembly = 0x18; // the vertex and index buffers
+inline constexpr Offset graphics = 0x20;       // the graphics binding state (binding_state)
+inline constexpr Offset render_state = 0x28;   // the blend, depth and raster owners
+inline constexpr Offset pipeline = 0x38;       // the pipeline state it was recorded for
+inline constexpr Offset arguments = 0x40;      // the draw's count, then first
+inline constexpr Offset first = 0x44;
+} // namespace draw_packet
+// A draw packet's input assembly (draw_packet::input_assembly).
+namespace input_assembly {
+inline constexpr Offset vertex_owners = 0x0; // four buffer owners (texture_owner), 8 bytes each
+inline constexpr Offset strides = 0x20;      // a byte per stream
+inline constexpr Offset offsets = 0x24;      // four bytes per stream
+inline constexpr Offset index_owner = 0x38;
+inline constexpr Offset index_offset = 0x40;
+} // namespace input_assembly
+// A draw packet's target set (draw_packet::bindings[0]).
+namespace target_set {
+inline constexpr Offset colors = 0x0;     // up to eight target views (texture owners), 8 bytes each
+inline constexpr Offset depth = 0x40;     // the depth target view
+inline constexpr Offset flags = 0x48;     // the color count in bits 0-2
+inline constexpr Offset rectangle = 0x4c; // unsigned[4]
+} // namespace target_set
+// Opcode 6, a dispatch.
+namespace dispatch_packet {
+inline constexpr Offset state = 0x10;    // its binding state
+inline constexpr Offset groups_x = 0x18; // the thread groups: x, y, z
+inline constexpr Offset groups_y = 0x1c;
+inline constexpr Offset groups_z = 0x20;
+inline constexpr Offset mode = 0x24;
+inline constexpr Offset indirect = 0x28;
+} // namespace dispatch_packet
+// Opcode 10, a copy (the executor 0x259df30).
+namespace copy_packet {
+inline constexpr Offset kind = 0x10;        // 8: a whole copy or a child draw
+inline constexpr Offset destination = 0x18; // texture owners
+inline constexpr Offset source = 0x20;
+inline constexpr Offset rectangle = 0x28;
+inline constexpr Offset child = 0x40; // the draw it may execute instead
+} // namespace copy_packet
+// Opcode 13, a region copy (sub_1423C9250).
+namespace region_copy_packet {
+inline constexpr Offset destination = 0x10; // texture owners
+inline constexpr Offset source = 0x18;
+inline constexpr Offset mode = 0x20;
+inline constexpr Offset destination_subresource = 0x24;
+inline constexpr Offset source_subresource = 0x28;
+inline constexpr Offset destination_xy = 0x30;
+inline constexpr Offset source_rect = 0x38;
+inline constexpr Offset optional = 0x48; // a pointer, null for a plain copy
+} // namespace region_copy_packet
+
+// A target view's backing (texture_owner::backing of a target set's view).
+namespace target_backing {
+inline constexpr Offset handle = 0x10;   // its descriptor handle
+inline constexpr Offset resource = 0x18; // ID3D12Resource*
+inline constexpr Offset format = 0x20;
+inline constexpr Offset rotation = 0x28; // byte: a rotating set of handles (not read further)
+inline constexpr Offset rotation_index = 0x2c;
+} // namespace target_backing
+
+// image::depth_defaults.
+namespace depth_defaults {
+inline constexpr Offset owner = 0x2480; // points to the default depth owner
+} // namespace depth_defaults
+
+// The graphics or compute binding state (draw_packet::graphics, context::state).
+namespace binding_state {
+inline constexpr Offset flags = 0x0;
+inline constexpr Offset shader = 0x8; // points to the shader set (shader_set)
+inline constexpr Offset modes = 0x10; // a byte per bound owner
+inline constexpr Offset technique = 0x18;
+inline constexpr Offset input_layout = 0x20;
+inline constexpr Offset objects = 0x30; // the bound owners, 8 bytes each
+} // namespace binding_state
+namespace input_layout {
+inline constexpr Offset elements = 0x10;
+inline constexpr Offset count = 0x18;
+} // namespace input_layout
+
+// A shader set (binding_state::shader).
+namespace shader_set {
+inline constexpr Offset words = 0x0; // the binding words
+inline constexpr Offset range = 0x14;
+inline constexpr Offset binding_count = 0x44; // uint16
+inline constexpr Offset binding_start = 0x46; // uint16
+inline constexpr Offset stages = 0x50;        // the stage entries, 8 bytes each: vertex,
+inline constexpr Offset pixel_stage = 0x58;   // pixel,
+inline constexpr Offset extra_stages = 0x60;  // three more,
+inline constexpr Offset compute_stage = 0x78; // compute
+inline constexpr Offset ids = 0x80;           // the binding ids of the owners
+inline constexpr Offset owner_count = 0x88;
+} // namespace shader_set
+namespace shader_stage {
+inline constexpr Offset code = 0x10; // the bytecode descriptor (shader_code)
+} // namespace shader_stage
+namespace shader_code {
+inline constexpr Offset size = 0x0;
+inline constexpr Offset bytecode = 0x8;
+} // namespace shader_code
+
+// A draw packet's render state (draw_packet::render_state).
+namespace render_state {
+inline constexpr Offset variant = 0x4; // byte: bit 0 selects the raster state
+inline constexpr Offset blend_owner = 0x8;
+inline constexpr Offset depth_owner = 0x10;
+inline constexpr Offset raster_owner = 0x18;
+} // namespace render_state
+namespace blend_owner {
+inline constexpr Offset state = 0x98;
+} // namespace blend_owner
+namespace depth_owner {
+inline constexpr Offset state = 0x60;
+} // namespace depth_owner
+namespace raster_owner {
+inline constexpr Offset states = 0x68; // two, by render_state::variant
+} // namespace raster_owner
+namespace pipeline_state {
+inline constexpr Offset desc = 0x10; // the D3D12 description
+} // namespace pipeline_state
+
+// uToneMapFilter, the grading unit (image::tone_map_vtable).
+namespace tone_map_filter {
+inline constexpr Offset output = 0x250; // the grade output (dlaa-identity-path.md)
+} // namespace tone_map_filter
 } // namespace mhw::layout

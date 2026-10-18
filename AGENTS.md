@@ -65,6 +65,7 @@ Claude Code has an IDA MCP (Hex-Rays), an x64dbg MCP, a Frida MCP and `sigscan.p
 ## Implementation Conventions
 
 - Use C++20 and CMake for native Windows components unless a task explicitly requires another toolchain.
+- Read game memory through the named fields of `src/game_memory/layout.hpp`. A new field goes there, with where its name comes from, instead of a raw offset at the read. Code addresses (hook targets, call sites) and gate literals stay written out.
 - Format C++ with the repository's `.clang-format` before committing (clang-format 22, shipped with Visual Studio: `VC\Tools\Llvm\x64\bin\clang-format.exe`). List a layout-only commit in `.git-blame-ignore-revs`.
 - Target 64-bit Windows and keep DirectX 11 and DirectX 12 code paths isolated.
 - Prefer RAII, smart COM pointers, bounded logging, and clean hook removal.

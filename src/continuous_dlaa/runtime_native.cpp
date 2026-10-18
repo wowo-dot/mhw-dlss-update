@@ -1,6 +1,7 @@
 // The game-function stubs (temporal_entry.asm) call native(): each hook's
 // before/after around the forwarded original. And AL's D3D12 chains.
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 extern "C" void mhw_binding_forward(void *, mhw::projection_binding::Frame *);
 namespace mhw::continuous_dlaa::detail {
@@ -8,8 +9,9 @@ namespace {
 bool observe_prepared_resolve(const NativeFrame &f) {
     if (!sr::owns_packet(f.call.gpr[3])) return false;
     std::uintptr_t backend{}, recording{}, command{};
-    if (!reader.get(f.call.gpr[2] + 8, backend) || backend != cfg.backend ||
-        !reader.get(f.call.gpr[1] + 8, recording) || !recording || !reader.get(recording + 0x20, command) || !command)
+    if (!reader.get(f.call.gpr[2] + layout::executor_device::backend, backend) || backend != cfg.backend ||
+        !reader.get(f.call.gpr[1] + layout::executor::recording, recording) || !recording ||
+        !reader.get(recording + layout::recording::command, command) || !command)
         return false;
     Lock lock;
     auto *list = reinterpret_cast<ID3D12GraphicsCommandList *>(command);

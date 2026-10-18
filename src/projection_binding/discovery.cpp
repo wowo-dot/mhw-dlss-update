@@ -152,7 +152,7 @@ bool discover_objects(Runtime &r, std::string &reason) {
     return true;
 }
 // MHW's aspect-ratio option (e.g. 21:9 in a 16:9 window) renders the scene
-// into a rectangle: renderer + layout::renderer::scene_width holds the scene size, while the config
+// into a rectangle: renderer+0x198 holds the scene size, while the config
 // keeps the window size as its scale basis with the override flag set
 // (game-17: scene 2560x1080, basis 2560x1440). Without the option the scene
 // is the window. On entry r.width/r.height hold the swap chain's size.

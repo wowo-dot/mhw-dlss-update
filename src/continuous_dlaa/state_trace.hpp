@@ -1,5 +1,6 @@
 #pragma once
 #include "../temporal_bindings/inputs.hpp"
+#include "../game_memory/layout.hpp"
 #include "native_state_trace.hpp"
 #include <d3d12.h>
 #include <algorithm>
@@ -178,8 +179,9 @@ public:
                 std::uint16_t before{}, after{};
                 if (s.native_nodes == 128 || node > UINTPTR_MAX - 0x20 || !reader.get(node, next) ||
                     !reader.get(node + 8, backing) || !backing || backing > UINTPTR_MAX - 0x28 ||
-                    !reader.get(backing + 0x20, resource) || !reader.get(node + 0x18, before) ||
-                    !reader.get(node + 0x1a, after)) {
+                    !reader.get(backing + layout::backing::resource, resource) ||
+                    !reader.get(node + layout::state_node::before, before) ||
+                    !reader.get(node + layout::state_node::after, after)) {
                     s.native_complete = false;
                     break;
                 }

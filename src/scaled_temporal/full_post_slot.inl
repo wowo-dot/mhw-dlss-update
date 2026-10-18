@@ -13,9 +13,10 @@ struct PlannerView {
     std::uint64_t epoch{};
 };
 bool planner_view(const Plan &p, PlannerView &v) noexcept {
-    return field(cfg.renderer, 0x7af18, v.array) && field(cfg.renderer, 0x7af28, v.count) &&
-           field(cfg.renderer, 0x1f208, v.epoch) && v.epoch == p.stamp.epoch + 1 && v.array && v.count &&
-           v.count <= 32768 && v.array <= UINTPTR_MAX - 16ULL * v.count;
+    return field(cfg.renderer, layout::renderer::barrier_plan, v.array) &&
+           field(cfg.renderer, layout::renderer::barrier_plan_count, v.count) &&
+           field(cfg.renderer, layout::renderer::epoch, v.epoch) && v.epoch == p.stamp.epoch + 1 && v.array &&
+           v.count && v.count <= 32768 && v.array <= UINTPTR_MAX - 16ULL * v.count;
 }
 // The positions of N packets, each present exactly once.
 template <std::size_t N>
@@ -48,8 +49,9 @@ unsigned planner_packet_state(std::uintptr_t packet, const tb::Owner &o, unsigne
         while (n) {
             std::uintptr_t next{}, backing{}, resource{};
             std::uint16_t after{};
-            if (++visited > 128 || !field(n, 0, next) || !field(n, 8, backing) || !field(backing, 0x20, resource) ||
-                !field(n, 0x1a, after))
+            if (++visited > 128 || !field(n, layout::state_node::next, next) ||
+                !field(n, layout::state_node::backing, backing) ||
+                !field(backing, layout::backing::resource, resource) || !field(n, layout::state_node::after, after))
                 return false;
             if (backing == o.backing || resource == o.resource) {
                 if (backing != o.backing || resource != o.resource) return false;
@@ -60,12 +62,14 @@ unsigned planner_packet_state(std::uintptr_t packet, const tb::Owner &o, unsigne
         }
         return true;
     };
-    if (!field(packet, 0, raw) || !field(packet, 8, head) || !walk(head)) return 2;
+    if (!field(packet, 0, raw) || !field(packet, layout::packet::states, head) || !walk(head)) return 2;
     if ((raw & 31) == 10) {
         tb::CopyExecution c;
         std::uintptr_t child{};
         if (!tb::read_copy_execution(reader, packet, c)) return 2;
-        if (c.path == tb::CopyExecutionPath::child_draw && (!field(c.child, 8, child) || !walk(child))) return 2;
+        if (c.path == tb::CopyExecutionPath::child_draw &&
+            (!field(c.child, layout::packet::states, child) || !walk(child)))
+            return 2;
     }
     return found;
 }
@@ -79,15 +83,18 @@ bool planner_state(const PlannerView &v, unsigned at, const tb::Owner &o, unsign
     std::uint64_t epoch{}, used{}, immediate{};
     std::uint16_t initial{};
     unsigned char initialized{};
-    if (at >= v.count || !field(o.backing, 0x70, tracker) || !tracker || !field(tracker, 0x10, epoch) ||
-        epoch != v.epoch || !field(tracker, 0x18, initial) || !field(tracker, 0x20, used) || used != v.epoch ||
-        !field(tracker, 0x28, initialized) || initialized != 1 || !field(tracker, 0x30, immediate) || immediate)
+    if (at >= v.count || !field(o.backing, layout::backing::tracker, tracker) || !tracker ||
+        !field(tracker, layout::state_tracker::epoch, epoch) || epoch != v.epoch ||
+        !field(tracker, layout::state_tracker::initial, initial) ||
+        !field(tracker, layout::state_tracker::used, used) || used != v.epoch ||
+        !field(tracker, layout::state_tracker::initialized, initialized) || initialized != 1 ||
+        !field(tracker, layout::state_tracker::immediate, immediate) || immediate)
         return false;
     const unsigned floor = at > 1024 ? at - 1024 : 0;
     for (unsigned i = at + 1; i-- > floor;) {
         std::uintptr_t packet{};
         unsigned native{};
-        if (!field(v.array + 16ULL * i, 8, packet) || !packet) return false;
+        if (!field(v.array + 16ULL * i, layout::packet_entry::packet, packet) || !packet) return false;
         const auto found = planner_packet_state(packet, o, native);
         if (found == 2) return false;
         if (found == 1) {
@@ -144,8 +151,10 @@ unsigned full_slot_before(const pb::Frame &f) noexcept {
         const auto &q = full_slots[found];
         std::uintptr_t destination{}, source{};
         std::array<unsigned, 4> rect{};
-        if (!field(q.packet, 0x10, destination) || destination != q.gbuffer5.object || !field(q.packet, 0x18, source) ||
-            source != q.source.object || !field(q.packet, 0x38, rect) || rect != std::array<unsigned, 4>{0, 0, 1, 1}) {
+        if (!field(q.packet, layout::region_copy_packet::destination, destination) ||
+            destination != q.gbuffer5.object || !field(q.packet, layout::region_copy_packet::source, source) ||
+            source != q.source.object || !field(q.packet, layout::region_copy_packet::source_rect, rect) ||
+            rect != std::array<unsigned, 4>{0, 0, 1, 1}) {
             full_slots[found] = {};
             ++full_counts.slot_stale;
             return UINT_MAX;
@@ -156,7 +165,9 @@ unsigned full_slot_before(const pb::Frame &f) noexcept {
     full_slot_calls = 0;
     full_slot_state = 0;
     std::uintptr_t state{}, list{};
-    if (field(f.gpr[1], 8, state) && state && field(state, 0x20, list) && list) full_slot_state = state;
+    if (field(f.gpr[1], layout::executor::recording, state) && state &&
+        field(state, layout::recording::command, list) && list)
+        full_slot_state = state;
     auto &p = plans[q.frame % plans.size()];
     if (p.prepared && p.stamp.frame == q.frame && p.full_slot == q.packet && !p.full_slot_done) {
         temporal_present::Bindings b;
@@ -194,8 +205,9 @@ unsigned full_final_before(const pb::Frame &f) noexcept {
     auto &r = full_finals[found];
     std::uintptr_t destination{}, source{};
     std::array<unsigned, 4> rect{};
-    if (!field(r.packet, 0x10, destination) || destination != r.destination.object || !field(r.packet, 0x18, source) ||
-        source != r.source.object || !field(r.packet, 0x38, rect) ||
+    if (!field(r.packet, layout::region_copy_packet::destination, destination) || destination != r.destination.object ||
+        !field(r.packet, layout::region_copy_packet::source, source) || source != r.source.object ||
+        !field(r.packet, layout::region_copy_packet::source_rect, rect) ||
         rect != std::array<unsigned, 4>{0, 0, width, height}) {
         r = {};
         ++full_counts.final_stale;
@@ -240,7 +252,8 @@ void full_slot_copy(ID3D12GraphicsCommandList *list, const D3D12_TEXTURE_COPY_LO
     D3D12_BOX b{};
     std::uintptr_t packet{}, command{};
     if (++full_slot_calls != 1 || caller != cfg.image + 0x259caf0 || x || y || z || !full_slot_state ||
-        !field(full_slot_state, 0x158, packet) || packet != q.packet || !field(full_slot_state, 0x20, command) ||
+        !field(full_slot_state, layout::recording::packet, packet) || packet != q.packet ||
+        !field(full_slot_state, layout::recording::command, command) ||
         command != reinterpret_cast<std::uintptr_t>(list) ||
         !pb::copy_memory(reinterpret_cast<std::uintptr_t>(destination), &d, sizeof(d)) ||
         !pb::copy_memory(reinterpret_cast<std::uintptr_t>(source), &s, sizeof(s)) ||

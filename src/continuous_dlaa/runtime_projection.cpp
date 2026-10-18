@@ -43,8 +43,9 @@ bool anchor(pb::Source &s, const NativeFrame &f) noexcept {
     if (!pb::read(s.camera, s.camera_type) ||
         (s.camera_type != cfg.image + layout::image::camera_vtable &&
          s.camera_type != cfg.image + layout::image::scene_camera_vtable) ||
-        !pb::read(viewport + 0x20, active) || !active || !pb::read(viewport + 0x25, display) || display ||
-        !pb::read(viewport + 0x18, scene_texture) || scene_texture ||
+        !pb::read(viewport + layout::camera_viewport::active, active) || !active ||
+        !pb::read(viewport + layout::camera_viewport::display, display) || display ||
+        !pb::read(viewport + layout::camera_viewport::scene_texture, scene_texture) || scene_texture ||
         !pb::read(s.camera + layout::camera::jitter, zero) || zero ||
         !pb::read(s.camera + layout::camera::stamp, stamp) ||
         !pb::read(a.renderer + layout::renderer::frame, a.frame) ||

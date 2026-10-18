@@ -2,6 +2,7 @@
 // the command lists' lifecycle (Reset, Close, ExecuteCommandLists) that
 // orders and retires the private recordings.
 #include "runtime_state.hpp"
+#include "../game_memory/layout.hpp"
 
 namespace mhw::continuous_dlaa::detail {
 void WINAPI barrier_hook(ID3D12GraphicsCommandList *list, UINT n, const D3D12_RESOURCE_BARRIER *data) {
@@ -46,10 +47,11 @@ bool depth_draw_snapshot(DepthDraw &out) {
         if (!ok) out.rejection = reason;
         return ok;
     };
-    return gate(1, nested && reader.get(nested + 0x10, out.bindings) && reader.get(nested + 0x40, out.arguments)) &&
-           gate(2, reader.get(current_recording + 0x158, out.packet) && out.packet == nested) &&
-           gate(3, reader.get(current_recording + 0x108, out.pipeline) && out.pipeline) &&
-           gate(4, reader.get(out.bindings[0] + 0x4c, out.rectangle) &&
+    return gate(1, nested && reader.get(nested + layout::draw_packet::bindings, out.bindings) &&
+                       reader.get(nested + layout::draw_packet::arguments, out.arguments)) &&
+           gate(2, reader.get(current_recording + layout::recording::packet, out.packet) && out.packet == nested) &&
+           gate(3, reader.get(current_recording + layout::recording::pipeline, out.pipeline) && out.pipeline) &&
+           gate(4, reader.get(out.bindings[0] + layout::target_set::rectangle, out.rectangle) &&
                        out.rectangle == std::array<unsigned, 4>{0, 0, render_width(), render_height()}) &&
            gate(5, d.packet.rectangle == std::array<unsigned, 6>{0, 0, render_width(), render_height(), 0, 0}) &&
            gate(6, out.arguments[0] > 0 && out.arguments[0] <= 6);

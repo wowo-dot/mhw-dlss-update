@@ -15,7 +15,7 @@ namespace pb = projection_binding;
 // The game's functions (clean image; gates in install()).
 using AaApply = std::uintptr_t (*)(unsigned char); // 0x43dcb0: the anti-aliasing option (TAA under its DLSS)
 using RsApply = __m128 (*)(char);                  // 0x43eeb0: resolution scaling (High under its DLSS); the scale
-using AaSetter = void (*)(std::uintptr_t, char);   // 0x2287a00: the TAA/FXAA bytes at table + layout::scene::taa
+using AaSetter = void (*)(std::uintptr_t, char);   // 0x2287a00: the TAA/FXAA bytes at table +0xe9e4
 using IniRead = char (*)(std::uintptr_t);          // 0x4413e0, 0x442120: the saved choice
 using RowEnabled = std::uint64_t (*)(int, unsigned char);    // 0x53f580: a row takes input
 using PageRefresh = std::uintptr_t (*)(std::uintptr_t, int); // 0x53f440: builds the visible rows, greys the locked ones
@@ -271,7 +271,7 @@ void write(std::ostream &out) {
         pb::read(renderer + layout::renderer::scale_desired, scale);
     }
     // The game's own DLSS 1 (0x23842a0 at cD3DRender::initForD3D12): its NGX
-    // context at backend + layout::d3d_render::game_dlss, or why it has none (0x51c6c28: 1 NGX
+    // context at backend +0x42700, or why it has none (0x51c6c28: 1 NGX
     // init, 2 SuperSampling, 3 ImageSignalProcessing unavailable), and this
     // mod's decline of it (ngx_startup::game_dlss(): 2 none made, 3 declined).
     std::uintptr_t backend{}, context{};

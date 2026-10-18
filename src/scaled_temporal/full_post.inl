@@ -138,10 +138,12 @@ std::uintptr_t full_quad_vertices(std::uintptr_t context, std::uintptr_t packet)
     unsigned raw{}, count{}, first{}, offset{};
     std::uintptr_t state{}, arena{};
     unsigned char stride{};
-    if (!field(packet, 0, raw) || (raw & 31) != 0 || !field(packet, 0x40, count) || count != 4 ||
-        !field(packet, 0x44, first) || first > 1048576 || !field(packet, 0x18, state) || !state ||
-        !field(state, 0x20, stride) || stride != 16 || !field(state, 0x24, offset) || offset > 16777216 ||
-        !field(context, 0x2b50, arena) || !arena)
+    if (!field(packet, 0, raw) || (raw & 31) != 0 || !field(packet, layout::draw_packet::arguments, count) ||
+        count != 4 || !field(packet, layout::draw_packet::first, first) || first > 1048576 ||
+        !field(packet, layout::draw_packet::input_assembly, state) || !state ||
+        !field(state, layout::input_assembly::strides, stride) || stride != 16 ||
+        !field(state, layout::input_assembly::offsets, offset) || offset > 16777216 ||
+        !field(context, layout::context::vertex_arena, arena) || !arena)
         return 0;
     return arena + offset + 16ULL * first;
 }
@@ -180,7 +182,8 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
     for (unsigned i = 0; i < filter_count; ++i) {
         std::uintptr_t e{};
         unsigned stage{}, order{};
-        if (!field(filters, layout::post_queue::entries + 8 * i, e) || !field(e, 0, stage) || !field(e, 4, order))
+        if (!field(filters, layout::post_queue::entries + 8 * i, e) || !field(e, layout::post_entry::stage, stage) ||
+            !field(e, layout::post_entry::order, order))
             return 5;
         if (stage == 15 && order == 3) return 5;
     }
@@ -205,7 +208,8 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
                 unsigned raw{};
                 if (block[j].key != 0x78000002) continue;
                 if (!field(block[j].packet, 0, raw)) return 6;
-                if ((raw & 31) == 13 && field(block[j].packet, 0x18, source)) ++taa_copies;
+                if ((raw & 31) == 13 && field(block[j].packet, layout::region_copy_packet::source, source))
+                    ++taa_copies;
             }
         }
         if (taa_copies != 1 || !tb::read_owner(reader, source, slot.source) || slot.source.width != width ||
@@ -224,8 +228,9 @@ unsigned full_slot_record(std::uintptr_t context, std::uint64_t frame) noexcept 
     // found, the route stops (fault 15).
     unsigned after{}, raw{};
     std::uintptr_t destination{}, source{};
-    if (!pb::copy_memory(array + 16ULL * count, &c, sizeof(c)) || !c.packet || !field(c.packet, 0x10, destination) ||
-        destination != slot.gbuffer5.object || !field(c.packet, 0x18, source) || source != slot.source.object) {
+    if (!pb::copy_memory(array + 16ULL * count, &c, sizeof(c)) || !c.packet ||
+        !field(c.packet, layout::region_copy_packet::destination, destination) || destination != slot.gbuffer5.object ||
+        !field(c.packet, layout::region_copy_packet::source, source) || source != slot.source.object) {
         fail(15);
         return 6;
     }
@@ -305,13 +310,16 @@ void full_candidate(const pb::Frame &f, unsigned slot) {
 unsigned full_taa_registered() noexcept {
     std::uintptr_t manager{};
     unsigned count{};
-    if (!field(cfg.image, layout::image::post_queue, manager) || !field(manager, 0x3c, count) || count > 64) return 1;
+    if (!field(cfg.image, layout::image::post_queue, manager) || !field(manager, layout::post_queue::count, count) ||
+        count > 64)
+        return 1;
     for (unsigned i = 0; i < count; ++i) {
         std::uintptr_t e{}, unit{}, type{};
         unsigned stage{}, order{};
         unsigned char skipped{};
-        if (!field(manager, 0x40 + 8 * i, e) || !field(e, 0, stage) || !field(e, 4, order) || !field(e, 8, unit) ||
-            !field(e, 0x20, skipped))
+        if (!field(manager, layout::post_queue::entries + 8 * i, e) || !field(e, layout::post_entry::stage, stage) ||
+            !field(e, layout::post_entry::order, order) || !field(e, layout::post_entry::unit, unit) ||
+            !field(e, layout::post_entry::skip, skipped))
             return 1;
         if (!unit || skipped || stage != 15 || order != 2) continue;
         if (!field(unit, 0, type)) return 1;
@@ -329,7 +337,7 @@ void full_enter(std::uintptr_t context, bool admitted) noexcept {
     s.pending = false;
     std::uint64_t frame{};
     std::array<int, 4> rect{};
-    if (!field(cfg.renderer, 0x1f210, frame) || frame != s.frame) {
+    if (!field(cfg.renderer, layout::renderer::frame, frame) || frame != s.frame) {
         ++full_counts.stale;
         return;
     }
@@ -390,13 +398,15 @@ bool full_final_record(std::uintptr_t context, const FullPostState &s) noexcept 
     unsigned after{}, raw{};
     std::uintptr_t destination{}, source{};
     std::array<unsigned, 4> rect{};
-    if (!pb::copy_memory(array + 16ULL * count, &c, sizeof(c)) || !c.packet || !field(c.packet, 0x10, destination) ||
-        destination != s.destination.object || !field(c.packet, 0x18, source) || source != s.source.object) {
+    if (!pb::copy_memory(array + 16ULL * count, &c, sizeof(c)) || !c.packet ||
+        !field(c.packet, layout::region_copy_packet::destination, destination) || destination != s.destination.object ||
+        !field(c.packet, layout::region_copy_packet::source, source) || source != s.source.object) {
         fail(15);
         return true;
     }
     if ((c.key >> 27) != 16 || !field(context, layout::context::packet_count, after) || after != count + 1 ||
-        !field(c.packet, 0, raw) || (raw & 31) != 13 || !field(c.packet, 0x38, rect) ||
+        !field(c.packet, 0, raw) || (raw & 31) != 13 ||
+        !field(c.packet, layout::region_copy_packet::source_rect, rect) ||
         rect != std::array<unsigned, 4>{0, 0, width, height})
         ++full_counts.final_unverified;
     FullFinal r;
@@ -419,15 +429,19 @@ unsigned full_capture_find(std::uintptr_t context, const FullPostState &s) noexc
     std::uintptr_t scene{}, texture{}, view{}, main_view{}, target{}, source{}, array{};
     std::uint64_t requested{}, epoch{};
     unsigned pass{};
-    if (!field(cfg.image, layout::image::scene, scene) || !scene || !field(scene, 0xe998, requested) ||
-        !field(cfg.renderer, 0x1f208, epoch))
+    if (!field(cfg.image, layout::image::scene, scene) || !scene ||
+        !field(scene, layout::scene::capture_requested, requested) ||
+        !field(cfg.renderer, layout::renderer::epoch, epoch))
         return 1;
-    if (requested != epoch || !field(scene, 0xe988, texture) || !texture) return 0;
+    if (requested != epoch || !field(scene, layout::scene::capture_texture, texture) || !texture) return 0;
     // sub_142268890 records it only for the renderer's main view.
-    if (!field(context, layout::context::view, view) || !field(cfg.renderer, 0x1f450, main_view) || view != main_view)
+    if (!field(context, layout::context::view, view) ||
+        !field(cfg.renderer, layout::renderer::primary_view, main_view) || view != main_view)
         return 0;
-    if (!field(scene, 0xe990, pass) || pass != 15) return 2;
-    if (!field(view, 0x60 + 0x40 * 15, target) || !target || !field(target, 0x58, source)) return 1;
+    if (!field(scene, layout::scene::capture_pass, pass) || pass != 15) return 2;
+    if (!field(view, layout::view::scene_target, target) || !target ||
+        !field(target, layout::attachment::owner, source))
+        return 1;
     if (source != s.source.object) return 2;
     if (!field(context, layout::context::packets, array) || !array || s.scheduler_at < s.quad_at ||
         s.scheduler_at - s.quad_at > 4096)
@@ -547,7 +561,7 @@ void full_tone_map_dispatch(pb::Frame *f) {
     }
 }
 // The projection helper (context, out float4, in position): it returns screen
-// coordinates divided by the view's scale product (view + layout::view::combined_scale), the render
+// coordinates divided by the view's scale product (view +0x6b8), the render
 // rectangle's mapping to the output. With the full rectangle they are already
 // output coordinates.
 void full_project_dispatch(pb::Frame *f) {
@@ -558,7 +572,8 @@ void full_project_dispatch(pb::Frame *f) {
     if ((s.switched || s.tone_map_full) && context == s.context && out) {
         std::uintptr_t view{};
         float scale{};
-        if (field(context, 464, view) && view && field(view, 1720, scale) && scale > 0.F && scale < 1.F) {
+        if (field(context, layout::context::view, view) && view && field(view, layout::view::combined_scale, scale) &&
+            scale > 0.F && scale < 1.F) {
             auto *v = reinterpret_cast<float *>(out);
             v[0] *= scale;
             v[1] *= scale;

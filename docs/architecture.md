@@ -471,3 +471,13 @@ Behaviour stays the same; the log fields stay.
   - the stale constants go: `ready`'s `early_api_hooks: 2` (MinHook's) and
     `frames_ready`/`frames_armed`'s `duration_seconds: 600` (the research
     capture length; `reflex_frames.py` checks it only in research logs).
+- Named game structures (0.30.0): `src/game_memory/layout.hpp` names the
+  game's memory by structure (248 fields in 46 structures: the image's
+  globals and vtables, the renderer, the D3D12 backend, the render context,
+  the view, the camera, sScene, the units, the post queue, the packets and
+  their bindings, recordings, texture owners and backings, the pipeline
+  state, shader sets). About 600 raw offsets at the reads became names; the
+  source of each name is in the header (Fexty's database for the vtables,
+  else the research notes and the code's own reads). Code addresses and gate
+  literals stay written out. Proof, per stage: the DLL is byte-identical to
+  the one before apart from its link timestamps.

@@ -273,7 +273,7 @@ bool snapshot(Snapshot &s, const Plan &t) noexcept {
     s.depth_metadata = pb::read(view + layout::view::depth, container) && container &&
                        container <= UINTPTR_MAX - 0xa8 &&
                        pb::read(container + layout::depth_container::texture, texture) && texture &&
-                       texture <= UINTPTR_MAX - 0x90 && pb::read(texture + 0x88, packed);
+                       texture <= UINTPTR_MAX - 0x90 && pb::read(texture + layout::texture_owner::dimensions, packed);
     if (s.depth_metadata) {
         s.depth_width = packed & 0xffff;
         s.depth_height = (packed >> 16) & 0x3fff;

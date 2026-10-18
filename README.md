@@ -132,9 +132,12 @@ everything compiled into the DLL.
   - `continuous_dlaa/`, `temporal_bindings/`, `scaled_temporal/`,
     `render_resolution/`: DLSS on the game's TAA pass and the render
     resolution;
-  - `reflex/` (Streamline, Reflex, presentation and the plugin's entry point)
-    and `frame_generation/`;
-  - `settings/`: the ini, the CMFM pages and the status lines.
+  - `plugin/`: the Astera Loader entry point, the worker and most of the log;
+  - `reflex/` (Streamline, Reflex, presentation) and `frame_generation/`;
+  - `settings/`: the ini, the CMFM pages and the status lines;
+  - `game_memory/`: the game's structures by name (`layout.hpp`) and the
+    guarded reads of game memory; `projection_binding/`: the code gates and
+    the structure discovery; `common/`: small shared helpers.
 - **`tests/`**: unit tests, WARP fixtures and the Python tools' tests.
 - **`tools/`**: what reads players' logs and builds releases. That's
   `fg_game.py` (run status and summaries), `profile_report.py`, `perf/`

@@ -402,7 +402,7 @@ bool same_stamp(const tb::Snapshot &s) {
            field(cfg.renderer, layout::renderer::epoch, epoch) && epoch == s.epoch &&
            field(cfg.renderer, layout::renderer::bank, bank) && bank == s.bank &&
            field(cfg.renderer, layout::renderer::parallel_rendering, async) && async == s.async &&
-           field(s.context, 0x1d0, view) && view == s.view &&
+           field(s.context, layout::context::view, view) && view == s.view &&
            field(cfg.renderer, layout::renderer::primary_view, primary) && primary == view;
 }
 bool owner(std::uintptr_t at, tb::Owner &out) {
@@ -413,8 +413,9 @@ bool final_identity(const FinalQuad &q, const tb::Snapshot &s) {
     tb::Owner a{}, b{};
     return q.valid && q.stamp.frame == s.frame && q.stamp.epoch == s.epoch && q.stamp.context == s.context &&
            q.stamp.view == s.view && q.stamp.bank == s.bank && q.stamp.async == s.async && same_stamp(s) &&
-           field(s.view, 0x460, attachment) && attachment == q.attachment && field(attachment, 0x58, destination) &&
-           destination == q.destination.object && tb::read_owner(reader, q.source.object, a) && a == q.source &&
+           field(s.view, layout::view::final_target, attachment) && attachment == q.attachment &&
+           field(attachment, layout::attachment::owner, destination) && destination == q.destination.object &&
+           tb::read_owner(reader, q.source.object, a) && a == q.source &&
            tb::read_owner(reader, q.destination.object, b) && b == q.destination;
 }
 unsigned final_before(const pb::Frame &f) {
@@ -445,19 +446,21 @@ unsigned final_before(const pb::Frame &f) {
         return UINT_MAX;
     }
     s.async = async;
-    const bool ok = field(cfg.renderer, layout::renderer::epoch, s.epoch) &&
-                    field(cfg.renderer, layout::renderer::bank, s.bank) && field(s.context, 0x1d0, s.view) &&
-                    same_stamp(s) && field(f.gpr[3], 0, rectangle) &&
-                    rectangle == std::array<unsigned, 4>{0, 0, render_w, render_h} && field(f.gpr[4], 0, dimensions) &&
-                    dimensions == std::array<unsigned, 2>{width, height} && field(f.stack[0], 0, offset) &&
-                    offset == std::array<float, 2>{-.5F / width, -.5F / height} && (f.stack[1] & 255) == 1 &&
-                    field(s.context, 0x5c, viewport) && viewport == std::array<unsigned, 4>{0, 0, width, height} &&
-                    field(cfg.image, 0x4be7450, q.base_id) && q.base_id != UINT_MAX &&
-                    field(s.context, 0x710 + 8 * (q.base_id & 0xfff), source) && owner(source, q.source) &&
-                    field(s.view, 0x460, q.attachment) && field(q.attachment, 0x58, destination) &&
-                    owner(destination, q.destination) && q.source.resource != q.destination.resource &&
-                    field(s.context, 0x2b80, q.before) && q.before < 65534 && field(s.context, 0x2b78, q.queue) &&
-                    q.queue && q.queue <= UINTPTR_MAX - 16ULL * (q.before + 1);
+    const bool ok =
+        field(cfg.renderer, layout::renderer::epoch, s.epoch) && field(cfg.renderer, layout::renderer::bank, s.bank) &&
+        field(s.context, layout::context::view, s.view) && same_stamp(s) && field(f.gpr[3], 0, rectangle) &&
+        rectangle == std::array<unsigned, 4>{0, 0, render_w, render_h} && field(f.gpr[4], 0, dimensions) &&
+        dimensions == std::array<unsigned, 2>{width, height} && field(f.stack[0], 0, offset) &&
+        offset == std::array<float, 2>{-.5F / width, -.5F / height} && (f.stack[1] & 255) == 1 &&
+        field(s.context, layout::context::viewport, viewport) &&
+        viewport == std::array<unsigned, 4>{0, 0, width, height} &&
+        field(cfg.image, layout::image::final_base_map_id, q.base_id) && q.base_id != UINT_MAX &&
+        field(s.context, layout::context::bindings + 8 * (q.base_id & 0xfff), source) && owner(source, q.source) &&
+        field(s.view, layout::view::final_target, q.attachment) &&
+        field(q.attachment, layout::attachment::owner, destination) && owner(destination, q.destination) &&
+        q.source.resource != q.destination.resource && field(s.context, layout::context::packet_count, q.before) &&
+        q.before < 65534 && field(s.context, layout::context::packets, q.queue) && q.queue &&
+        q.queue <= UINTPTR_MAX - 16ULL * (q.before + 1);
     if (!ok) {
         ++final_rejected;
         if (rectangle[2] && rectangle != std::array<unsigned, 4>{0, 0, render_w, render_h} && !final_missed) {
@@ -476,10 +479,11 @@ void final_after(unsigned slot, bool returned) {
     std::uintptr_t source{}, queue{}, packet{};
     unsigned key{}, opcode{};
     q.valid = returned && q.entered && same_stamp(q.stamp) &&
-              field(q.stamp.context, 0x710 + 8 * (q.base_id & 0xfff), source) && source == q.source.object &&
-              field(q.stamp.context, 0x2b80, q.after) && q.after == q.before + 1 &&
-              field(q.stamp.context, 0x2b78, queue) && queue == q.queue && field(queue + 16ULL * q.before, 0, key) &&
-              key == 0x80000000 && field(queue + 16ULL * q.before, 8, packet) && field(packet, 0, opcode) &&
+              field(q.stamp.context, layout::context::bindings + 8 * (q.base_id & 0xfff), source) &&
+              source == q.source.object && field(q.stamp.context, layout::context::packet_count, q.after) &&
+              q.after == q.before + 1 && field(q.stamp.context, layout::context::packets, queue) && queue == q.queue &&
+              field(queue + 16ULL * q.before, layout::packet_entry::key, key) && key == 0x80000000 &&
+              field(queue + 16ULL * q.before, layout::packet_entry::packet, packet) && field(packet, 0, opcode) &&
               (opcode & 31) == 0;
     q.entered = false;
     q.packet = packet;
@@ -635,16 +639,18 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
     const auto &s = p.stamp;
     std::uintptr_t filters{}, motion_in{}, grade{}, grade_out{}, attachment{}, final_dest{};
     unsigned count{}, taas{}, grades{};
-    if (!same_stamp(s) || !field(cfg.image, layout::image::post_queue, filters) || !field(filters, 0x3c, count) ||
-        !count || count > 16) {
+    if (!same_stamp(s) || !field(cfg.image, layout::image::post_queue, filters) ||
+        !field(filters, layout::post_queue::count, count) || !count || count > 16) {
         plan_rejection = 1;
         return false;
     }
     for (unsigned i = 0; i < count; ++i) {
         std::uintptr_t e{}, u{}, type{}, input{}, output{};
         unsigned stage{}, order{};
-        if (!field(filters, 0x40 + 8 * i, e) || !field(e, 0, stage) || !field(e, 4, order) || !field(e, 8, u) ||
-            !field(e, 0x10, input) || !field(e, 0x18, output) || (u && !field(u, 0, type))) {
+        if (!field(filters, layout::post_queue::entries + 8 * i, e) || !field(e, layout::post_entry::stage, stage) ||
+            !field(e, layout::post_entry::order, order) || !field(e, layout::post_entry::unit, u) ||
+            !field(e, layout::post_entry::input, input) || !field(e, layout::post_entry::output, output) ||
+            (u && !field(u, 0, type))) {
             plan_rejection = 2;
             return false;
         }
@@ -668,21 +674,22 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
         plan_detail = 1;
         return false;
     }
-    if (!field(grade, 0x250, grade_out) || !grade_out) {
+    if (!field(grade, layout::tone_map_filter::output, grade_out) || !grade_out) {
         plan_rejection = 6;
         plan_detail = 4;
         return false;
     }
     observation.links[6] = grade_out;
-    if (!field(s.view, 0x460, attachment) || !attachment || !field(attachment, 0x58, final_dest) || !final_dest) {
+    if (!field(s.view, layout::view::final_target, attachment) || !attachment ||
+        !field(attachment, layout::attachment::owner, final_dest) || !final_dest) {
         plan_rejection = 6;
         plan_detail = 6;
         return false;
     }
     std::uintptr_t array{};
     unsigned commands{};
-    if (!field(s.context, 0x2b80, commands) || !commands || commands >= 65535 || !field(s.context, 0x2b78, array) ||
-        !array || array > UINTPTR_MAX - 16ULL * commands) {
+    if (!field(s.context, layout::context::packet_count, commands) || !commands || commands >= 65535 ||
+        !field(s.context, layout::context::packets, array) || !array || array > UINTPTR_MAX - 16ULL * commands) {
         plan_rejection = 8;
         return false;
     }
@@ -698,9 +705,13 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
         std::array<unsigned, 2> xy{};
         std::array<unsigned, 4> rect{};
         std::uintptr_t optional{};
-        return field(packet, 0x20, mode) && field(packet, 0x24, ds) && field(packet, 0x28, ss) &&
-               field(packet, 0x30, xy) && field(packet, 0x38, rect) && field(packet, 0x48, optional) && !mode && !ds &&
-               !ss && !xy[0] && !xy[1] && !optional && rect == expected;
+        return field(packet, layout::region_copy_packet::mode, mode) &&
+               field(packet, layout::region_copy_packet::destination_subresource, ds) &&
+               field(packet, layout::region_copy_packet::source_subresource, ss) &&
+               field(packet, layout::region_copy_packet::destination_xy, xy) &&
+               field(packet, layout::region_copy_packet::source_rect, rect) &&
+               field(packet, layout::region_copy_packet::optional, optional) && !mode && !ds && !ss && !xy[0] &&
+               !xy[1] && !optional && rect == expected;
     };
     // full_post: the inputs' upscale slot this thread recorded after TAA's
     // callback (full_post.inl), when verified, joins the plan if it is in this
@@ -732,13 +743,15 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
             }
             if ((raw & 31) != 13) continue;
             std::uintptr_t src{}, dst{};
-            if (!field(c.packet, 0x18, src) || !field(c.packet, 0x10, dst)) {
+            if (!field(c.packet, layout::region_copy_packet::source, src) ||
+                !field(c.packet, layout::region_copy_packet::destination, dst)) {
                 plan_rejection = 11;
                 return false;
             }
             if (c.key == 0x78000002) {
                 if (src != s.inputs[4].object || dst != motion_in) continue;
-                if (++handoffs != 1 || !pb::copy_memory(c.packet + 0x10, p.copy_fields.data(), 64)) {
+                if (++handoffs != 1 ||
+                    !pb::copy_memory(c.packet + layout::region_copy_packet::destination, p.copy_fields.data(), 64)) {
                     plan_rejection = 12;
                     return false;
                 }
@@ -748,7 +761,8 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
                     return false;
                 }
             } else if (src == grade_out && dst == final_dest) {
-                if (++finals != 1 || !pb::copy_memory(c.packet + 0x10, p.final_copy_fields.data(), 64)) {
+                if (++finals != 1 || !pb::copy_memory(c.packet + layout::region_copy_packet::destination,
+                                                      p.final_copy_fields.data(), 64)) {
                     plan_rejection = 12;
                     return false;
                 }
@@ -768,8 +782,8 @@ bool build_identity_plan(Plan &p, OutputDiagnostics::Graph &observation) {
     if (p.full_slot) ++full_counts.slots_planned;
     unsigned again{};
     std::uintptr_t again_array{};
-    if (!field(s.context, 0x2b80, again) || again != commands || !field(s.context, 0x2b78, again_array) ||
-        again_array != array || !same_stamp(s)) {
+    if (!field(s.context, layout::context::packet_count, again) || again != commands ||
+        !field(s.context, layout::context::packets, again_array) || again_array != array || !same_stamp(s)) {
         plan_rejection = 16;
         return false;
     }
@@ -867,11 +881,12 @@ bool copy_override(ID3D12GraphicsCommandList *list, const D3D12_TEXTURE_COPY_LOC
             // barrier in an earlier list) is accepted, a contradicting one is not.
             (track->known[2] && (track->states[2] & D3D12_RESOURCE_STATE_COPY_SOURCE) == 0) ||
             (track->known[3] && track->states[3] != D3D12_RESOURCE_STATE_COPY_DEST) ||
-            !field(copy_recording, 0x158, packet) || packet != p.final_copy || !field(copy_recording, 0x20, command) ||
+            !field(copy_recording, layout::recording::packet, packet) || packet != p.final_copy ||
+            !field(copy_recording, layout::recording::command, command) ||
             command != reinterpret_cast<std::uintptr_t>(list) ||
-            !pb::copy_memory(p.final_copy + 0x10, fields.data(), 64) || fields != p.final_copy_fields ||
-            d.Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX || s.Type != d.Type || d.SubresourceIndex ||
-            s.SubresourceIndex ||
+            !pb::copy_memory(p.final_copy + layout::region_copy_packet::destination, fields.data(), 64) ||
+            fields != p.final_copy_fields || d.Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX || s.Type != d.Type ||
+            d.SubresourceIndex || s.SubresourceIndex ||
             (box && (!pb::copy_memory(reinterpret_cast<std::uintptr_t>(box), &b, sizeof(b)) || b.left || b.top ||
                      b.front || b.back != 1 || b.right != width || b.bottom != height))) {
             fail(5);
@@ -915,9 +930,11 @@ bool copy_override(ID3D12GraphicsCommandList *list, const D3D12_TEXTURE_COPY_LOC
     std::array<std::byte, 64> fields{};
     if (caller != cfg.image + 0x259caf0 || p.copied || ++copy_calls != 1 || !track || x || y || z || !track->known[0] ||
         !track->known[1] || (track->states[0] & D3D12_RESOURCE_STATE_COPY_SOURCE) == 0 ||
-        track->states[1] != D3D12_RESOURCE_STATE_COPY_DEST || !field(copy_recording, 0x158, packet) ||
-        packet != p.copy || !field(copy_recording, 0x20, command) ||
-        command != reinterpret_cast<std::uintptr_t>(list) || !pb::copy_memory(p.copy + 0x10, fields.data(), 64) ||
+        track->states[1] != D3D12_RESOURCE_STATE_COPY_DEST ||
+        !field(copy_recording, layout::recording::packet, packet) || packet != p.copy ||
+        !field(copy_recording, layout::recording::command, command) ||
+        command != reinterpret_cast<std::uintptr_t>(list) ||
+        !pb::copy_memory(p.copy + layout::region_copy_packet::destination, fields.data(), 64) ||
         fields != p.copy_fields || d.Type != D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX || s.Type != d.Type ||
         d.SubresourceIndex || s.SubresourceIndex || !box ||
         !pb::copy_memory(reinterpret_cast<std::uintptr_t>(box), &b, sizeof(b)) || b.left || b.top || b.front ||
@@ -1106,8 +1123,8 @@ unsigned copy_before(const pb::Frame &f) {
     }
     if (slot == UINT_MAX) return slot;
     std::uintptr_t backend{};
-    if (!field(f.gpr[2], 8, backend) || backend != cfg.backend || !field(f.gpr[1], 8, copy_recording) ||
-        !copy_recording) {
+    if (!field(f.gpr[2], layout::executor_device::backend, backend) || backend != cfg.backend ||
+        !field(f.gpr[1], layout::executor::recording, copy_recording) || !copy_recording) {
         fail(5);
         return UINT_MAX;
     }

@@ -119,7 +119,9 @@ bool silhouette_candidates(Plan &p) {
         auto &r = p.late[i];
         for (unsigned j = 0; j < i; ++j)
             if (selected[j].object == q.object) return reject(3);
-        if (!field(q.object, 0x10, r.bindings) || !field(q.object, 0x40, r.arguments)) return reject(4);
+        if (!field(q.object, layout::draw_packet::bindings, r.bindings) ||
+            !field(q.object, layout::draw_packet::arguments, r.arguments))
+            return reject(4);
         p.late_packets[i] = q.object;
         p.late_keys[i] = q.key;
         r.silent = false;
@@ -163,10 +165,13 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
         std::construct_at(&s);
         std::uintptr_t handle{}, set{}, entry{}, descriptor{}, data{};
         unsigned size{};
-        if (!field(f.gpr[3], 0x10, s.packet_bindings) || !field(f.gpr[3], 0x40, s.packet_arguments) ||
-            !field(s.packet_bindings[2], 8, handle) || !field(handle, 0, set) || !field(set, 0x58, entry) ||
-            !field(entry, 0x10, descriptor) || !field(descriptor, 0, size) || size < 52 || size > 131072 ||
-            !field(descriptor, 8, data))
+        if (!field(f.gpr[3], layout::draw_packet::bindings, s.packet_bindings) ||
+            !field(f.gpr[3], layout::draw_packet::arguments, s.packet_arguments) ||
+            !field(s.packet_bindings[2], layout::binding_state::shader, handle) || !field(handle, 0, set) ||
+            !field(set, layout::shader_set::pixel_stage, entry) ||
+            !field(entry, layout::shader_stage::code, descriptor) ||
+            !field(descriptor, layout::shader_code::size, size) || size < 52 || size > 131072 ||
+            !field(descriptor, layout::shader_code::bytecode, data))
             return scope;
         unsigned seen = UINT_MAX;
         for (unsigned i = 0; i < indexed_seen_count; ++i)
@@ -186,14 +191,15 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
         s.tick = GetTickCount64();
         s.key = p.late_keys[position];
         unsigned short technique{};
-        field(s.packet_bindings[2], 0x18, technique);
+        field(s.packet_bindings[2], layout::binding_state::technique, technique);
         s.technique = technique;
-        for (unsigned i = 0; i < 3; ++i) field(set, 0x60 + 8 * i, s.extra_stages[i]);
+        for (unsigned i = 0; i < 3; ++i) field(set, layout::shader_set::extra_stages + 8 * i, s.extra_stages[i]);
         scope.sample = indexed_sample_count++;
         scope.draw.packet = f.gpr[3];
         scope.draw.executor = f.gpr[1];
         scope.draw.context = f.gpr[2];
-        if (!field(f.gpr[1], 8, scope.state) || !field(scope.state, 0x20, scope.draw.command)) {
+        if (!field(f.gpr[1], layout::executor::recording, scope.state) ||
+            !field(scope.state, layout::recording::command, scope.draw.command)) {
             s.rejection = 1;
             scope.sample = UINT_MAX;
             return scope;
@@ -202,9 +208,10 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
         std::uintptr_t words{}, ids{}, modes{};
         unsigned owners{};
         std::array<unsigned short, 2> range{};
-        if (field(set, 0, words) && field(set, 0x80, ids) && field(set, 0x88, owners) && owners <= 64 &&
-            field(s.packet_bindings[2], 0x10, modes) && field(set, 0x14, range) && range[0] <= 128 &&
-            unsigned(range[0]) + range[1] <= 4096) {
+        if (field(set, layout::shader_set::words, words) && field(set, layout::shader_set::ids, ids) &&
+            field(set, layout::shader_set::owner_count, owners) && owners <= 64 &&
+            field(s.packet_bindings[2], layout::binding_state::modes, modes) &&
+            field(set, layout::shader_set::range, range) && range[0] <= 128 && unsigned(range[0]) + range[1] <= 4096) {
             std::array<unsigned, 128> binding{};
             if (pb::copy_memory(words + 4ULL * range[1], binding.data(), 4 * range[0]))
                 for (unsigned i = 0; i < range[0]; ++i) {
@@ -214,7 +221,7 @@ IndexedScope indexed_diagnostic_before(const pb::Frame &f) noexcept {
                     unsigned char mode{};
                     std::uintptr_t object{};
                     if (!field(ids, index * 4, id) || !field(modes, index, mode) ||
-                        !field(s.packet_bindings[2], 0x30 + 8 * index, object))
+                        !field(s.packet_bindings[2], layout::binding_state::objects + 8 * index, object))
                         continue;
                     if (kind == 0 && (reg == 1 || reg == 5)) {
                         const auto offset = reg == 1 ? 0 : 3;
@@ -277,7 +284,8 @@ void indexed_sample(ID3D12GraphicsCommandList *list, unsigned n, unsigned instan
     std::uintptr_t owner{}, backend{}, resource{};
     for (unsigned i = 0; i < 5; ++i) {
         const auto offset = i == 4 ? 0x38 : 8 * i;
-        if (field(ia, offset, owner) && field(owner, 0x60, backend) && field(backend, 0x20, resource))
+        if (field(ia, offset, owner) && field(owner, layout::texture_owner::backing, backend) &&
+            field(backend, layout::backing::resource, resource))
             s.descriptions[3 + i] = indexed_description(resource);
     }
 }

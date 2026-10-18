@@ -63,9 +63,10 @@ bool stamp(const Reader &r, const Config &c, Stamp &s) {
 bool packet(const Reader &r, std::uintptr_t at, CopyPacket &p) {
     p = {};
     unsigned raw{};
-    if (!pointer(at, 0x48) || !r.get(at, raw) || !r.get(at + 0x10, p.kind) || p.kind != 8 ||
-        !r.get(at + 0x18, p.destination) || !p.destination || !r.get(at + 0x20, p.source) || !p.source ||
-        p.source == p.destination || !r.get(at + 0x28, p.rectangle) || !r.get(at + 0x40, p.nested))
+    if (!pointer(at, 0x48) || !r.get(at, raw) || !r.get(at + layout::copy_packet::kind, p.kind) || p.kind != 8 ||
+        !r.get(at + layout::copy_packet::destination, p.destination) || !p.destination ||
+        !r.get(at + layout::copy_packet::source, p.source) || !p.source || p.source == p.destination ||
+        !r.get(at + layout::copy_packet::rectangle, p.rectangle) || !r.get(at + layout::copy_packet::child, p.nested))
         return false;
     p.opcode = raw & 31;
     return p.opcode == 10 && p.rectangle[0] < p.rectangle[2] && p.rectangle[1] < p.rectangle[3];

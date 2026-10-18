@@ -102,13 +102,16 @@ void census_capture(PostCensus::Sample &s, std::uint64_t frame, std::uintptr_t c
     s.printed = false;
     std::uintptr_t filters{};
     unsigned count{};
-    if (field(cfg.image, 0x51cc238, filters) && field(filters, 0x3c, count) && count <= 16)
+    if (field(cfg.image, layout::image::post_queue, filters) && field(filters, layout::post_queue::count, count) &&
+        count <= 16)
         for (unsigned i = 0; i < count; ++i) {
             std::uintptr_t e{}, u{}, type{};
             auto &d = s.descriptors[s.descriptor_count];
             std::array<unsigned char, 3> flags{};
-            if (!field(filters, 0x40 + 8 * i, e) || !field(e, 0, d.stage) || !field(e, 4, d.order) || !field(e, 8, u) ||
-                !field(e, 0x10, d.input) || !field(e, 0x18, d.output) || !field(e, 0x20, flags) ||
+            if (!field(filters, layout::post_queue::entries + 8 * i, e) ||
+                !field(e, layout::post_entry::stage, d.stage) || !field(e, layout::post_entry::order, d.order) ||
+                !field(e, layout::post_entry::unit, u) || !field(e, layout::post_entry::input, d.input) ||
+                !field(e, layout::post_entry::output, d.output) || !field(e, layout::post_entry::skip, flags) ||
                 (u && !field(u, 0, type)))
                 break;
             d.type = type >= cfg.image && type - cfg.image < 0x10000000 ? static_cast<unsigned>(type - cfg.image) : 0;
@@ -122,7 +125,8 @@ void census_capture(PostCensus::Sample &s, std::uint64_t frame, std::uintptr_t c
         }
     std::uintptr_t array{};
     unsigned commands{};
-    if (!field(context, 0x2b80, commands) || !commands || commands >= 65535 || !field(context, 0x2b78, array) || !array)
+    if (!field(context, layout::context::packet_count, commands) || !commands || commands >= 65535 ||
+        !field(context, layout::context::packets, array) || !array)
         return;
     s.commands = commands;
     struct Command {
@@ -156,15 +160,20 @@ void census_capture(PostCensus::Sample &s, std::uint64_t frame, std::uintptr_t c
             k.opcode = raw & 31;
             if (k.opcode == 0) {
                 std::uintptr_t rect{}, view{}, backend{}, resource{};
-                if (field(c.packet, 0x10, rect) && field(rect, 0x4c, k.rect) && field(rect, 0, view) &&
-                    field(view, 0x60, backend) && field(backend, 0x18, resource))
+                if (field(c.packet, layout::draw_packet::bindings, rect) &&
+                    field(rect, layout::target_set::rectangle, k.rect) &&
+                    field(rect, layout::target_set::colors, view) &&
+                    field(view, layout::texture_owner::backing, backend) &&
+                    field(backend, layout::target_backing::resource, resource))
                     k.target = census_resource(s, resource);
             } else if (k.opcode == 6) {
-                (void)(field(c.packet, 0x18, k.groups));
+                (void)(field(c.packet, layout::dispatch_packet::groups_x, k.groups));
             } else if (k.opcode == 13) {
                 std::uintptr_t dst{}, src{};
                 std::array<unsigned, 4> rect{};
-                if (field(c.packet, 0x10, dst) && field(c.packet, 0x18, src) && field(c.packet, 0x38, rect)) {
+                if (field(c.packet, layout::region_copy_packet::destination, dst) &&
+                    field(c.packet, layout::region_copy_packet::source, src) &&
+                    field(c.packet, layout::region_copy_packet::source_rect, rect)) {
                     for (unsigned i = 0; i < 4; ++i) k.rect[i] = static_cast<int>(rect[i]);
                     k.target = census_resource(s, census_owner_resource(dst));
                     k.source = census_resource(s, census_owner_resource(src));

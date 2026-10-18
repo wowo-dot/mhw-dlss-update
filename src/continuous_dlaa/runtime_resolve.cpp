@@ -27,12 +27,12 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
         actual.id = owner.id;
         if (actual != owner) return skip(2);
     }
-    if (!reader.get(current_recording + 0x158, current_packet) || current_packet != consumer.packet.object ||
-        !tb::packet(reader, current_packet, packet) || packet != consumer.packet ||
-        !tb::packet_matches(s, packet, x, y, z) || !tb::shader_recipe(reader, s, shader) || shader != consumer.shader ||
-        !reader.get(cfg.backend + layout::d3d_render::compute_root, root) ||
-        !reader.get(current_recording + 0x118, cached) || root != cached ||
-        !reader.get(current_recording + 0x108, pipeline))
+    if (!reader.get(current_recording + layout::recording::packet, current_packet) ||
+        current_packet != consumer.packet.object || !tb::packet(reader, current_packet, packet) ||
+        packet != consumer.packet || !tb::packet_matches(s, packet, x, y, z) || !tb::shader_recipe(reader, s, shader) ||
+        shader != consumer.shader || !reader.get(cfg.backend + layout::d3d_render::compute_root, root) ||
+        !reader.get(current_recording + layout::recording::compute_root, cached) || root != cached ||
+        !reader.get(current_recording + layout::recording::pipeline, pipeline))
         return skip(4);
     temporal_present::Bindings state;
     if (!obs::current(list, state) || state.compute.signature != root || state.pipeline != pipeline) return skip(5);
@@ -55,7 +55,8 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
         tb::Packet again;
         std::uintptr_t active_packet{};
         if (!tb::packet(reader, consumer.packet.object, again) || again != consumer.packet ||
-            !reader.get(current_recording + 0x158, active_packet) || active_packet != again.object) {
+            !reader.get(current_recording + layout::recording::packet, active_packet) ||
+            active_packet != again.object) {
             last_skip = 4;
             ++skips;
             ++dispatch_reasons[4];
