@@ -76,7 +76,29 @@ std::array<std::atomic<std::uint32_t>, region_count> region_used{};
 unsigned region_next{};
 SRWLOCK region_lock = SRWLOCK_INIT;
 std::atomic<std::uint64_t> level1_misses{}, region_hits{}, refreshes{}, queries{}, background_queries{};
+std::atomic<std::uint64_t> host_pages{}, host_faults{};
 constexpr std::uint32_t refresh_age_ms = 40U, hot_ms = 1000U;
+// Wine's ntdll exports its version; Windows' doesn't.
+bool under_wine() noexcept {
+    static const bool wine = [] {
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        return ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr;
+    }();
+    return wine;
+}
+// A free answer under Wine (readable_region.hpp): the page holding address,
+// if one byte of it reads. Wine's pages are 4 KB.
+constexpr std::uintptr_t host_page_size = 0x1000;
+bool host_page(std::uintptr_t address, Region &out) noexcept {
+    if (!probe_page(address)) {
+        host_faults.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    host_pages.fetch_add(1, std::memory_order_relaxed);
+    out.base = address & ~(host_page_size - 1U);
+    out.end = out.base + host_page_size;
+    return true;
+}
 
 // The region holding address: `known` within the window, `expired` (out is
 // the expired entry, to refresh) or `none`.
@@ -124,9 +146,8 @@ void add_region(const Region &r) noexcept {
 bool query(std::uintptr_t address, bool whole, Region &out, std::atomic<std::uint64_t> &counter = queries) noexcept {
     MEMORY_BASIC_INFORMATION memory{};
     counter.fetch_add(1, std::memory_order_relaxed);
-    if (VirtualQuery(reinterpret_cast<const void *>(address), &memory, sizeof(memory)) != sizeof(memory) ||
-        !readable(memory))
-        return false;
+    if (VirtualQuery(reinterpret_cast<const void *>(address), &memory, sizeof(memory)) != sizeof(memory)) return false;
+    if (!readable(memory)) return memory.State == MEM_FREE && under_wine() && host_page(address, out);
     const auto base = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
     if (address < base || memory.RegionSize > UINTPTR_MAX - base || address - base >= memory.RegionSize) return false;
     out.base = base;
@@ -144,6 +165,16 @@ bool query(std::uintptr_t address, bool whole, Region &out, std::atomic<std::uin
     return true;
 }
 } // namespace
+
+bool probe_page(const std::uintptr_t address) noexcept {
+    if (address == 0U) return false;
+    __try {
+        static_cast<void>(*reinterpret_cast<const volatile unsigned char *>(address));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
 
 std::uintptr_t readable_end(const std::uintptr_t address) noexcept {
     Region r;
@@ -222,9 +253,10 @@ void start_region_refresher() noexcept {
 }
 
 ReadCacheStats read_cache_stats() noexcept {
-    return {level1_misses.load(std::memory_order_relaxed), region_hits.load(std::memory_order_relaxed),
-            refreshes.load(std::memory_order_relaxed), queries.load(std::memory_order_relaxed),
-            background_queries.load(std::memory_order_relaxed)};
+    return {level1_misses.load(std::memory_order_relaxed),      region_hits.load(std::memory_order_relaxed),
+            refreshes.load(std::memory_order_relaxed),          queries.load(std::memory_order_relaxed),
+            background_queries.load(std::memory_order_relaxed), host_pages.load(std::memory_order_relaxed),
+            host_faults.load(std::memory_order_relaxed)};
 }
 
 ScalarReadResult read_bounded_scalar(void *, const std::uintptr_t address, const std::span<std::byte> output) noexcept {

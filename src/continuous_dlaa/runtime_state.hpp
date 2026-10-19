@@ -166,6 +166,23 @@ struct ProducerRefusal {
     std::array<std::uint64_t, 4> values{};
 };
 inline ProducerRefusal last_producer_refusal;
+// The projection capture's first refusal (fault 5; 0.30.1-diag.1: under
+// Proton, devilzavacado-1 faulted at the first frame). failed holds one bit
+// per check of projection_after, in its order: 0 returned, 1 native result,
+// 2 jitter restored, 3 snapshot valid, 4 matrix relation, 5 camera, 6 camera
+// type, 7 jitter bits, 8 tagged constants, 9 constant words, 10 first copy,
+// 11 second copy, 12 copies equal, 13 matrices, 14 provider. region is
+// VirtualQuery's answer for the constants.
+struct ProjectionRefusal {
+    bool recorded{}, queried{};
+    std::uint64_t frame{};
+    std::uint32_t failed{};
+    unsigned rejection{}, checkpoint{}, reads{}, words{};
+    std::uintptr_t constants{}, readable_end{};
+    MEMORY_BASIC_INFORMATION region{};
+};
+inline ProjectionRefusal projection_refusal; // under the lock
+inline std::atomic<bool> projection_refusal_claimed{};
 inline StateTrace state_trace;
 inline NativeStateAdmission state_admission;
 inline DepthEligibilityTrace depth_eligibility;

@@ -16,6 +16,26 @@ bool provider(pb::Provider &p) noexcept {
     p.use = use;
     return p.valid;
 }
+// The first refusal, with VirtualQuery's view of the constants then
+// (0.30.1-diag.1; the log names the check, not only fault 5).
+void refused(std::uint64_t frame, std::uint32_t failed, const game_memory::ProjectionSnapshot &p) noexcept {
+    if (projection_refusal_claimed.exchange(true)) return;
+    ProjectionRefusal r;
+    r.recorded = true;
+    r.frame = frame;
+    r.failed = failed;
+    r.rejection = static_cast<unsigned>(p.rejection);
+    r.checkpoint = p.checkpoint;
+    r.reads = p.reads;
+    r.words = p.words;
+    r.constants = p.constants;
+    if (p.constants) {
+        r.readable_end = game_memory::readable_end(p.constants);
+        r.queried = VirtualQuery(reinterpret_cast<const void *>(p.constants), &r.region, sizeof r.region) != 0;
+    }
+    Lock lock;
+    projection_refusal = r;
+}
 } // namespace
 // sCamera::draw (0x228e770) computes the projection of each visible viewport
 // it draws (sub_14228F3B0; sCamera::Viewport, 0x1a0 bytes each from camera
@@ -100,17 +120,30 @@ void projection_after(bool admitted, bool returned, NativeFrame &f) {
     else
         fail(4);
     const auto bits = std::uint64_t(p.jitter_bits[0]) | (std::uint64_t(p.jitter_bits[1]) << 32);
-    bool valid = returned && (f.call.gpr[0] & 255) && restored && p.valid && p.matrix_relation &&
-                 p.manager == s.camera && p.vtable == s.camera_type && bits == projection.candidate &&
-                 p.tagged_constants == p.constants && p.words && p.words <= pb::max_constants / 4;
+    std::uint32_t failed{};
+    const auto check = [&failed](unsigned bit, bool passed) {
+        if (!passed) failed |= 1U << bit;
+        return passed;
+    };
+    check(0, returned);
+    check(1, (f.call.gpr[0] & 255) != 0);
+    check(2, restored);
+    check(3, p.valid);
+    check(4, p.matrix_relation);
+    check(5, p.manager == s.camera);
+    check(6, p.vtable == s.camera_type);
+    check(7, bits == projection.candidate);
+    check(8, p.tagged_constants == p.constants);
+    check(9, p.words && p.words <= pb::max_constants / 4);
+    bool valid = !failed;
     if (valid) {
         s.bytes = p.words * 4;
         std::array<std::byte, pb::max_constants> again{};
         pb::Provider after;
-        valid = pb::copy_memory(p.constants, s.data.data(), s.bytes) &&
-                pb::copy_memory(p.constants, again.data(), s.bytes) &&
-                std::memcmp(s.data.data(), again.data(), s.bytes) == 0 && pb::capture_matrices(cfg.image, s) &&
-                provider(after);
+        valid = check(10, pb::copy_memory(p.constants, s.data.data(), s.bytes)) &&
+                check(11, pb::copy_memory(p.constants, again.data(), s.bytes)) &&
+                check(12, std::memcmp(s.data.data(), again.data(), s.bytes) == 0) &&
+                check(13, pb::capture_matrices(cfg.image, s)) && check(14, provider(after));
     }
     if (valid) {
         LARGE_INTEGER tick{}, frequency{};
@@ -130,8 +163,10 @@ void projection_after(bool admitted, bool returned, NativeFrame &f) {
         projection.valid = true;
         Lock lock;
         projections[h.frame % projections.size()] = projection;
-    } else
+    } else {
+        refused(s.anchor.frame, failed, p);
         fail(5);
+    }
     projection_busy.clear();
 }
 } // namespace mhw::continuous_dlaa::detail

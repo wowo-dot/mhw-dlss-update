@@ -3,6 +3,7 @@
 #include "../game_memory/layout.hpp"
 #include "../common/require.hpp"
 #include "../common/log_path.hpp"
+#include "../common/platform.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include <nvsdk_ngx.h>
@@ -348,6 +349,7 @@ bool install(const Config &config, std::ostream &log) {
     out = &log;
     log << std::boolalpha;
     require(cfg.runtime.is_absolute() && cfg.data.is_absolute(), "startup-paths");
+    mhw::write_platform(log);
     {
         // v0.28.5: the provider's path and why its hash is missing, if it is
         // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
