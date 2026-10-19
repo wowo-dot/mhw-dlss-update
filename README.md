@@ -20,8 +20,9 @@ It checks every piece of game code it hooks against the tested executable by
 SHA-256. If anything doesn't match, or the card can't run a feature, that
 feature stays off and the game renders as it does unmodded.
 
-**Status:** v0.28.5, the first public release, after a closed beta on RTX 5090,
-5080 and 3080 Ti cards (frame generation on RTX 40 cards is untested so far).
+**Status:** v0.30.1. The first public release was v0.28.5, after a closed beta
+on RTX 5090, 5080 and 3080 Ti cards (frame generation on RTX 40 cards is
+untested so far).
 Download it from [Releases](https://github.com/wowo-dot/mhw-dlss-update/releases)
 or [Nexus Mods](https://www.nexusmods.com/monsterhunterworld/mods/8857).
 
@@ -70,6 +71,27 @@ Where things live:
 - **Uninstall:** delete `AsteraLoader/plugins/mhw_dlss`.
 
 The package's own `README.txt` covers every option.
+
+## Linux (Steam Proton)
+
+From 0.30.1 the mod runs under Proton with NVIDIA's proprietary driver
+(tested: RTX 3070 Laptop, CachyOS, Proton on wine-11.0 Staging). Mesa
+drivers (NVK) are not supported.
+
+Set the game's launch options in Steam to:
+
+```
+PROTON_ENABLE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=GA100 bash -c 'exec "${@/MonsterHunterWorld.exe/AsteraLoader.exe}"' -- %command%
+```
+
+- Replace `GA100` with your card's family: `TU100` for RTX 20, `GA100` for
+  RTX 30, `AD100` for RTX 40, `GB200` for RTX 50.
+- Why it's needed: for this game, Proton's NVIDIA layer (dxvk-nvapi) reports
+  the card as an older generation, to keep the game's own DLSS 1 from
+  crashing. DLSS then refuses to start. The mod never uses DLSS 1, so
+  reporting the real card is safe while the mod is installed. Remove the
+  variable if you uninstall the mod.
+- Frame generation under Proton is untested so far.
 
 ## Planned
 

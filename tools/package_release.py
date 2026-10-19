@@ -94,6 +94,14 @@ Install: copy the AsteraLoader folder from this archive into the game folder
 Organizer 2. The mod is an Astera Loader plugin and lives in
 AsteraLoader/plugins/mhw_dlss.
 
+Linux (Steam Proton, NVIDIA's proprietary driver): set the game's launch
+options in Steam to
+  PROTON_ENABLE_NVAPI=1 DXVK_NVAPI_GPU_ARCH=GA100 bash -c 'exec "${{@/MonsterHunterWorld.exe/AsteraLoader.exe}}"' -- %command%
+with your card's family in place of GA100: TU100 (RTX 20), GA100 (RTX 30),
+AD100 (RTX 40), GB200 (RTX 50). Without it, Proton reports the card as an
+older one for this game and DLSS refuses to start. Mesa drivers are not
+supported.
+
 Configuration: AsteraLoader/plugins/mhw_dlss/mhw_dlss.ini (comments in the file).
 DLSS mode (dlss_mode): DLAA renders at full resolution; Quality, Balanced and
 Performance render at 67%, 58% and 50% and upscale. The package starts with
