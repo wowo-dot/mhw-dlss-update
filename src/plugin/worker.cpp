@@ -9,6 +9,7 @@
 #include "../settings/status.hpp"
 #include "../settings/version.hpp"
 #include "../common/log_path.hpp"
+#include "../continuous_dlaa/texture_bias.hpp"
 #include "../game_memory/readable_region.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
@@ -164,7 +165,8 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"frame_generation_auto\":" << config.generation_auto
         << ",\"frame_generation_plugin\":" << quoted(config.generation_plugin ? "auto" : "off")
         << ",\"profile\":" << config.profile << ",\"perf_ab\":" << config.perf_ab
-        << ",\"hook_timing\":" << config.hook_timing
+        << ",\"hook_timing\":" << config.hook_timing << ",\"texture_bias\":" << config.texture_bias
+        << ",\"texture_bias_ab\":" << config.texture_bias_ab
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
@@ -211,6 +213,32 @@ bool wait_for_swap_chain() {
     return swap_observed;
 }
 
+// The texture mip bias (texture_bias = on): installed as soon as the game has
+// built its sampler banks, from the frames' start on, so that the materials
+// loading after it take the bias. Tried until the banks exist (at most 2000
+// tries), then logged once.
+bool texture_bias_settled{};
+unsigned texture_bias_tries{};
+void try_texture_bias() {
+    namespace tb = mhw::continuous_dlaa::texture_bias;
+    if (texture_bias_settled || !config.texture_bias) return;
+    const auto result = tb::install(image);
+    if (result == tb::Install::retry && ++texture_bias_tries < 2000) return;
+    texture_bias_settled = true;
+    log << "{\"event\":\"texture_bias_install\",\"installed\":" << (result == tb::Install::installed)
+        << ",\"tries\":" << texture_bias_tries + 1 << ",\"refusal\":" << quoted(tb::refusal()) << "}\n"
+        << std::flush;
+}
+// Each session loop: the materials' bank follows what DLSS draws (with
+// texture_bias_ab, the game's own every other 10 s).
+void follow_texture_bias(bool drawing) {
+    namespace tb = mhw::continuous_dlaa::texture_bias;
+    if (!tb::installed()) return;
+    auto scale = drawing ? mhw::continuous_dlaa::texture_scale() : 0.F;
+    if (config.texture_bias_ab && (GetTickCount64() / 10000) % 2) scale = 0.F;
+    tb::follow(scale, log);
+}
+
 // Reflex Off is confirmed and the diagnostics start; the time waiting for
 // the game began.
 std::uint64_t start_frames(const Session &session) {
@@ -228,6 +256,7 @@ std::uint64_t start_frames(const Session &session) {
     // Hot game-memory regions stay validated off the render thread.
     mhw::game_memory::start_region_refresher();
     if (config.hook_timing) mhw::perf::hook_timing::enable();
+    try_texture_bias();
     return wait_start;
 }
 
@@ -249,6 +278,7 @@ bool wait_until_qualified(std::uint64_t wait_start) {
             stable_since = GetTickCount64();
         stats = now_stats;
         log_lifecycle(log);
+        try_texture_bias();
         if (GetTickCount64() - stable_since < 3000) continue;
         not_ready.clear();
         if (mhw::reflex::temporal::ready(not_ready)) {
@@ -492,6 +522,8 @@ void run_session() {
                 change_dlss_mode(dlss_retry.request, dlss_retry);
             }
         }
+        try_texture_bias();
+        follow_texture_bias(true);
         if (!mhw::reflex::temporal::healthy()) {
             stop_reason = "temporal_unhealthy";
             mhw::reflex::temporal::fault_snapshot();
@@ -533,6 +565,8 @@ void run_session() {
         }
         Sleep(100);
     }
+    // The session ended (the game's exit or a fault): the game's own textures.
+    follow_texture_bias(false);
 }
 
 // After the session loop. Under SDK pacing the game renders into Streamline's

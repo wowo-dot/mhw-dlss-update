@@ -457,4 +457,10 @@ bool render_extent(unsigned &width, unsigned &height) noexcept {
     height = render_height();
     return true;
 }
+// The worker's thread, as the rebuild's: `pass`, `runtime` and the render
+// size change only there.
+float texture_scale() noexcept {
+    if (!pass || off.load() || !live_modes() || !runtime.width) return 0.F;
+    return static_cast<float>(render_width()) / static_cast<float>(runtime.width);
+}
 } // namespace mhw::continuous_dlaa

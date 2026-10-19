@@ -186,7 +186,7 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         // Without them DLSS runs as before, over the player's own settings.
         std::string why;
         const bool options = game_options::install(image, why);
-        texture_bias::install(image);
+        texture_bias::observe(image);
         if (!off_at_start) {
             // Without CAS's part (its code differs) the player's CAS stays
             // on, and its content scale refuses the render scale.

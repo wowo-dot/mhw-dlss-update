@@ -227,6 +227,7 @@ if(BUILD_TESTING)
         LIBS mhw_ngx_startup TEST file_digest)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
     mhw_test(ngx_providers_tests SOURCES tests/ngx_providers_tests.cpp TEST ngx_providers)
+    mhw_test(texture_bias_tests SOURCES tests/texture_bias_tests.cpp TEST texture_bias)
 
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
     mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm tests/fake_astera.cpp

@@ -175,7 +175,7 @@ void write(std::ostream &) {}
 } // namespace mhw::continuous_dlaa::game_options
 
 namespace mhw::continuous_dlaa::texture_bias {
-void install(std::uintptr_t) noexcept {}
+void observe(std::uintptr_t) noexcept {}
 void write(std::ostream &) {}
 } // namespace mhw::continuous_dlaa::texture_bias
 

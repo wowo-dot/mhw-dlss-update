@@ -97,6 +97,10 @@ bool scene_extent(unsigned &scene_width, unsigned &scene_height, unsigned &windo
                   unsigned &window_height) noexcept;
 // DLSS's render size (half the scene at Performance in the scaled build). False before install.
 bool render_extent(unsigned &width, unsigned &height) noexcept;
+// Worker: the render scale DLSS draws at (render / scene width), 0 while it
+// doesn't (not installed, the player's Off, stopped). The texture mip bias
+// follows it (texture_bias.hpp).
+float texture_scale() noexcept;
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;
