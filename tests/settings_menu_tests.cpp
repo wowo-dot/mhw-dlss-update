@@ -413,6 +413,25 @@ void status_lines() {
     v.generation_reason = "scene_rect";
     check(s::generation_line(v) == "Not available: the game's screen layout is not supported", "unavailable");
     check(s::mod_line(v) == "Degraded: frame generation is off", "unavailable degrades the mod");
+    {
+        // v0.30.1: a card without frame generation, or the ini's plugin off, is not degraded.
+        namespace c = mhw::settings::capabilities;
+        auto card = v;
+        card.generation_reason = "DLSS-G-support";
+        card.caps.frame_generation = c::Support::no;
+        card.caps.missing = c::Missing::card;
+        check(s::mod_line(card) == "Active" &&
+                  s::generation_line(card) ==
+                      "Not available: this graphics card or driver has no DLSS Frame Generation",
+              "an RTX 30 is not degraded");
+        card.caps.missing = c::Missing::plugin_off;
+        check(s::mod_line(card) == "Active", "the plugin off in the ini is not degraded");
+        card.caps.missing = c::Missing::driver;
+        check(s::mod_line(card) == "Degraded: frame generation is off", "an old driver still is");
+        card.caps.missing = c::Missing::card;
+        card.generation = s::Generation::stopped;
+        check(s::mod_line(card) == "Degraded: frame generation is off", "a stop after it ran still is");
+    }
 
     v.dlss_healthy = false;
     check(s::dlss_line(v) == "Stopped (see the log)" && s::resolution_line(v) == "The game's own" &&

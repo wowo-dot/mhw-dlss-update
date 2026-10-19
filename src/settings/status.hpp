@@ -117,12 +117,21 @@ inline std::string count_text(std::uint64_t n) {
     return digits;
 }
 
+// v0.30.1: frame generation the card can't run (RTX 20/30) or that the ini
+// keeps unloaded is not a fault (devilzavacado-1, RTX 3070 Laptop: "Degraded:
+// frame generation is off"). The frame generation line still says why.
+inline bool generation_not_offered(const View &v) {
+    using capabilities::Missing;
+    return v.generation == Generation::unavailable && v.caps.frame_generation == capabilities::Support::no &&
+           (v.caps.missing == Missing::card || v.caps.missing == Missing::plugin_off);
+}
+
 inline std::string mod_line(const View &v) {
     if (v.loader == Loader::disabled) return with_reason("Disabled", v.loader_reason);
     if (v.loader == Loader::degraded) return with_reason("Degraded", v.loader_reason);
     if (v.dlss == Stage::off || (v.dlss == Stage::running && !v.dlss_healthy)) return "Degraded: DLSS is off";
     if (v.reflex == Stage::off) return "Degraded: Reflex is off";
-    if (v.generation == Generation::unavailable || v.generation == Generation::stopped)
+    if ((v.generation == Generation::unavailable || v.generation == Generation::stopped) && !generation_not_offered(v))
         return "Degraded: frame generation is off";
     return "Active";
 }
