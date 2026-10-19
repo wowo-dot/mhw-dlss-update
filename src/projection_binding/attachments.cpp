@@ -52,9 +52,9 @@ bool native_pipeline(std::uintptr_t image, std::uintptr_t packet, NativePipeline
     p.raster_variant = variant & 1;
     p.dsv_format = depth_format == 53 ? 55 : depth_format == 44 ? 45 : depth_format == 39 ? 40 : depth_format;
     if (!depth_format) {
-        std::uintptr_t renderer{}, owner{};
-        if (!field(image, layout::image::depth_defaults, renderer) ||
-            !field(renderer, layout::depth_defaults::owner, owner) || !field(owner, 0, p.depth_owner))
+        std::uintptr_t shader{}, owner{};
+        if (!field(image, layout::image::shader, shader) || !field(shader, layout::shader::depth_owner, owner) ||
+            !field(owner, 0, p.depth_owner))
             return false;
     }
     if (!field(p.depth_owner, layout::depth_owner::state, p.depth_state) ||

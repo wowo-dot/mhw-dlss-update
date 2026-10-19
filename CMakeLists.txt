@@ -137,8 +137,10 @@ add_library(mhw_dlss SHARED
     src/frame_generation/game_session_present.cpp src/frame_generation/game_session_log.cpp src/frame_generation/hudless_pass.cpp
     src/frame_generation/crash_log.cpp src/perf/sampler.cpp
     # The status lines and the optional CMFM pages (third_party/cmfm); the
-    # game's own DLSS rules for its AA and resolution scaling options.
-    src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp)
+    # game's own DLSS rules for its AA and resolution scaling options; the
+    # texture mip bias.
+    src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp
+    src/continuous_dlaa/texture_bias.cpp)
 mhw_cxx(mhw_dlss)
 target_compile_options(mhw_dlss PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
 target_include_directories(mhw_dlss PRIVATE src/projection_binding src/game_memory)
