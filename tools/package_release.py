@@ -61,6 +61,7 @@ dynamic_target = display   ; dynamic only: display (its refresh rate) or a frame
 frame_generation_auto = off ; on: 2x to 6x pause by themselves when the game would run faster without them
 reflex = off            ; on, boost, off (off only while DLSS Frame Generation is not loaded)
 frame_generation_plugin = auto ; auto: DLSS Frame Generation loads where the GPU supports it; off: never
+texture_bias = on          ; on: sharper textures while DLSS runs, as NVIDIA recommends; off: the game's own
 runtime_dir = .            ; folder with the NVIDIA DLLs shipped in this package
 log_dir = logs             ; one log file per launch
 """
@@ -115,6 +116,11 @@ frame_generation_auto = on lets NVIDIA's Auto mode pause a fixed multiplier
 when the game would run faster without it. DLSS Frame Generation loads at
 every start on a GPU that supports it, so it can be turned on and off while
 playing; frame_generation_plugin = off keeps it unloaded.
+Texture sharpness (texture_bias): while DLSS runs, textures are sampled
+sharper to match the output resolution (one mip level per halving of the
+render resolution, plus the one more NVIDIA's DLSS guide recommends; DLAA
+gets that one), with the game's own sharper texture filters. It follows the
+DLSS mode live. Off: the game's own, as without the mod.
 Reflex (reflex): On, Boost, or Off. Off works only while DLSS Frame Generation
 is not loaded (frame_generation_plugin = off, or a GPU without it): with it
 loaded, Reflex keeps the frame pacing smooth.
