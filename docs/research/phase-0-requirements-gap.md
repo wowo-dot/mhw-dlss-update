@@ -211,7 +211,7 @@ components.
 | Actual render-subrect dimensions | Old path has `Width`, `Height`, `ResourceWidth`, `ResourceHeight`, `OutWidth`, and `OutHeight`; renderer has content/dynamic-resolution fields | Likely derivable at create/evaluate | Determine fixed versus dynamic dimensions each frame |
 | Exposure or AutoExposure | Renderer names `fExposureValue` and auto-exposure/luminance passes | Required policy for a linear/HDR input | Identify a 1x1 exposure texture and pre-exposure convention, or deliberately create DLSS with AutoExposure |
 | History reset | Old feature accepts `Reset`; TAA has reset passes | Likely wired in some form | Verify first frame, loading, camera cuts, teleports, cutscenes, and resolution changes |
-| Correct mip bias | No DLSS-specific bias confirmed yet | Unresolved | Locate sampler/material LOD bias control and determine existing DLSS behavior |
+| Correct mip bias | No DLSS-specific bias confirmed yet | Unresolved (2026-10-19: sampler banks and the material bias found, design proposed in `texture-mip-bias.md`) | Locate sampler/material LOD bias control and determine existing DLSS behavior |
 | Correct D3D12 states/lifetime | Existing NGX path owns a dedicated command list/allocator | Likely mostly usable | Observe transitions and ensure inputs are non-pixel SRVs and output is UAV at evaluation |
 
 ## Old and current NGX overlap
