@@ -28,21 +28,25 @@ int main() {
     check(bank_for(0.F) == 0 && bank_for(-1.F) == 0 && bank_for(NAN) == 0 && bank_for(1.5F) == 0,
           "no scale: the game's own");
     check(bank_for(0.3F) == 7, "below the ladder: its last bank");
-    // The guard. A fresh session (hub, ~433 slots, bank 0 at one level).
-    Room fresh{433, 2048, 225, room_margin, 0b1};
-    check(room_for_new_set(fresh), "a first bias set fits");
-    fresh.slots = 658;
-    check(room_for_new_set(fresh), "a second one");
-    fresh.slots = 883;
-    check(!room_for_new_set(fresh), "a third leaves too little for the game's own sets at the other four levels");
+    // The guard. A fresh session: the hub at about 433 slots, bank 0 at
+    // level 0 (samplers without variants) and the player's level 4.
+    Room fresh{433, 2048, min_set_cost, level_cost, room_margin, 0b10001};
+    check(room_for_new_set(fresh), "a first bias bank fits");
+    fresh.slots = 433 + 4 * 60;
+    check(room_for_new_set(fresh), "all four modes' banks fit (run 26960: 40 to 70 slots each)");
+    fresh.slots = 1600;
+    check(!room_for_new_set(fresh), "near the reserve for the three levels bank 0 hasn't seen: none");
     // After the player stepped through every anisotropy level (run 54460: 1329).
-    Room stepped{1329, 2048, 225, room_margin, 0b11111};
-    check(room_for_new_set(stepped), "bank 0 has all its sets: room for more");
-    stepped.slots = 1554;
-    check(room_for_new_set(stepped), "1554 + 225 + 128 fits");
-    stepped.slots = 1779;
-    check(!room_for_new_set(stepped), "1779 + 225 + 128 doesn't");
-    check(!room_for_new_set({0, 2048, 0xffffffffU, 0, 0}), "no overflow in the sum");
+    Room stepped{1329, 2048, min_set_cost, level_cost, room_margin, 0b11111};
+    check(room_for_new_set(stepped), "bank 0 has every level: room while the bank's set fits");
+    stepped.slots = 1856;
+    check(room_for_new_set(stepped), "1856 + 64 + 128 fits");
+    stepped.slots = 1857;
+    check(!room_for_new_set(stepped), "1857 + 64 + 128 doesn't");
+    stepped.set_cost = 225;
+    stepped.slots = 1700;
+    check(!room_for_new_set(stepped), "a larger measured set needs more room");
+    check(!room_for_new_set({0, 2048, 0xffffffffU, 0xffffffffU, 0, 0}), "no overflow in the sum");
     if (failures) return 1;
     std::cout << "texture bias tests passed\n";
     return 0;

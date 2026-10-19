@@ -59,7 +59,10 @@ std::uintptr_t pick(std::uintptr_t state) noexcept {
             level = v;
             break;
         }
-    if (material_level.load(std::memory_order_relaxed) != level) material_level.store(level, std::memory_order_relaxed);
+    // The player's anisotropy level, as the samplers with variants show it
+    // (one without any stays at level 0 whatever the option).
+    if (level && material_level.load(std::memory_order_relaxed) != level)
+        material_level.store(level, std::memory_order_relaxed);
     const auto bit = 1U << level;
     unsigned set_bank = bank;
     if (!(used[bank].load(std::memory_order_relaxed) & bit)) {
@@ -291,8 +294,8 @@ void follow(const float scale, std::ostream &log) noexcept {
         window_end = window_sets = 0;
     }
     previous_slots = slots_now;
-    const Room r{slots_now, capacity_now, measured_cost ? measured_cost : default_set_cost, room_margin,
-                 used[0].load(std::memory_order_relaxed)};
+    const Room r{slots_now,  capacity_now, std::max(measured_cost, min_set_cost),
+                 level_cost, room_margin,  used[0].load(std::memory_order_relaxed)};
     const bool fits = room_for_new_set(r);
     room.store(fits, std::memory_order_relaxed);
     // The mode's bank; without room for its set at this level, the nearest

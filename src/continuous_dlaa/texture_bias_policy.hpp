@@ -37,21 +37,26 @@ inline unsigned bank_for(float scale) noexcept {
 }
 
 // The resident sampler table cache never evicts and never checks its bound
-// (2048 slots). A bank first bound at an anisotropy level makes a new set of
-// tables there for good (about 225 slots in the hub, game run 54460). A bias
-// bank may start a new set only while the cache keeps room for it and for the
-// game's own set at every level bank 0 hasn't been bound at yet (DLSS Off, a
-// stop or a fault brings bank 0 back at whatever level the player picked).
+// (2048 slots); every new list of handles keeps its slots for good.
+// - A bias bank's first binds make a set of material tables: 40 to 70 slots
+//   (run 26960: five banks at two levels, 707 slots in all).
+// - A new anisotropy level makes a set for every sampler with variants,
+//   materials or not: about 225 slots (run 54460: four new levels, 433 to 1329).
+// A bias bank may start a set only while the cache keeps room for it and for
+// a new level's set at every level bank 0 hasn't been bound at yet (DLSS Off,
+// a stop or a fault brings bank 0 back at whatever level the player picks).
 struct Room {
     std::uint32_t slots{}, capacity{}; // the cache's next slot and its size
-    std::uint32_t set_cost{};          // the largest set measured (at least the default)
+    std::uint32_t set_cost{};          // a bias bank's set: the largest measured, at least min_set_cost
+    std::uint32_t level_cost{};        // a new level's set
     std::uint32_t margin{};
     std::uint32_t bank0_levels{}; // bit per level bank 0 has a set at
 };
-inline constexpr std::uint32_t default_set_cost = 256, room_margin = 128;
+inline constexpr std::uint32_t min_set_cost = 64, level_cost = 256, room_margin = 128;
 inline bool room_for_new_set(const Room &r) noexcept {
     const auto have = static_cast<unsigned>(std::popcount(r.bank0_levels & ((1U << levels) - 1U)));
-    const std::uint64_t needed = std::uint64_t{r.slots} + std::uint64_t{r.set_cost} * (1U + (levels - have)) + r.margin;
+    const std::uint64_t needed =
+        std::uint64_t{r.slots} + r.set_cost + std::uint64_t{r.level_cost} * (levels - have) + r.margin;
     return needed <= r.capacity;
 }
 } // namespace mhw::continuous_dlaa::texture_bias
