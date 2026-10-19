@@ -69,31 +69,54 @@ Section 3.5.1: where the bias causes flicker or moiré, back off, but not above
 - Rewriting a descriptor in place does not reach tables already cached in the resident heap. Rewriting the resident copies is unsafe: that heap is shader-visible and in flight.
 - New handle combinations cost resident slots for good, so the number of bias sets must be small and bounded.
 
-## Proposed design (not implemented; for the user to confirm)
+## Measured in game
 
-1. **One bank per mode, built once.**
-   - At install, take unused banks:
-     - one for materials (bias 0, the same as bank 0);
-     - one each for DLAA, Quality, Balanced and Performance.
-   - Rewrite their CPU-only descriptors from the bank-0 templates with `min(native + b, MaxLOD)`, keeping every anisotropy variant.
-   - Nothing has bound these banks yet, so no copies of them exist. The rewrite needs the game's conversion tables (filter, address, comparison) as data gates.
-2. **Materials into their bank.** Set `mSamplerLodBias` to the materials' bank before the first stage loads.
-   - Because that bank is rewritten to bias 0 first, it renders exactly like bank 0 even if the hook below is ever missing.
-3. **Live selection.**
-   - Hook `0x263daf0`. For a state of the materials' bank (id `+0x78` < 63 and `bank[id]` equal to it), return the original pick for the same id in the current mode's bank; all other states pass through.
-   - Cost: two loads and a compare per bound sampler.
-4. **Modes.**
-   - DLSS Off, a fault or a stop selects the bias-0 bank (vanilla).
-   - A mode change switches banks at the next bind. Biases are per mode from its nominal scale, not per frame (NVIDIA's "limited set").
-5. **The cache guard.**
-   - Log the cache's `count` and `next` in `dlss_summary`.
-   - Never select a bank not yet used once `next` passes a margin under 2048; keep the current bank instead (softer, never an overflow).
-6. **Fail closed.** If any gate fails, nothing is rewritten and `mSamplerLodBias` stays 0.
+- **Run 54460 (0.31.0-dev.1, read only; DLAA, the user's anisotropy at its highest).**
+  - Every bank's bias read exactly as above, with MaxLOD 65536. `mSamplerLodBias` was 0.
+  - The cache after the hub and a hunt: 70 tables, 433 slots.
+  - Stepping Anisotropic Filtering through every level: 174 tables, 1329 slots. A new level's set costs about 225 slots, for every sampler with variants.
+  - Four live DLSS mode changes: flat.
+- **The ladder is NVIDIA's formula.** `-log2(c)` for c = 2.0 … 5.0 is `log2(scale) - 1` at scales 1, 0.8, 0.67, 0.57, 0.5, 0.44 and 0.4. The game's own banks already hold:
+  - DLAA: bank 1 (−1);
+  - Quality: bank 3 (−1.585);
+  - Balanced: bank 4 (−1.807 for −1.786);
+  - Performance: bank 5 (−2).
 
-Open before implementing:
-- **How full is the cache in vanilla** (hub, a hunt, a quest load), and with the mode banks? This needs a read-only measurement in game.
-- **Which materials resolve before the switch** (title screen, boot-time persistent resources) and so stay unbiased. Our install point decides it.
-- **The bias formula:** NVIDIA's full recommendation, or without the extra −1, and whether DLAA gets −1. It needs an in-game look for shimmer and moiré.
+  No descriptors of the mod's own are needed.
+- **Run 26960 (0.31.0-dev.2, `texture_bias_ab = on`).**
+  - Installed on the 7th try, while the game was still booting (cache at 9 slots), so nearly every material takes the bias.
+  - 6 live mode changes followed by the bank; 53 bank switches; fault 0, a clean exit.
+  - Five banks at levels 0 and 4: 707 slots. A bias bank's material set is 40 to 70 slots.
+  - The user's screenshots (Hoarfrost Reach, Performance): crisper ice and cliffs, and bare twigs thin instead of clumped (alpha-tested foliage at a finer mip). The user saw **no shimmer**.
+
+## What the mod does (0.31.0-dev.3, `continuous_dlaa/texture_bias.*`)
+
+1. **Install**, from the worker's frames start, tried until the banks exist:
+   - 13 code gates (the hooked pick head-aware);
+   - every state of every bank checked against bank 0's template (id, packed word, bias relation, variants, handles);
+   - `mSamplerLodBias` still 0 (else another mod chose a bank: refused);
+   - bank 0's descriptors copied over bank 14 (`CopyDescriptorsSimple`, CPU-only heaps; bank 14 is never bound as shipped);
+   - `0x263daf0` hooked through al.hooks;
+   - then `mSamplerLodBias = 14`.
+
+   Bank 14 renders as bank 0 even without the hook.
+2. **The pick.** A bank-14 state (`materials[id] == state`) gets the original pick of the same id in the active bank. Every other state passes through.
+3. **Following DLSS.** Each worker loop (100 ms):
+   - the render scale (render ÷ scene width) gives `bank_for(scale)`;
+   - DLSS Off, a stop or a fault (scale 0) gives bank 0;
+   - the end of the session gives bank 0.
+4. **The guard** (`room_for_new_set`).
+   - A bank's first binds at a level (a new set) are allowed while the cache keeps room for that set (measured, at least 64) plus 256 slots for each level bank 0 hasn't been bound at.
+   - Without room, a pick falls back to bank 0, and the worker picks the nearest bank that already has a set.
+   - The level is the one samplers with variants show; one without variants stays at 0.
+5. **Settings.**
+   - `texture_bias = off` changes nothing in the game.
+   - `texture_bias_ab = on` alternates every 10 s with the game's own (diagnostic).
+   - `dlss_summary.texture_bias` and the `texture_bias` events log the bank, level, cache and guard.
+
+Not covered:
+- materials that resolved before the install keep bank 0;
+- the game's temporal-upsample remap (view flag `0x800000`) is not used on PC.
 
 ## Compared: mhworld-dlss 0.3 (GPL-3.0, c286e9d3, read only)
 
@@ -105,5 +128,7 @@ resolve. Its fix:
 - it then selects bank 1.
 
 One bias, fixed for the session and for materials loaded after the switch, by
-a code patch. The design above instead follows live mode changes, leaves the
-game's code bytes alone, and stays bounded in the cache.
+a code patch. This mod instead:
+- follows live mode changes with the game's existing banks;
+- leaves the game's code bytes alone, apart from the al.hooks hook;
+- stays bounded in the cache.
