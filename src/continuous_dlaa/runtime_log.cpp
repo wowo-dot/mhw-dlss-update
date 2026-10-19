@@ -29,7 +29,8 @@ void write_summary(std::ostream &out) {
         << ",\"skips\":" << skips.load() << ",\"lists\":{\"live\":" << live_lists() << ",\"peak\":" << lists_peak
         << ",\"pruned\":" << lists_pruned << '}' << ",\"reads\":{\"level1_misses\":" << reads.level1_misses
         << ",\"region_hits\":" << reads.region_hits << ",\"refreshes\":" << reads.refreshes
-        << ",\"queries\":" << reads.queries << ",\"background_queries\":" << reads.background_queries << '}'
+        << ",\"queries\":" << reads.queries << ",\"background_queries\":" << reads.background_queries
+        << ",\"host_pages\":" << reads.host_pages << ",\"host_faults\":" << reads.host_faults << '}'
         << ",\"video_memory\":{\"checked\":" << memory_check.done << ",\"read\":" << memory_check.read
         << ",\"passed\":" << memory_check.passed << ",\"budget_mb\":" << (memory_check.budget >> 20)
         << ",\"usage_mb\":" << (memory_check.usage >> 20) << ",\"needed_mb\":" << (memory_check.needed >> 20)

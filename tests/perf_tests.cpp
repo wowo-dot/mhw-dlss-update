@@ -186,6 +186,24 @@ void region_level_tests() {
     VirtualFree(block, 0, MEM_RELEASE);
     mhw::perf::toggles.store(0);
 }
+// 0.30.1-diag.2: the guarded page probe reads a readable page and survives a
+// released one; on Windows a free answer stays final (no probe counted).
+void host_page_tests() {
+    namespace gm = mhw::game_memory;
+    auto *page = static_cast<unsigned char *>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(page != nullptr, "one page");
+    if (!page) return;
+    const auto at = reinterpret_cast<std::uintptr_t>(page) + 100;
+    check(gm::probe_page(at), "a readable page probes readable");
+    VirtualFree(page, 0, MEM_RELEASE);
+    check(!gm::probe_page(at), "a released page faults inside the probe");
+    check(!gm::probe_page(0), "null is unreadable");
+    const auto before = gm::read_cache_stats();
+    check(gm::readable_end(at) == 0, "a released page is unreadable");
+    const auto after = gm::read_cache_stats();
+    check(after.host_pages == before.host_pages && after.host_faults == before.host_faults,
+          "Windows' free answer is not probed");
+}
 // v0.23.6: the refresher renews a region readers use, so a new block of it is
 // answered past the first window without a read-path query; a region made
 // inaccessible is dropped and its next read queries again. Timing checks are
@@ -412,6 +430,7 @@ int main() {
     shared_cache_tests();
     region_level_tests();
     refresher_tests();
+    host_page_tests();
     sha_memo_tests();
     if (failures) return 1;
     std::printf("perf tests passed\n");
