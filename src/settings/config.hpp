@@ -31,6 +31,10 @@ namespace mhw::settings {
 //                           ; launch; needs frame_generation_plugin = off
 //   hook_timing = off       ; on: every 64th hooked call is timed ("hook_timing"
 //                           ; events every 20 s; perf/hook_timing.hpp)
+//   texture_bias = on       ; off: textures keep the game's own mip bias while
+//                           ; DLSS draws (continuous_dlaa/texture_bias.hpp)
+//   texture_bias_ab = off   ; on: the bias alternates every 10 s with the game's
+//                           ; own, to compare in one launch (diagnostic)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -65,6 +69,8 @@ struct Config {
     bool profile{};                      // profile = on (diagnostic; not in the shipped ini)
     bool perf_ab{};                      // perf_ab = on (diagnostic; not in the shipped ini)
     bool hook_timing{};                  // hook_timing = on (diagnostic; not in the shipped ini)
+    bool texture_bias = true;            // texture_bias = off: no mip bias
+    bool texture_bias_ab{};              // texture_bias_ab = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -205,6 +211,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 c.hook_timing = value == "on";
             else
                 c.warnings.push_back(where + "hook_timing must be on or off");
+        } else if (key == "texture_bias" || key == "texture_bias_ab") {
+            if (value == "on" || value == "off")
+                (key == "texture_bias" ? c.texture_bias : c.texture_bias_ab) = value == "on";
+            else
+                c.warnings.push_back(where + key + " must be on or off");
         } else if (key == "full_post") {
             // Retired in v0.26.0: after DLSS the game's post chain always runs
             // at the output size (scaled_temporal/full_post.hpp). Older ini
@@ -246,6 +257,10 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
     if (c.perf_ab && c.generation_plugin) {
         c.perf_ab = false;
         c.warnings.push_back("perf_ab needs frame_generation_plugin = off; off");
+    }
+    if (c.texture_bias_ab && !c.texture_bias) {
+        c.texture_bias_ab = false;
+        c.warnings.push_back("texture_bias_ab needs texture_bias = on; off");
     }
     // Frame generation needs Reflex: only a written "reflex = off" is worth a
     // warning; the default (off) simply follows frame generation.

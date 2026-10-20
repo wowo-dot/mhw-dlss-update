@@ -91,6 +91,9 @@ void write_summary(std::ostream &out) {
     // the owned frames.
     out << ",\"game_options\":";
     game_options::write(out);
+    // The sampler table cache's fill and the material bank (texture-mip-bias.md).
+    out << ",\"texture_bias\":";
+    texture_bias::write(out);
     out << ",\"native_choices\":";
     activation::write_choices(out);
     out << '}';

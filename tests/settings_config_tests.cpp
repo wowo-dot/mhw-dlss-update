@@ -145,6 +145,18 @@ int main() {
         const auto ab_fg = a::parse_config("frame_generation = off\nperf_ab = on\n", folder);
         check(!ab_fg.perf_ab && ab_fg.warnings.size() == 1,
               "perf_ab refused while DLSS-G loads (frame generation off or not)");
+        {
+            const auto defaults = a::parse_config("", folder);
+            check(defaults.texture_bias && !defaults.texture_bias_ab, "the texture bias on by default, its A/B off");
+            const auto bias_off = a::parse_config("texture_bias = Off\n", folder);
+            check(!bias_off.texture_bias && bias_off.warnings.empty(), "texture_bias = off");
+            const auto both = a::parse_config("texture_bias_ab = on\n", folder);
+            check(both.texture_bias && both.texture_bias_ab && both.warnings.empty(), "texture_bias_ab = on");
+            const auto lone = a::parse_config("texture_bias = off\ntexture_bias_ab = on\n", folder);
+            check(!lone.texture_bias_ab && lone.warnings.size() == 1, "the A/B needs the bias on");
+            const auto bad = a::parse_config("texture_bias = sharp\n", folder);
+            check(bad.texture_bias && bad.warnings.size() == 1, "a bad texture_bias value warns and stays on");
+        }
         check(a::parse_config("", folder).generation_plugin &&
                   a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,
               "DLSS-G loads by default");

@@ -29,7 +29,8 @@ inline constexpr Offset ngx_slots = 0x51d8808;           // the game's NGX clien
 inline constexpr Offset graphics_option_ini = 0x2f744b0; // {"app:\\graphics_option.ini", "GraphicsOption"}: the
                                                          // saved settings' file and section (game_options)
 inline constexpr Offset final_base_map_id = 0x4be7450;   // the final quad's tBaseMap binding id (stream_route)
-inline constexpr Offset depth_defaults = 0x51c73d0;      // holds the default depth owner (attachments.cpp)
+inline constexpr Offset shader = 0x51c73d0;              // sShader*: the default depth owner, the sampler banks
+                                                         // (attachments.cpp, texture-mip-bias.md)
 
 inline constexpr Offset camera_vtable = 0x350d188;       // the camera's constructor vtable (projection-jitter-probe.md)
 inline constexpr Offset scene_camera_vtable = 0x33f82a8; // sCamera::vft (camera-type-probe.md)
@@ -81,6 +82,7 @@ inline constexpr Offset device = 0x18;        // ID3D12Device*
 inline constexpr Offset compute_root = 0x2a0; // the compute root signature recordings cache (dlaa-output-handoff.md)
 inline constexpr Offset latency_waitable = 0x10f0; // the swap chain's frame latency waitable (fg-live-toggle.md)
 inline constexpr Offset swap_chain = 0x1470;       // IDXGISwapChain*
+inline constexpr Offset sampler_tables = 0x1370;   // the resident sampler table cache (sampler_table_cache)
 // The per-frame constant arena (memory.cpp read_arena).
 inline constexpr Offset arena_mode = 0xff0; // 2: one resource for the CPU and the GPU
 inline constexpr Offset arena_stride = 0x1000;
@@ -150,6 +152,9 @@ inline constexpr Offset draw_slot = 0x48; // the vtable slot of sCamera::draw (c
 
 // sScene (image::scene).
 namespace scene {
+inline constexpr Offset default_bias = 0x1a4;       // float: mDefaultBias (ctor 0x22646f0)
+inline constexpr Offset sampler_lod_bias = 0x1a8;   // u32: mSamplerLodBias, the sampler bank a material bakes at load
+                                                    // (0x2383566; 0 as shipped; texture-mip-bias.md)
 inline constexpr Offset jitter_table = 0xe6a0;      // 20 projection candidates, 8 bytes each
 inline constexpr Offset capture_texture = 0xe988;   // the result screen's capture: drawn into this texture
 inline constexpr Offset capture_pass = 0xe990;      // from this view target slot (default 15)
@@ -373,10 +378,30 @@ inline constexpr Offset rotation = 0x28; // byte: a rotating set of handles (not
 inline constexpr Offset rotation_index = 0x2c;
 } // namespace target_backing
 
-// image::depth_defaults.
-namespace depth_defaults {
-inline constexpr Offset owner = 0x2480; // points to the default depth owner
-} // namespace depth_defaults
+// sShader (image::shader).
+namespace shader {
+inline constexpr Offset depth_owner = 0x2480;   // points to the default depth owner
+inline constexpr Offset sampler_banks = 0x2488; // 15 pointers to 63 sampler states each, built once at
+                                                // shader package load (0x23d6690, texture-mip-bias.md)
+inline constexpr unsigned sampler_bank_count = 15, sampler_bank_states = 63;
+} // namespace shader
+
+// nDraw::SamplerState (vtable 0x357de88, ctor 0x263d890; texture-mip-bias.md).
+namespace sampler_state {
+inline constexpr Offset sampler_template = 0x58; // 36 bytes: packed filter/address/anisotropy/comparison word,
+inline constexpr Offset mip_bias = 0x5c;         // then float mip bias, MinLOD, MaxLOD, border[4], u32 id
+inline constexpr Offset max_lod = 0x64;
+inline constexpr Offset id = 0x78;     // the template's index in its bank
+inline constexpr Offset native = 0x80; // the native sampler at anisotropy 1, then at 2/4/8/16 (0x263daf0)
+} // namespace sampler_state
+
+// The resident sampler table cache (d3d_render::sampler_tables, 0x2624870): it
+// never evicts and never checks its bound.
+namespace sampler_table_cache {
+inline constexpr Offset count = 0x8;     // u32: tables made
+inline constexpr Offset next = 0xc;      // u32: descriptor slots used in mResidentDescHeapSampler
+inline constexpr Offset capacity = 0x10; // u32: 2048 entries (the heap also holds 2048)
+} // namespace sampler_table_cache
 
 // The graphics or compute binding state (draw_packet::graphics, context::state).
 namespace binding_state {

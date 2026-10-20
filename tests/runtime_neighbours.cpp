@@ -174,6 +174,11 @@ bool taken() noexcept {
 void write(std::ostream &) {}
 } // namespace mhw::continuous_dlaa::game_options
 
+namespace mhw::continuous_dlaa::texture_bias {
+void observe(std::uintptr_t) noexcept {}
+void write(std::ostream &) {}
+} // namespace mhw::continuous_dlaa::texture_bias
+
 namespace mhw::frame_generation::game {
 void stage(ID3D12GraphicsCommandList *, std::uint64_t, std::uint64_t, ID3D12Resource *, ID3D12Resource *,
            const SlotCamera &) noexcept {}

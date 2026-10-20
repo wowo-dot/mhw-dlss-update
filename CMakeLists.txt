@@ -137,8 +137,10 @@ add_library(mhw_dlss SHARED
     src/frame_generation/game_session_present.cpp src/frame_generation/game_session_log.cpp src/frame_generation/hudless_pass.cpp
     src/frame_generation/crash_log.cpp src/perf/sampler.cpp
     # The status lines and the optional CMFM pages (third_party/cmfm); the
-    # game's own DLSS rules for its AA and resolution scaling options.
-    src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp)
+    # game's own DLSS rules for its AA and resolution scaling options; the
+    # texture mip bias.
+    src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp
+    src/continuous_dlaa/texture_bias.cpp)
 mhw_cxx(mhw_dlss)
 target_compile_options(mhw_dlss PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
 target_include_directories(mhw_dlss PRIVATE src/projection_binding src/game_memory)
@@ -225,6 +227,7 @@ if(BUILD_TESTING)
         LIBS mhw_ngx_startup TEST file_digest)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
     mhw_test(ngx_providers_tests SOURCES tests/ngx_providers_tests.cpp TEST ngx_providers)
+    mhw_test(texture_bias_tests SOURCES tests/texture_bias_tests.cpp TEST texture_bias)
 
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
     mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm tests/fake_astera.cpp

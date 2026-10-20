@@ -22,6 +22,7 @@
 #include "depth_consumer_copy.hpp"
 #include "activation.hpp"
 #include "game_options.hpp"
+#include "texture_bias.hpp"
 #include "history.hpp"
 #include "requests.hpp"
 #include "retention.hpp"
