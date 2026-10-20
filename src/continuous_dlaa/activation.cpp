@@ -67,6 +67,7 @@ std::atomic<std::uint64_t> owned_frames{}, units{}, admitted{}, rejected{}, comp
 std::array<std::atomic<std::uint64_t>, 4> choices{};
 std::atomic<std::uint64_t> queue_visits{}, queue_inserted{}, queue_existing{}, queue_rejected{}, execute_unowned{};
 std::atomic<std::uint64_t> queue_unfiltered{};
+std::atomic<std::uint64_t> reprojection_held{}; // 0.30.2: owned_taa held mReprojection on
 std::array<std::atomic<std::uint64_t>, 6> queue_reasons{};
 SRWLOCK telemetry_mutex = SRWLOCK_INIT;
 struct TelemetryLock {
@@ -300,6 +301,30 @@ void forward_taa(pb::Frame *f) {
         if (!returned) fail(5);
     }
 }
+// A scene's data can turn TAA2's mReprojection off (the Guild Card, stage 305;
+// marie-2, 0.30.2): its execute then picks the _NO_REPROJECTION technique,
+// which reads no depth, motion or camera and so can't be a DLSS frame. While
+// DLSS owns TAA the property is held on for the execute, as the game's own
+// DLSS holds anti-aliasing and resolution scaling, and given back after it.
+bool write_byte(std::uintptr_t at, unsigned char value) noexcept {
+    __try {
+        *reinterpret_cast<volatile unsigned char *>(at) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+void owned_taa(pb::Frame *f) {
+    const auto at = f->gpr[1] + layout::taa_filter::reprojection;
+    unsigned char reprojection = 1;
+    const bool held = pb::read(at, reprojection) && reprojection == 0 && write_byte(at, 1);
+    if (held) ++reprojection_held;
+    __try {
+        forward_taa(f);
+    } __finally {
+        if (held) write_byte(at, 0);
+    }
+}
 void record_admission() {
     TelemetryLock lock;
     ++units;
@@ -319,7 +344,7 @@ void dispatch_inner(unsigned kind, pb::Frame *f) {
         const auto taa_context = f->gpr[2];
         if (queued_taa && f->gpr[1] == queued_taa && owned_context(f->gpr[2])) {
             record_admission();
-            forward_taa(f);
+            owned_taa(f);
         } else {
             ++execute_unowned;
             mhw_binding_forward(originals[1], f);
@@ -462,7 +487,8 @@ void write(std::ostream &out) {
         << ",\"sharpen_suppressed\":" << InterlockedCompareExchange64(&mhw_aa_sharpen_suppressed, 0, 0)
         << ",\"queue_visits\":" << queue_visits.load() << ",\"queue_inserted\":" << queue_inserted.load()
         << ",\"queue_existing\":" << queue_existing.load() << ",\"queue_rejected\":" << queue_rejected.load()
-        << ",\"execute_unowned\":" << execute_unowned.load() << ",\"queue_reasons\":[";
+        << ",\"execute_unowned\":" << execute_unowned.load() << ",\"reprojection_held\":" << reprojection_held.load()
+        << ",\"queue_reasons\":[";
     for (unsigned i = 0; i < queue_reasons.size(); ++i) out << (i ? "," : "") << queue_reasons[i].load();
     out << "]"
         << ",\"failure_latched\":" << failure_latched.load() << ",\"queue_unfiltered\":" << queue_unfiltered.load()
