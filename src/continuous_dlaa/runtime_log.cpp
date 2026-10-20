@@ -58,6 +58,9 @@ void write_summary(std::ostream &out) {
     }
     out << ",\"projection_refusal\":";
     write_projection_refusal(out);
+    // The game's TAA without reprojection, run as its own frames (0.30.2).
+    out << ",\"no_reprojection\":";
+    no_reprojection_frames.write(out);
     out << ",\"projection_viewports\":[";
     for (unsigned i = 0; i < projection_viewports.size(); ++i) {
         if (i) out << ',';
@@ -137,6 +140,8 @@ void write(std::ostream &out) {
             << ",\"verified\":" << shader_cache.verified[i] << ",\"accepted\":" << shader_cache.accepted[i] << '}';
     }
     out << "]}";
+    out << ",\"no_reprojection\":";
+    no_reprojection_frames.write(out);
     out << ",\"preparation_shader_admission\":{\"schema\":1,\"variants\":[";
     for (unsigned i = 0; i < unknown_native_shader; ++i) {
         if (i) out << ',';

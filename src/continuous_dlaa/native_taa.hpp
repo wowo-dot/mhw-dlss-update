@@ -1,6 +1,10 @@
 #pragma once
 #include "../temporal_bindings/shader.hpp"
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <ostream>
+#include <span>
 #include <string_view>
 
 namespace mhw::continuous_dlaa {
@@ -37,6 +41,56 @@ struct NativeShaderCache {
         }
         ++accepted[index];
         return true;
+    }
+};
+// The game's TAA without reprojection (0.30.2, marie-2): CSTemporalAA2's
+// _NO_REPROJECTION technique, picked when a scene's data turns
+// uTemporalAAFilter2's mReprojection off (layout::taa_filter::reprojection,
+// set through uSdlTemporalAA). It reads only the frame and the history (no
+// depth, motion or camera), so it can't be a DLSS frame: the game runs its
+// own TAA for it, and DLSS takes the next frame of the usual technique. Up to
+// 0.30.1 its dispatch was an unknown shader (fault 29) and stopped DLSS for
+// the session. Vanilla: ShaderPackage.sdf holds these exact bytes.
+inline constexpr NativeShaderVariant no_reprojection_variant{
+    26713, 11644, "6b07981dbcf7f589d2157d8a3e032f7395e2501b6ff94a4e98139c74bea7c24f"};
+inline bool no_reprojection_shader(unsigned technique, unsigned bytes) noexcept {
+    return technique == no_reprojection_variant.technique && bytes == no_reprojection_variant.bytes;
+}
+// Its bytes (hashed once, then compared) and the frames it took: runs of
+// consecutive frames, with the stage id where the last run began (-1 when
+// unread) and the first stages seen.
+struct NoReprojectionFrames {
+    std::array<std::byte, no_reprojection_variant.bytes> bytes{};
+    bool verified{};
+    std::uint64_t frames{}, runs{}, run_start{}, last_frame{};
+    int run_stage{-1};
+    std::array<int, 8> stages{};
+    unsigned stage_count{};
+    template <class Hash> bool matches(std::span<const std::byte> current, Hash hash) {
+        if (current.size() != bytes.size()) return false;
+        if (verified) return std::equal(current.begin(), current.end(), bytes.begin());
+        if (hash(current) != no_reprojection_variant.sha) return false;
+        std::copy(current.begin(), current.end(), bytes.begin());
+        verified = true;
+        return true;
+    }
+    void note(std::uint64_t frame, int stage) noexcept {
+        if (!frames || frame != last_frame + 1) {
+            ++runs;
+            run_start = frame;
+            run_stage = stage;
+            if (std::find(stages.begin(), stages.begin() + stage_count, stage) == stages.begin() + stage_count &&
+                stage_count < stages.size())
+                stages[stage_count++] = stage;
+        }
+        last_frame = frame;
+        ++frames;
+    }
+    void write(std::ostream &o) const {
+        o << "{\"frames\":" << frames << ",\"runs\":" << runs << ",\"run_start\":" << run_start
+          << ",\"last_frame\":" << last_frame << ",\"run_stage\":" << run_stage << ",\"stages\":[";
+        for (unsigned i = 0; i < stage_count; ++i) o << (i ? "," : "") << stages[i];
+        o << "]}";
     }
 };
 // Structural gate for the exact captured cs_5_0. Callers must ALSO verify its

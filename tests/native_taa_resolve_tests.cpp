@@ -6,6 +6,8 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace cd = mhw::continuous_dlaa;
 namespace tb = mhw::temporal_bindings;
@@ -216,5 +218,42 @@ int main() {
     std::ostringstream report;
     telemetry.write(report);
     check(report.str().find("\"exclusive_mode\":false") != std::string::npos, "no feature-wide exclusivity claim");
+
+    {
+        // 0.30.2: the game's TAA without reprojection is known by technique, size
+        // and hash, never as a DLSS recipe, and its frames are counted in runs.
+        check(cd::no_reprojection_shader(26713, 11644) && !cd::no_reprojection_shader(26713, 11645) &&
+                  !cd::no_reprojection_shader(23086, 11644),
+              "no-reprojection technique and size");
+        check(cd::native_shader_index(26713, 11644, true) == cd::unknown_native_shader,
+              "no-reprojection is not a DLSS variant");
+        auto frames = std::make_unique<cd::NoReprojectionFrames>();
+        std::vector<std::byte> bytes(11644, std::byte{5});
+        unsigned sha_calls{};
+        const auto known_sha = [&](std::span<const std::byte>) {
+            ++sha_calls;
+            return std::string(cd::no_reprojection_variant.sha);
+        };
+        const auto wrong = [](std::span<const std::byte>) { return std::string("0"); };
+        check(!frames->matches(bytes, wrong) && !frames->verified, "a wrong hash is refused");
+        check(frames->matches(bytes, known_sha) && frames->matches(bytes, known_sha) && sha_calls == 1,
+              "hashed once, then compared");
+        bytes[100] = std::byte{6};
+        check(!frames->matches(bytes, known_sha) && sha_calls == 1, "changed bytes refused after verification");
+        check(!frames->matches(std::span<const std::byte>(bytes).first(100), known_sha), "wrong length refused");
+        frames->note(500, 108);
+        frames->note(501, 108);
+        frames->note(502, 108);
+        frames->note(900, 101);
+        frames->note(1500, 108);
+        check(frames->frames == 5 && frames->runs == 3 && frames->run_start == 1500 && frames->run_stage == 108 &&
+                  frames->stage_count == 2 && frames->stages[0] == 108 && frames->stages[1] == 101,
+              "runs of consecutive frames with their stages");
+        std::ostringstream runs;
+        frames->write(runs);
+        check(runs.str() == "{\"frames\":5,\"runs\":3,\"run_start\":1500,\"last_frame\":1500,\"run_stage\":108,"
+                            "\"stages\":[108,101]}",
+              "no-reprojection JSON");
+    }
     std::cout << "Native TAA recipe, alias rejection, dispatch suppression and failure routing passed\n";
 }

@@ -152,7 +152,8 @@ inline RecordingPins recording_pins;
 inline UnfilteredLifetime unfiltered_lifetime;
 inline ReconstructionState reconstruction;
 inline std::atomic<std::uint64_t> zero_jitter_projections{};
-inline std::array<std::uint64_t, 12> dispatch_reasons{};
+// Skip reason 12 (0.30.2): the game's TAA without reprojection ran instead.
+inline std::array<std::uint64_t, 13> dispatch_reasons{};
 // TAA's producer refusals (taa_before), by the first failing check: 1 call
 // arguments, 2 snapshot, 3 scene depth, 4 shader recipe, 5 command array,
 // 6 no projection, 7 projection of another frame/epoch, 8 of another
@@ -289,6 +290,7 @@ inline ResolveTelemetry resolve_telemetry;
 inline ShaderRejection shader_rejection;
 inline NativeShaderCache shader_cache;
 inline NativeShaderCache preparation_shader_cache;
+inline NoReprojectionFrames no_reprojection_frames; // under the lock (native_taa.hpp)
 constexpr bool include_menu_shader = true;
 struct PreparedResolve {
     temporal_present::Bindings bindings;

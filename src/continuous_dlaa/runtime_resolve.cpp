@@ -66,8 +66,16 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
     std::array<std::byte, native_taa_shader_bytes> bytecode{};
     const unsigned variant = native_shader_index(shader.technique, shader.size, include_menu_shader);
     const bool shape = single_native_output(s, shader, include_menu_shader);
-    const bool copied = shape && pb::copy_memory(shader.bytecode, bytecode.data(), shader.size);
+    // The game's TAA without reprojection (native_taa.hpp): proven by its
+    // bytes below, then left to run as the game's own frame.
+    const bool no_reprojection = !shape && no_reprojection_shader(shader.technique, shader.size);
+    const bool copied = (shape || no_reprojection) && pb::copy_memory(shader.bytecode, bytecode.data(), shader.size);
     const auto tested = std::span<const std::byte>(bytecode).first(copied ? shader.size : 0U);
+    std::uintptr_t area{};
+    int stage{-1};
+    if (no_reprojection &&
+        !(reader.get(cfg.image + layout::image::area, area) && area && reader.get(area + layout::area::stage, stage)))
+        stage = -1;
     Lock lock;
     const auto *l = find(list);
     const auto locked_skip = [](unsigned why) {
@@ -78,10 +86,15 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
     };
     if (!accepting.load() && !prepared_output) return false;
     ++resolve_telemetry.shader_checks;
-    const bool previously_verified = variant < unknown_native_shader && shader_cache.verified[variant];
-    const bool matches = copied && shader_cache.matches(variant, tested, [](std::span<const std::byte> data) {
+    const auto sha256 = [](std::span<const std::byte> data) {
         return pb::bytes_sha256(data.data(), static_cast<unsigned>(data.size()));
-    });
+    };
+    if (no_reprojection && copied && no_reprojection_frames.matches(tested, sha256)) {
+        no_reprojection_frames.note(s.frame, stage);
+        return locked_skip(12);
+    }
+    const bool previously_verified = variant < unknown_native_shader && shader_cache.verified[variant];
+    const bool matches = shape && copied && shader_cache.matches(variant, tested, sha256);
     if (!matches) {
         if (!shader_rejection.present) {
             shader_rejection.capture(s, shader, shape, copied, matches, previously_verified, tested, reader);

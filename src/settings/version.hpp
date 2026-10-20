@@ -4,7 +4,7 @@
 // start event and CMFM's page header. Also a macro, so the start event holds
 // it inside one literal: tools/package_release.py checks the DLL for
 // {"event":"start","schema":1,"version":"<version>",
-#define MHW_VERSION "0.30.1"
+#define MHW_VERSION "0.30.2-dev.1"
 
 namespace mhw::settings {
 inline constexpr char version[] = MHW_VERSION;

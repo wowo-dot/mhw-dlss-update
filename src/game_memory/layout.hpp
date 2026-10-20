@@ -22,6 +22,7 @@ inline constexpr Offset app_ext = 0x51c5320;      // sAppExt*: the window and re
 inline constexpr Offset graphics_api = 0x51cc080; // byte: 1 = Direct3D 12 (projection-upload-binding.md)
 inline constexpr Offset post_queue = 0x51cc238;   // the post-effect queue (temporal-activation-observation.md)
 inline constexpr Offset unit_manager = 0x51238c8; // sMhUnit*: the unit lists (game-aa-option.md)
+inline constexpr Offset area = 0x51c42b8;         // sArea* (sArea's destructor clears it; marie-2)
 inline constexpr Offset game_dlss_state = 0x51c6c28;     // why the game has no DLSS 1: 1 NGX init, 2 SuperSampling,
                                                          // 3 ImageSignalProcessing unavailable (game-dlss1.md)
 inline constexpr Offset ngx_slots = 0x51d8808;           // the game's NGX client slots (ngx-startup-capabilities.md)
@@ -188,11 +189,19 @@ namespace taa_filter {
 inline constexpr Offset queue_entry = 0x140; // its post-queue entry, embedded
 inline constexpr Offset owner = 0x148;       // itself while registered
 inline constexpr Offset base_color = 0x150;
-inline constexpr Offset skip = 0x160;        // byte
-inline constexpr Offset passthrough = 0x161; // byte
-inline constexpr Offset history = 0x168;     // three owners, by frame % 3
-inline constexpr Offset taa_bytes = 0x184;   // read with the inputs (inputs.cpp)
+inline constexpr Offset skip = 0x160;         // byte
+inline constexpr Offset passthrough = 0x161;  // byte
+inline constexpr Offset history = 0x168;      // three owners, by frame % 3
+inline constexpr Offset taa_bytes = 0x184;    // read with the inputs (inputs.cpp)
+inline constexpr Offset reprojection = 0x19d; // byte, property mReprojection: 0 picks CSTemporalAA2's
+                                              // _NO_REPROJECTION technique (sub_142392150; marie-2)
 } // namespace taa_filter
+
+// sArea, the loaded area (image::area).
+namespace area {
+inline constexpr Offset stage = 0xd328; // int: the stage id (the cat helper setter sub_141B34AE0 compares it
+                                        // with 108, the Hoarfrost Reach; read in 192 places)
+} // namespace area
 
 // The post-effect queue (image::post_queue) and its entries.
 namespace post_queue {
