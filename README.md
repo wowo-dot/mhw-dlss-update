@@ -6,6 +6,10 @@ World (PC, DirectX 12):
 - **DLSS Super Resolution and DLAA** on the game's own TAA pass. Modes: DLAA,
   Quality, Balanced and Performance. They change live, render resolution
   included.
+- **Texture sharpness matched to DLSS**: while DLSS runs, textures use the
+  mip bias NVIDIA recommends (from the game's own sharper texture filters),
+  following the mode live. `texture_bias = off` in the ini keeps the game's
+  own.
 - **DLSS Frame Generation**:
   - 2x on RTX 40 and 50 cards; 3x to 6x and Dynamic multi frame generation on
     RTX 50;
@@ -20,7 +24,7 @@ It checks every piece of game code it hooks against the tested executable by
 SHA-256. If anything doesn't match, or the card can't run a feature, that
 feature stays off and the game renders as it does unmodded.
 
-**Status:** v0.30.1. The first public release was v0.28.5, after a closed beta
+**Status:** v0.31.0. The first public release was v0.28.5, after a closed beta
 on RTX 5090, 5080 and 3080 Ti cards (frame generation on RTX 40 cards is
 untested so far).
 Download it from [Releases](https://github.com/wowo-dot/mhw-dlss-update/releases)
