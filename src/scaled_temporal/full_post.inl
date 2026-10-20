@@ -36,6 +36,9 @@ struct FullPostCounters {
     // dropped at execution without a prepared plan (or forwarded, unverified);
     // scene captures widened to the chain's output, and refusals by reason.
     std::atomic<std::uint64_t> final_unverified{}, final_stale{}, fallbacks{}, fallback_unverified{}, captures{};
+    // 0.30.2 (badsnoopy10-1): HUD entries of the final quad's key moved one key up
+    // behind the final copy (full_hud_behind_copy).
+    std::atomic<std::uint64_t> hud_rekeyed{};
     std::array<std::atomic<std::uint64_t>, 5> capture_refusals{};
     // The inputs' upscale (v0.25.2): slots recorded, refused (by reason),
     // planned, executed with the upscale, executed without it (by reason).
@@ -369,6 +372,39 @@ bool full_published(std::uint64_t frame, std::uintptr_t context) noexcept {
     const auto &p = plans[frame % plans.size()];
     return p.published && p.stamp.frame == frame && p.stamp.context == context;
 }
+// The HUD's lowest layer is keyed like the final quad (stage 16, order 0)
+// and is queued after the quad but before the final copy, which is recorded
+// only when TAA's callback returns. Equal keys run in queue order, so the copy
+// covered that layer: the bow's aim reticle was gone at every scaled mode
+// (badsnoopy10-1, 0.30.2; the game's own DLAA copy is queued before the HUD).
+// Those entries, between the quad and the copy, move one key up: behind the
+// copy, still ahead of the next layer, in their own order. A key write that
+// faults stops the walk (the frame keeps the old order).
+bool write_key(std::uintptr_t at, unsigned key) noexcept {
+    __try {
+        *reinterpret_cast<volatile unsigned *>(at) = key;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+void full_hud_behind_copy(std::uintptr_t array, unsigned quad_at, unsigned copy_at, unsigned key) noexcept {
+    if (quad_at >= copy_at || copy_at - quad_at > 65535 || key == UINT_MAX) return;
+    struct Command {
+        unsigned key{}, padding{};
+        std::uintptr_t packet{};
+    };
+    std::array<Command, 256> block;
+    for (unsigned base = quad_at + 1; base < copy_at; base += 256) {
+        const auto n = (std::min)(256U, copy_at - base);
+        if (!pb::copy_memory(array + 16ULL * base, block.data(), n * sizeof(Command))) return;
+        for (unsigned j = 0; j < n; ++j) {
+            if (block[j].key != key) continue;
+            if (!write_key(array + 16ULL * (base + j) + layout::packet_entry::key, key + 1)) return;
+            ++full_counts.hud_rekeyed;
+        }
+    }
+}
 // The final copy becomes the game's DLAA copy (the final quad's owners, the
 // full rectangle), recorded in the final quad's key (stage 16, order 0): it
 // sorts after the quad, which it overwrites. The entry the helper appended is
@@ -409,6 +445,7 @@ bool full_final_record(std::uintptr_t context, const FullPostState &s) noexcept 
         !field(c.packet, layout::region_copy_packet::source_rect, rect) ||
         rect != std::array<unsigned, 4>{0, 0, width, height})
         ++full_counts.final_unverified;
+    if ((c.key >> 27) == 16) full_hud_behind_copy(array, s.quad_at, count, c.key);
     FullFinal r;
     r.frame = s.frame;
     r.packet = c.packet;
@@ -591,19 +628,19 @@ void full_post_write(std::ostream &o) {
       << ",\"unadmitted\":" << full_counts.unadmitted << ",\"unpublished\":" << full_counts.unpublished
       << ",\"final_unverified\":" << full_counts.final_unverified << ",\"final_stale\":" << full_counts.final_stale
       << ",\"fallbacks\":" << full_counts.fallbacks << ",\"fallback_unverified\":" << full_counts.fallback_unverified
-      << ",\"captures\":" << full_counts.captures << ",\"capture_refusals\":[" << full_counts.capture_refusals[0] << ','
-      << full_counts.capture_refusals[1] << ',' << full_counts.capture_refusals[2] << ','
-      << full_counts.capture_refusals[3] << ',' << full_counts.capture_refusals[4] << ']'
-      << ",\"identity_plans\":" << full_counts.identity_plans << ",\"inputs\":{\"ready\":" << full_inputs.ready()
-      << ",\"failure\":\"" << full_inputs_failure << "\",\"bytes\":" << full_inputs.bytes()
-      << ",\"slots\":" << full_counts.slots << ",\"planned\":" << full_counts.slots_planned
-      << ",\"upscales\":" << full_counts.upscales << ",\"states_checked\":" << full_counts.states_checked
-      << ",\"states_planned\":" << full_counts.states_planned << ",\"state_mismatch\":["
-      << full_counts.state_mismatch[0] << ',' << full_counts.state_mismatch[1] << ',' << full_counts.state_mismatch[2]
-      << ',' << full_counts.state_mismatch[3] << "],\"depth_restores\":" << full_counts.depth_restores
-      << ",\"restore_unsafe\":" << full_counts.restore_unsafe << ",\"restore_skips\":[" << full_counts.restore_skips[0]
-      << ',' << full_counts.restore_skips[1] << ',' << full_counts.restore_skips[2] << ','
-      << full_counts.restore_skips[3] << ',' << full_counts.restore_skips[4]
+      << ",\"hud_rekeyed\":" << full_counts.hud_rekeyed << ",\"captures\":" << full_counts.captures
+      << ",\"capture_refusals\":[" << full_counts.capture_refusals[0] << ',' << full_counts.capture_refusals[1] << ','
+      << full_counts.capture_refusals[2] << ',' << full_counts.capture_refusals[3] << ','
+      << full_counts.capture_refusals[4] << ']' << ",\"identity_plans\":" << full_counts.identity_plans
+      << ",\"inputs\":{\"ready\":" << full_inputs.ready() << ",\"failure\":\"" << full_inputs_failure
+      << "\",\"bytes\":" << full_inputs.bytes() << ",\"slots\":" << full_counts.slots
+      << ",\"planned\":" << full_counts.slots_planned << ",\"upscales\":" << full_counts.upscales
+      << ",\"states_checked\":" << full_counts.states_checked << ",\"states_planned\":" << full_counts.states_planned
+      << ",\"state_mismatch\":[" << full_counts.state_mismatch[0] << ',' << full_counts.state_mismatch[1] << ','
+      << full_counts.state_mismatch[2] << ',' << full_counts.state_mismatch[3]
+      << "],\"depth_restores\":" << full_counts.depth_restores << ",\"restore_unsafe\":" << full_counts.restore_unsafe
+      << ",\"restore_skips\":[" << full_counts.restore_skips[0] << ',' << full_counts.restore_skips[1] << ','
+      << full_counts.restore_skips[2] << ',' << full_counts.restore_skips[3] << ',' << full_counts.restore_skips[4]
       << "],\"unverified\":" << full_counts.slot_unverified << ",\"stale\":" << full_counts.slot_stale
       << ",\"refusals\":[";
     for (unsigned i = 0; i < 8; ++i) o << (i ? "," : "") << full_counts.slot_refusals[i];
