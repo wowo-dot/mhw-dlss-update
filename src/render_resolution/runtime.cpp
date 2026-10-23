@@ -88,6 +88,7 @@ Snapshot baseline{}, reduced{}, last{}, restoration{};
 // The startup admission snapshot, and the first and last unqualified
 // in-session snapshots (an aspect-ratio change applies live, game-15).
 Snapshot startup{}, first_unqualified{}, last_unqualified{};
+unsigned startup_waits{}; // 10 ms waits for the main view before startup (0.31.1)
 // Views whose own scale is the truncated render/display ratio (1706/3413 for a
 // pillarboxed odd scene) rather than the requested 0.5. The title-screen view
 // keeps it (game-22, game-23) while rendering the same 1706x720 viewport, so it
@@ -556,11 +557,24 @@ bool install(std::uintptr_t base, float scale, std::string &reason, bool yielded
     image = base;
     expected_return = base + 0x22982e7;
     setter = reinterpret_cast<Setter>(base + 0x229bd70);
+    // 0.31.1 (marie-4): while the game rebuilds the renderer (0x229b020 on
+    // display changes 0x2040, as FidelityFX CAS's apply queues) it has no main
+    // view, then a new one. A missing or changing view (checks 4, 19) is
+    // waited out for up to 5 s; the snapshot only reads.
     Snapshot s{};
-    const bool admitted = snapshot(s, target, yielded_start);
+    unsigned waits{};
+    const auto deadline = GetTickCount64() + 5000;
+    bool admitted = snapshot(s, target, yielded_start);
+    while (!admitted && (s.check == 4 || s.check == 19) && GetTickCount64() < deadline) {
+        Sleep(10);
+        ++waits;
+        s = {};
+        admitted = snapshot(s, target, yielded_start);
+    }
     {
         Lock lock;
         startup = s;
+        startup_waits = waits;
     }
     if (!admitted) {
         reason = "native sizing admission (check " + std::to_string(s.check) + ")";
@@ -782,6 +796,7 @@ void write(std::ostream &out) {
     write_snapshot(out, restoration);
     out << ",\"startup\":";
     write_snapshot(out, startup);
+    out << ",\"startup_waits\":" << startup_waits;
     out << ",\"first_unqualified\":";
     write_snapshot(out, first_unqualified);
     out << ",\"last_unqualified\":";

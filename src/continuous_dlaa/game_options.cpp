@@ -382,6 +382,18 @@ bool install(std::uintptr_t host, std::string &reason) {
 bool cas_handled() noexcept {
     return image && cas_installed;
 }
+// 0.31.1 (marie-4): CAS's apply always has the renderer rebuilt. 0x229bd20
+// queues display changes 0x2040, and 0x229b020 then drops the main view
+// (renderer::primary_view) and makes a new one, so it runs only when CAS is
+// on in the renderer or the read fails.
+bool cas_in_effect() noexcept {
+    std::uintptr_t renderer{};
+    unsigned char on{};
+    float scale{};
+    return !(pb::read(image + layout::image::renderer, renderer) && renderer &&
+             pb::read(renderer + layout::renderer::cas, on) &&
+             pb::read(renderer + layout::renderer::cas_scale, scale) && !on && scale == 1.F);
+}
 void take_over() noexcept {
     if (!image || taken_now.exchange(true)) return;
     ++take_overs;
@@ -390,7 +402,7 @@ void take_over() noexcept {
     // the game's own thread.
     if (!set_aa(anti_aliasing_off)) ++call_faults;
     // CAS's apply re-applies the resolution scaling (High: taken); High last.
-    if (cas_installed && !apply_cas(cas_off())) ++call_faults;
+    if (cas_installed && cas_in_effect() && !apply_cas(cas_off())) ++call_faults;
     if (!apply_rs(resolution_scaling_high)) ++call_faults;
 }
 void give_back() noexcept {
@@ -400,7 +412,8 @@ void give_back() noexcept {
     const int aa = player_aa.load(), rs = player_rs.load();
     const auto cas = player_cas.load();
     if (aa >= 0 && !set_aa(static_cast<unsigned char>(aa))) ++call_faults;
-    if (cas_installed && cas != cas_unknown && !apply_cas(unpack(cas))) ++call_faults;
+    if (cas_installed && cas != cas_unknown && (unpack(cas).on || cas_in_effect()) && !apply_cas(unpack(cas)))
+        ++call_faults;
     if (rs >= 0 && !apply_rs(static_cast<unsigned char>(rs))) ++call_faults;
 }
 bool taken() noexcept {

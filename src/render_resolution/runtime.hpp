@@ -14,6 +14,7 @@ struct InputStamp {
 };
 // The observer forwards successful RSSetViewports calls to observe_viewports.
 // yielded_start: installed yielded (the player's DLSS Off at start, yield()).
+// A renderer rebuild in progress (no main view yet) is waited out, up to 5 s.
 bool install(std::uintptr_t image, float scale, std::string &reason, bool yielded_start = false);
 // install()'s qualification without hooks or retained state: the renderer is
 // discovered, the plan is valid, the sizing code matches and the native sizing
