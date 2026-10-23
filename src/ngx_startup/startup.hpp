@@ -27,10 +27,10 @@ struct Config {
 bool install(const Config &, std::ostream &);
 bool done() noexcept;
 bool disable() noexcept;
-// Each startup hook's removal (the native init, then the game's DLSS builder;
-// both are tried); 0,0 = removed or never made (v0.28.6), 1 and the hook's AL
-// state when set_enabled failed. (Up to v0.28.6, with MinHook: its status and
-// GetLastError().)
+// Each startup hook's removal (the native init, then the game's DLSS builder,
+// whose hook stays in since 0.31.1: always 0,0); 0,0 = removed or never made
+// (v0.28.6), 1 and the hook's AL state when set_enabled failed. (Up to v0.28.6,
+// with MinHook: its status and GetLastError().)
 std::array<int, 4> disable_result() noexcept;
 // A startup hook target's code gate. AL's chain may already own the entry, so
 // the original head (`head`, entry_head or game_dlss_head) with the live rest.
@@ -53,10 +53,14 @@ bool run(HMODULE, const char *version, const std::filesystem::path &output,
 // right after the game's NGX init, which this transaction observes, the game
 // builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,
 // as on cards DLSS 1 does not support (RTX 50, where the mod was tested).
-// Call before run().
+// Once the transaction has stopped (refused or done) the builder is skipped
+// for the session: no context and no NGX init (0.31.1, devilzavacado-2: the
+// game's init loads the game folder's old DLSS files, which end the game
+// under Proton). Call before run().
 void decline_game_dlss() noexcept;
 // What became of it: 0 not requested, 1 hooked and not called yet, 2 the game
 // made none (DLSS 1 unsupported), 3 declined, 4 kept (unexpected wrapper
-// state), 5 not hooked (the game's code differs).
+// state), 5 not hooked (the game's code differs), 6 skipped (the transaction
+// had stopped).
 unsigned game_dlss() noexcept;
 } // namespace mhw::ngx_startup

@@ -52,6 +52,10 @@ int main() {
     check(line.rfind("{\"event\":\"platform\",\"wine\":false,\"ngx_core_registered\":", 0) == 0,
           "platform: wine false, then the NGX core");
     check(line.ends_with("}\n") && line.find('\n') == line.size() - 1, "platform is one line");
+    check(line.find(",\"cpu\":\"") != std::string::npos && line.find(",\"cpu_threads\":") != std::string::npos &&
+              line.find(",\"cpu_threads\":0,") == std::string::npos &&
+              line.find(",\"cpu_cores\":0,") == std::string::npos,
+          "platform ends with the processor: brand, cores and threads");
     std::printf("%s", line.c_str());
     std::printf("common tests passed\n");
 }

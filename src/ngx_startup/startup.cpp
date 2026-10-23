@@ -41,14 +41,24 @@ constexpr char provider_sha[] = "be6e434a94ca32499515eb62ca0e6c274526055d568d042
 // mod's own NGX must survive: the wrapper is freed as there, without the
 // shutdown, the state the game's own refusals leave (NGX initialized, no
 // wrapper; 0x51c6c28 = 2 or 3, the RTX 50 case).
+// 0.31.1 (devilzavacado-2): once this startup has stopped, refused or done,
+// the builder is skipped, the way it returns early when the game does not run
+// D3D12: no wrapper and no NGX init. The game's own init would load the game
+// folder's old DLSS files, and under Proton they hit a breakpoint and end the
+// game. For the same reason the game's init is skipped when this mod's own
+// NGX init failed (hook(), skipped): the builder takes that as NGX's refusal.
+// All of the game's NGX calls go through the wrapper (clean image), so
+// without one it makes none.
 constexpr unsigned generic_free_rva = 0x2175260;
 using GameDlss = void *(*)(void *);
 using GenericFree = void (*)(void *, std::size_t);
 GameDlss game_dlss_original{};
 GenericFree generic_free{};
 void *game_dlss_target{};
-bool decline_requested{}, game_dlss_hooked{};
+bool decline_requested{};
 std::atomic_uint game_dlss_state{};
+unsigned init_result{};
+bool skipped{};
 // v0.30.0: both hooks join al.hooks chains (AL patches each entry once, with
 // its own thread handling; removal is set_enabled). Both detours run first in
 // their chains (astera::first_in_chain): hook() checks _ReturnAddress() against
@@ -97,6 +107,10 @@ bool free_wrapper(void *wrapper) noexcept {
     }
 }
 void *game_dlss_hook(void *game_device) {
+    if (stopping.load()) {
+        game_dlss_state = 6;
+        return nullptr;
+    }
     pending.fetch_add(1);
     void *wrapper{};
     __try {
@@ -304,6 +318,7 @@ void before(std::uint64_t app, const wchar_t *path, ID3D12Device *d, unsigned ap
              << ",\"runtime_sha256\":\"" << provider_sha
              << "\",\"project_id\":\"956cdd19-7d3c-4660-b664-91c20d2bc9bd\",\"tick\":" << GetTickCount64() << "}\n"
              << std::flush;
+        init_result = result;
         initialized = result == NVSDK_NGX_Result_Success;
         require(initialized, "public-init-failed");
         allowed = capabilities("before_native");
@@ -314,8 +329,9 @@ void before(std::uint64_t app, const wchar_t *path, ID3D12Device *d, unsigned ap
 void after(unsigned result) noexcept {
     native_result = result;
     try {
-        *out << "{\"event\":\"native_return\",\"result\":" << result
-             << ",\"arguments_unchanged\":true,\"result_unchanged\":true,\"tick\":" << GetTickCount64() << "}\n"
+        *out << "{\"event\":\"native_return\",\"result\":" << result << ",\"native_skipped\":" << skipped
+             << ",\"arguments_unchanged\":true,\"result_unchanged\":" << !skipped << ",\"tick\":" << GetTickCount64()
+             << "}\n"
              << std::flush;
         if (initialized) {
             const bool valid = capabilities("after_native");
@@ -331,10 +347,16 @@ unsigned __cdecl hook(std::uint64_t app, const wchar_t *path, ID3D12Device *d, u
     const auto index = count.fetch_add(1);
     unsigned result{};
     const bool observe = index == 0 && !stopping.load();
-    // A reentrant/unexpected call never reinitializes the SDK or changes its result.
+    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    // A reentrant/unexpected call never reinitializes the SDK or changes its
+    // result. The observed one from the game's builder gets this mod's
+    // refusal instead of the game's init when this mod's NGX did not start.
     __try {
-        if (observe) before(app, path, d, api, reinterpret_cast<std::uintptr_t>(_ReturnAddress()));
-        result = original(app, path, d, api);
+        if (observe) before(app, path, d, api, caller);
+        skipped = observe && !initialized && caller == cfg.caller;
+        result = !skipped                        ? original(app, path, d, api)
+                 : NVSDK_NGX_FAILED(init_result) ? init_result
+                                                 : static_cast<unsigned>(NVSDK_NGX_Result_Fail);
         if (observe) after(result);
     } __finally {
         pending.fetch_sub(1);
@@ -350,23 +372,9 @@ bool install(const Config &config, std::ostream &log) {
     log << std::boolalpha;
     require(cfg.runtime.is_absolute() && cfg.data.is_absolute(), "startup-paths");
     mhw::write_platform(log);
-    {
-        // v0.28.5: the provider's path and why its hash is missing, if it is
-        // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
-        const auto path = cfg.runtime / L"nvngx_dlss.dll";
-        const auto digest = projection_binding::file_digest(path.wstring());
-        log << "{\"event\":\"provider_check\",\"path\":" << std::quoted(mhw::log_path(path)) << ",\"stage\":\""
-            << digest.stage << "\",\"error\":" << digest.error << ",\"size\":" << digest.size
-            << ",\"read\":" << digest.read << ",\"matches\":" << (digest.sha == provider_sha) << "}\n"
-            << std::flush;
-        require(digest.sha == provider_sha, "startup-provider-sha256");
-    }
-    require(zero_slots(), "native-init-already-observed");
-    require(!GetModuleHandleW((cfg.runtime / L"nvngx_dlss.dll").c_str()) || shared_provider_verified(),
-            "modern-provider-already-loaded");
-    std::filesystem::create_directories(cfg.data);
-    require(astera::game_hooks_available(), "startup-al-hooks");
     // Before the init hook: the game builds the wrapper right after its init.
+    // First of all (0.31.1): the builder is skipped whenever this startup
+    // stops, also when one of the checks below refuses it.
     if (decline_requested) {
         // The wrapper's builder, constructor and release, and the allocator's
         // free (clean image): otherwise the game's DLSS 1 stays as it is.
@@ -384,11 +392,10 @@ bool install(const Config &config, std::ostream &log) {
         generic_free = reinterpret_cast<GenericFree>(base + generic_free_rva);
         bool declining{};
         if (code) {
-            // Live once AL accepts it; disable() takes it out again either way.
+            // Live once AL accepts it, and left in for the session (disable()).
             game_dlss_handle =
                 chain("mhw_dlss NGX:GameDlss1", game_dlss_head, game_dlss_target,
                       reinterpret_cast<void *>(&game_dlss_hook), reinterpret_cast<void **>(&game_dlss_original));
-            game_dlss_hooked = game_dlss_handle != 0;
             declining = chain_active(game_dlss_handle) && game_dlss_original;
         }
         game_dlss_state = declining ? 1 : 5;
@@ -396,6 +403,22 @@ bool install(const Config &config, std::ostream &log) {
             << ",\"pending_ms\":" << pending_ms << "}\n"
             << std::flush;
     }
+    {
+        // v0.28.5: the provider's path and why its hash is missing, if it is
+        // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
+        const auto path = cfg.runtime / L"nvngx_dlss.dll";
+        const auto digest = projection_binding::file_digest(path.wstring());
+        log << "{\"event\":\"provider_check\",\"path\":" << std::quoted(mhw::log_path(path)) << ",\"stage\":\""
+            << digest.stage << "\",\"error\":" << digest.error << ",\"size\":" << digest.size
+            << ",\"read\":" << digest.read << ",\"matches\":" << (digest.sha == provider_sha) << "}\n"
+            << std::flush;
+        require(digest.sha == provider_sha, "startup-provider-sha256");
+    }
+    require(zero_slots(), "native-init-already-observed");
+    require(!GetModuleHandleW((cfg.runtime / L"nvngx_dlss.dll").c_str()) || shared_provider_verified(),
+            "modern-provider-already-loaded");
+    std::filesystem::create_directories(cfg.data);
+    require(astera::game_hooks_available(), "startup-al-hooks");
     // Write before enable: callback events may occur immediately after enabling.
     // hook_service: "minhook" was possible up to v0.28.6; the log tools read it.
     log << "{\"event\":\"installing\",\"tick\":" << GetTickCount64()
@@ -425,13 +448,12 @@ bool done() noexcept {
 }
 // v0.28.6: why a removal failed (closed beta tifa-2: hook_disabled false on one
 // PC only, with SharpPluginLoader installed).
-// Both removals are tried, so each pair describes its own hook.
+// The builder's hook stays in since 0.31.1 (skipping it from here on), so its
+// pair stays 0,0.
 std::array<int, 4> disable_results{};
 bool disable() noexcept {
     stopping = true;
-    const bool entry = remove(installed, entry_handle, &disable_results[0]);
-    const bool builder = remove(game_dlss_hooked, game_dlss_handle, &disable_results[2]);
-    return entry && builder; // the continuations stay valid; a suspended entry may still forward
+    return remove(installed, entry_handle, &disable_results[0]); // a suspended entry may still forward
 }
 std::array<int, 4> disable_result() noexcept {
     return disable_results;

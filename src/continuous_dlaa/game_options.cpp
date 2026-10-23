@@ -429,7 +429,8 @@ void write(std::ostream &out) {
     // The game's own DLSS 1 (0x23842a0 at cD3DRender::initForD3D12): its NGX
     // context at backend +0x42700, or why it has none (0x51c6c28: 1 NGX
     // init, 2 SuperSampling, 3 ImageSignalProcessing unavailable), and this
-    // mod's decline of it (ngx_startup::game_dlss(): 2 none made, 3 declined).
+    // mod's decline of it (ngx_startup::game_dlss(): 2 none made, 3 declined,
+    // 6 skipped).
     std::uintptr_t backend{}, context{};
     unsigned game_ngx{};
     if (image && pb::read(image + layout::image::d3d_render, backend) && backend)
