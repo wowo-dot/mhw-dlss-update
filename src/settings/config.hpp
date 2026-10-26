@@ -44,6 +44,8 @@ namespace mhw::settings {
 //                           ; it (diagnostic; dlss_sdk/options.hpp)
 //   chaos = off             ; on: random 0-500 ms delays before start-up steps, to
 //                           ; show start-up races (diagnostic; perf/chaos.hpp)
+//   full_pixel_jitter = off ; on: the camera jitter doubled to span whole render
+//                           ; pixels while DLSS draws (diagnostic; dlss_sdk/options.hpp)
 //   dlss_preset = k         ; default, e, f (CNN), j, k (transformer), l, m (second
 //                           ; transformer): the DLSS model (diagnostic; dlss_sdk/options.hpp)
 //
@@ -85,6 +87,7 @@ struct Config {
     bool gpu_timing{};                   // gpu_timing = on (diagnostic; not in the shipped ini)
     bool auto_exposure = true;           // auto_exposure = off (diagnostic; not in the shipped ini)
     bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
+    bool full_pixel_jitter{};            // full_pixel_jitter = on (diagnostic; not in the shipped ini)
     unsigned dlss_preset = 11;           // dlss_preset: the NGX preset value (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
@@ -240,6 +243,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 c.dlss_preset = found->second;
             else
                 c.warnings.push_back(where + "dlss_preset must be default, e, f, j, k, l or m");
+        } else if (key == "full_pixel_jitter") {
+            if (value == "on" || value == "off")
+                c.full_pixel_jitter = value == "on";
+            else
+                c.warnings.push_back(where + "full_pixel_jitter must be on or off");
         } else if (key == "gpu_timing" || key == "auto_exposure" || key == "chaos") {
             if (value == "on" || value == "off")
                 (key == "gpu_timing" ? c.gpu_timing : key == "chaos" ? c.chaos : c.auto_exposure) = value == "on";

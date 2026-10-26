@@ -95,6 +95,13 @@ bool projection_before(const NativeFrame &f) {
         return false;
     }
     ++projection_viewports[(f.call.gpr[1] - s.camera - 0x50) / 0x1a0];
+    if (dlss_sdk::full_pixel_jitter.load(std::memory_order_relaxed)) {
+        // Diagnostic (options.hpp): the table's value doubled covers the whole pixel.
+        const auto x = 2.F * std::bit_cast<float>(static_cast<std::uint32_t>(projection.candidate)),
+                   y = 2.F * std::bit_cast<float>(static_cast<std::uint32_t>(projection.candidate >> 32));
+        projection.candidate =
+            std::uint64_t(std::bit_cast<std::uint32_t>(x)) | (std::uint64_t(std::bit_cast<std::uint32_t>(y)) << 32);
+    }
     if (!reconstruction.jitter()) {
         projection.candidate = 0;
         ++zero_jitter_projections;

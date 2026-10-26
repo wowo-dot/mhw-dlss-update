@@ -167,7 +167,8 @@ int main() {
                   "gpu_timing, auto_exposure and chaos parse");
             const auto bad = a::parse_config("chaos = maybe\n", folder);
             check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
-            check(defaults.dlss_preset == 11, "preset K by default");
+            check(defaults.dlss_preset == 11 && !defaults.full_pixel_jitter, "preset K, the game's jitter by default");
+            check(a::parse_config("full_pixel_jitter = on\n", folder).full_pixel_jitter, "full_pixel_jitter = on");
             check(a::parse_config("dlss_preset = E\n", folder).dlss_preset == 5 &&
                       a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = m\n", folder).dlss_preset == 13,

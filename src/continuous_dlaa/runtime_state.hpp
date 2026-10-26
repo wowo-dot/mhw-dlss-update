@@ -47,6 +47,7 @@
 #include "../perf/chaos.hpp"
 #include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"
+#include "../dlss_sdk/options.hpp"
 #include "../gpu_memory/budget.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"

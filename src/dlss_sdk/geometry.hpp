@@ -93,8 +93,9 @@ struct PixelJitter {
 inline bool projection_jitter(const Geometry &g, PixelJitter native, float viewport_width, float viewport_height,
                               PixelJitter &out) noexcept {
     out = {};
-    if (!valid_geometry(g) || !std::isfinite(native.x) || !std::isfinite(native.y) || std::abs(native.x) > .5F ||
-        std::abs(native.y) > .5F || !std::isfinite(viewport_width) || !std::isfinite(viewport_height))
+    // The game's table spans -0.5..0.5; full_pixel_jitter doubles it (options.hpp).
+    if (!valid_geometry(g) || !std::isfinite(native.x) || !std::isfinite(native.y) || std::abs(native.x) > 1.F ||
+        std::abs(native.y) > 1.F || !std::isfinite(viewport_width) || !std::isfinite(viewport_height))
         return false;
     const bool render = viewport_width == g.render.width && viewport_height == g.render.height;
     const bool allocation = viewport_width == g.allocation.width && viewport_height == g.allocation.height;
