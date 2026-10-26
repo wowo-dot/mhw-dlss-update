@@ -6,6 +6,7 @@
 #include "../common/platform.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
+#include "../perf/chaos.hpp"
 #include <nvsdk_ngx.h>
 #include <dxgi.h>
 #include <psapi.h>
@@ -306,6 +307,7 @@ void before(std::uint64_t app, const wchar_t *path, ID3D12Device *d, unsigned ap
         }
         const auto luid = d->GetAdapterLuid();
         device = d;
+        perf::chaos::delay("ngx_init"); // chaos = on (diagnostic)
         const auto search = cfg.runtime.wstring();
         const wchar_t *paths[]{search.c_str()};
         NVSDK_NGX_FeatureCommonInfo info{};

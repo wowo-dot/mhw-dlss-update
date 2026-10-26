@@ -185,6 +185,8 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         // scale is taken: its start-up check needs the game's scale at 1.
         // Without them DLSS runs as before, over the player's own settings.
         std::string why;
+        // chaos = on (diagnostic): a random delay before each step.
+        perf::chaos::delay("options");
         const bool options = game_options::install(image, why);
         texture_bias::observe(image);
         if (!off_at_start) {
@@ -195,12 +197,15 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
                 throw std::runtime_error("fidelityfx-cas");
             if (options) {
                 game_options::take_over();
+                perf::chaos::delay("take_over");
                 if (!wait_for([&] { return render_resolution::full_scale(image); }, 2000))
                     throw std::runtime_error("the game did not apply resolution scaling High and CAS Off");
             }
         }
+        perf::chaos::delay("sizing");
         if (!render_resolution::install(image, dlss_sdk::requested_scale(configured_mode), reason, off_at_start))
             throw std::runtime_error(reason);
+        perf::chaos::delay("observer");
         if (!obs::install(device, pb::system_method, reason, render_resolution::observe_viewports))
             throw std::runtime_error(reason);
         if (!sr::prepare(cfg, runtime.width, runtime.height, render_width(), render_height(), reason))
@@ -223,6 +228,7 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         // Each hook is live as it goes in (al.hooks): the player's Off at start
         // must hold before activation can own a camera frame.
         activation::yield(off_at_start);
+        perf::chaos::delay("activation");
         if (!activation::prepare(image, cfg.renderer, reason)) throw std::runtime_error(reason);
         obs::begin();
         if (off_at_start)

@@ -393,11 +393,15 @@ void dispatch_call(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, std:
         Lock lock;
         resolve_telemetry.begin();
     }
+    // gpu_timing = on (diagnostic): timestamps around this mod's work here.
+    if (candidate) perf::gpu_timing::start(list);
     const bool admitted = dispatch_before(list, x, y, z, caller);
+    if (admitted) perf::gpu_timing::mark(list, perf::gpu_timing::inputs);
     const auto result = dispatch_resolve(
         admitted, [&] { return replace_scoped(list); },
         [&] { reinterpret_cast<DispatchFn>(originals[9])(list, x, y, z); });
     if (candidate) {
+        perf::gpu_timing::finish(list, result.claimed && result.resolve.outcome == ResolveOutcome::reconstructed);
         Lock lock;
         resolve_telemetry.end(result);
     }

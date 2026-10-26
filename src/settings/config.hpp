@@ -35,6 +35,12 @@ namespace mhw::settings {
 //                           ; DLSS draws (continuous_dlaa/texture_bias.hpp)
 //   texture_bias_ab = off   ; on: the bias alternates every 10 s with the game's
 //                           ; own, to compare in one launch (diagnostic)
+//   gpu_timing = off        ; on: GPU timestamps around this mod's work in the
+//                           ; TAA slot ("gpu_timing" events; perf/gpu_timing.hpp)
+//   auto_exposure = on      ; off: DLSS without its own exposure estimate, to time
+//                           ; it (diagnostic; dlss_sdk/options.hpp)
+//   chaos = off             ; on: random 0-500 ms delays before start-up steps, to
+//                           ; show start-up races (diagnostic; perf/chaos.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -71,6 +77,9 @@ struct Config {
     bool hook_timing{};                  // hook_timing = on (diagnostic; not in the shipped ini)
     bool texture_bias = true;            // texture_bias = off: no mip bias
     bool texture_bias_ab{};              // texture_bias_ab = on (diagnostic; not in the shipped ini)
+    bool gpu_timing{};                   // gpu_timing = on (diagnostic; not in the shipped ini)
+    bool auto_exposure = true;           // auto_exposure = off (diagnostic; not in the shipped ini)
+    bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -214,6 +223,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "texture_bias" || key == "texture_bias_ab") {
             if (value == "on" || value == "off")
                 (key == "texture_bias" ? c.texture_bias : c.texture_bias_ab) = value == "on";
+            else
+                c.warnings.push_back(where + key + " must be on or off");
+        } else if (key == "gpu_timing" || key == "auto_exposure" || key == "chaos") {
+            if (value == "on" || value == "off")
+                (key == "gpu_timing" ? c.gpu_timing : key == "chaos" ? c.chaos : c.auto_exposure) = value == "on";
             else
                 c.warnings.push_back(where + key + " must be on or off");
         } else if (key == "full_post") {

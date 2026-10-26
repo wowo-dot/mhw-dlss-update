@@ -14,9 +14,12 @@
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
 #include "../perf/frame_stats.hpp"
+#include "../perf/chaos.hpp"
+#include "../perf/gpu_timing.hpp"
 #include "../perf/hook_timing.hpp"
 #include "../perf/sampler.hpp"
 #include "../perf/toggles.hpp"
+#include "../dlss_sdk/options.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../render_resolution/runtime.hpp"
 #include "../reflex/temporal_coexistence.hpp"
@@ -97,6 +100,10 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     // profile = on: the stack sampler too (perf::sample_profile; started
     // with the frame windows).
     mhw::perf::toggles.store(mhw::perf::all_toggles | (config.profile ? mhw::perf::sample_profile : 0U));
+    // 0.31.1 diagnostics, before the game's NGX start-up and the arm.
+    mhw::perf::gpu_timing::enabled = config.gpu_timing;
+    mhw::perf::chaos::enabled = config.chaos;
+    mhw::dlss_sdk::auto_exposure = config.auto_exposure;
     reflex_requested.store(config.reflex == mhw::settings::ReflexMode::off     ? 0U
                            : config.reflex == mhw::settings::ReflexMode::boost ? 2U
                                                                                : 1U);
@@ -166,7 +173,8 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"frame_generation_plugin\":" << quoted(config.generation_plugin ? "auto" : "off")
         << ",\"profile\":" << config.profile << ",\"perf_ab\":" << config.perf_ab
         << ",\"hook_timing\":" << config.hook_timing << ",\"texture_bias\":" << config.texture_bias
-        << ",\"texture_bias_ab\":" << config.texture_bias_ab
+        << ",\"texture_bias_ab\":" << config.texture_bias_ab << ",\"gpu_timing\":" << config.gpu_timing
+        << ",\"auto_exposure\":" << config.auto_exposure << ",\"chaos\":" << config.chaos
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
@@ -281,6 +289,7 @@ bool wait_until_qualified(std::uint64_t wait_start) {
         try_texture_bias();
         if (GetTickCount64() - stable_since < 3000) continue;
         not_ready.clear();
+        mhw::perf::chaos::delay("ready");
         if (mhw::reflex::temporal::ready(not_ready)) {
             arm_now = true;
             break;
@@ -540,6 +549,7 @@ void run_session() {
             mhw::reflex::temporal::summary(log);
             log << "}\n" << std::flush;
             mhw::perf::hook_timing::write(log, frames.completed);
+            mhw::perf::gpu_timing::write(log);
             log_fg_buffers(log, "status");
             log_frames(log, "armed");
             log_latency(log);
@@ -665,6 +675,7 @@ int fail(const std::exception &e) noexcept {
                 << ",\"sdk_retained\":true,\"presentation_routed\":" << presentation->snapshot().routing
                 << ",\"fg_off_requested\":true}\n"
                 << std::flush;
+            mhw::perf::chaos::write(log);
         } catch (...) {}
         return 3;
     }
@@ -704,7 +715,9 @@ DWORD WINAPI worker(void *) noexcept {
         if (wait_for_swap_chain()) {
             const auto wait_start = start_frames(session);
             if (wait_until_qualified(wait_start)) {
+                mhw::perf::chaos::delay("arm");
                 arm_dlss();
+                mhw::perf::chaos::write(log);
                 arm_reflex();
                 arm_frame_generation();
                 run_session();

@@ -43,6 +43,8 @@
 #include "../projection_binding/memory.hpp"
 #include "../game_memory/readable_region.hpp"
 #include "../perf/hook_timing.hpp"
+#include "../perf/gpu_timing.hpp"
+#include "../perf/chaos.hpp"
 #include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../gpu_memory/budget.hpp"

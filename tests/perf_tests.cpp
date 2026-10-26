@@ -11,6 +11,9 @@
 #include <sstream>
 #include <string>
 #include "../src/perf/hook_timing.hpp"
+#include "../src/perf/gpu_timing.hpp"
+#include "../src/perf/chaos.hpp"
+#include <algorithm>
 #include "../src/perf/in_flight.hpp"
 #include "../src/scaled_temporal/watch_filter.hpp"
 namespace mhw::projection_binding {
@@ -421,7 +424,32 @@ void in_flight_tests() {
 }
 } // namespace
 
+// 0.31.1: the GPU timing's segments and the chaos delays' range.
+void gpu_timing_tests() {
+    namespace g = mhw::perf::gpu_timing;
+    std::array<double, g::segment_count> us{};
+    check(g::segments({1000, 2000, 2500, 12500, 13000}, 10'000'000, us) && us[0] == 100 && us[1] == 50 &&
+              us[2] == 1000 && us[3] == 50,
+          "gpu_timing: four segments in microseconds");
+    check(!g::segments({1000, 900, 2500, 12500, 13000}, 10'000'000, us), "gpu_timing: decreasing times refused");
+    check(!g::segments({0, 1, 2, 3, 2'000'000}, 10'000'000, us), "gpu_timing: spans over 100 ms refused");
+    check(!g::segments({0, 1, 2, 3, 4}, 0, us), "gpu_timing: no frequency refused");
+}
+void chaos_tests() {
+    namespace c = mhw::perf::chaos;
+    std::uint64_t state = 1;
+    unsigned low = c::max_ms, high = 0;
+    for (unsigned i = 0; i < 10000; ++i) {
+        const auto ms = c::next(state);
+        low = std::min(low, ms);
+        high = std::max(high, ms);
+    }
+    check(state != 0 && low <= 10 && high >= c::max_ms - 10 && high <= c::max_ms, "chaos: delays spread over 0-500 ms");
+}
+
 int main() {
+    gpu_timing_tests();
+    chaos_tests();
     in_flight_tests();
     watch_filter_tests();
     hook_timing_tests();

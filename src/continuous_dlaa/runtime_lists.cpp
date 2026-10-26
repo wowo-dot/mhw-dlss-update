@@ -198,7 +198,11 @@ HRESULT WINAPI reset_hook(ID3D12GraphicsCommandList *list, ID3D12CommandAllocato
         lease = {};
     }
     if (!sr::reset(list, l->generation)) fail(42);
-    if (fence) sr::collect(fence->GetCompletedValue());
+    if (fence) {
+        const auto completed = fence->GetCompletedValue();
+        sr::collect(completed);
+        perf::gpu_timing::collect(completed);
+    }
     if (!recording_pins.reset(list, l->generation)) fail(16);
     if (!unfiltered_lifetime.reset(list, l->generation)) fail(35);
     if (fence && !fault.load()) {
@@ -312,7 +316,10 @@ void WINAPI execute_hook(ID3D12CommandQueue *queue, UINT count, ID3D12CommandLis
                     value = ++signal_value;
                     last_queue = queue;
                     signal_requested = true;
-                    if (selected) find(selected_list)->submitted = true;
+                    if (selected) {
+                        find(selected_list)->submitted = true;
+                        perf::gpu_timing::submitted(selected_list, value, queue);
+                    }
                     if (route_selected && !selected) ++route_only_signals;
                 }
             }

@@ -3,7 +3,9 @@
 #include "../temporal_present/output.hpp"
 #include "../temporal_gpu_inputs/shader.hpp"
 #include "../perf/toggles.hpp"
+#include "../perf/gpu_timing.hpp"
 #include "../astera/astera_hooks.hpp"
+#include "options.hpp"
 #include <nvsdk_ngx_helpers.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -243,7 +245,9 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
         }
         NVSDK_NGX_DLSS_Create_Params create{};
         create.Feature = {w, h, ow, oh, quality};
-        create.InFeatureCreateFlags = 75;
+        // HDR, low-resolution motion, inverted depth, and auto exposure
+        // unless the diagnostic turned it off (options.hpp).
+        create.InFeatureCreateFlags = auto_exposure.load() ? 75 : 11;
         p.parameters->Set(preset, static_cast<unsigned>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
         p.create_result = NGX_D3D12_CREATE_DLSS_EXT(p.create_list.Get(), 1, 1, &p.feature, p.parameters, &create);
         require(p.create_result == 1 && p.feature, "inline CreateFeature");
@@ -346,8 +350,10 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
                 order.UAV.pResource = p.output.Get();
                 list->ResourceBarrier(1, &order);
             }
+            perf::gpu_timing::mark(list, perf::gpu_timing::converted);
             p.evaluate_result = NGX_D3D12_EVALUATE_DLSS_EXT(list, p.feature, p.parameters, &eval);
             require(p.evaluate_result == 1, "inline EvaluateFeature");
+            perf::gpu_timing::mark(list, perf::gpu_timing::evaluated);
             transition(list, p.output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
             p.handoff->record(list);
             p.copied = true;

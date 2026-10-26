@@ -157,6 +157,17 @@ int main() {
             const auto bad = a::parse_config("texture_bias = sharp\n", folder);
             check(bad.texture_bias && bad.warnings.size() == 1, "a bad texture_bias value warns and stays on");
         }
+        {
+            // 0.31.1 diagnostics: off, on and off by default.
+            const auto defaults = a::parse_config("", folder);
+            check(!defaults.gpu_timing && defaults.auto_exposure && !defaults.chaos,
+                  "gpu_timing and chaos off, auto exposure on by default");
+            const auto set = a::parse_config("gpu_timing = on\nauto_exposure = OFF\nchaos = on\n", folder);
+            check(set.gpu_timing && !set.auto_exposure && set.chaos && set.warnings.empty(),
+                  "gpu_timing, auto_exposure and chaos parse");
+            const auto bad = a::parse_config("chaos = maybe\n", folder);
+            check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
+        }
         check(a::parse_config("", folder).generation_plugin &&
                   a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,
               "DLSS-G loads by default");
