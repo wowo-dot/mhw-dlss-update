@@ -1,8 +1,11 @@
 #pragma once
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "../dlss_sdk/geometry.hpp"
 
@@ -41,6 +44,8 @@ namespace mhw::settings {
 //                           ; it (diagnostic; dlss_sdk/options.hpp)
 //   chaos = off             ; on: random 0-500 ms delays before start-up steps, to
 //                           ; show start-up races (diagnostic; perf/chaos.hpp)
+//   dlss_preset = k         ; default, e, f (CNN), j, k (transformer), l, m (second
+//                           ; transformer): the DLSS model (diagnostic; dlss_sdk/options.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -80,6 +85,7 @@ struct Config {
     bool gpu_timing{};                   // gpu_timing = on (diagnostic; not in the shipped ini)
     bool auto_exposure = true;           // auto_exposure = off (diagnostic; not in the shipped ini)
     bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
+    unsigned dlss_preset = 11;           // dlss_preset: the NGX preset value (diagnostic; not in the shipped ini)
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -225,6 +231,15 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 (key == "texture_bias" ? c.texture_bias : c.texture_bias_ab) = value == "on";
             else
                 c.warnings.push_back(where + key + " must be on or off");
+        } else if (key == "dlss_preset") {
+            constexpr std::pair<std::string_view, unsigned> presets[]{{"default", 0}, {"e", 5},  {"f", 6}, {"j", 10},
+                                                                      {"k", 11},      {"l", 12}, {"m", 13}};
+            const auto found =
+                std::find_if(std::begin(presets), std::end(presets), [&](const auto &p) { return p.first == value; });
+            if (found != std::end(presets))
+                c.dlss_preset = found->second;
+            else
+                c.warnings.push_back(where + "dlss_preset must be default, e, f, j, k, l or m");
         } else if (key == "gpu_timing" || key == "auto_exposure" || key == "chaos") {
             if (value == "on" || value == "off")
                 (key == "gpu_timing" ? c.gpu_timing : key == "chaos" ? c.chaos : c.auto_exposure) = value == "on";

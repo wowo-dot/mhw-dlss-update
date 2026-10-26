@@ -248,7 +248,7 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
         // HDR, low-resolution motion, inverted depth, and auto exposure
         // unless the diagnostic turned it off (options.hpp).
         create.InFeatureCreateFlags = auto_exposure.load() ? 75 : 11;
-        p.parameters->Set(preset, static_cast<unsigned>(NVSDK_NGX_DLSS_Hint_Render_Preset_K));
+        p.parameters->Set(preset, render_preset.load()); // K unless the diagnostic chose (options.hpp)
         p.create_result = NGX_D3D12_CREATE_DLSS_EXT(p.create_list.Get(), 1, 1, &p.feature, p.parameters, &create);
         require(p.create_result == 1 && p.feature, "inline CreateFeature");
         hr(p.create_list->Close(), "inline create close");

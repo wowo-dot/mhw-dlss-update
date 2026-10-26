@@ -167,6 +167,13 @@ int main() {
                   "gpu_timing, auto_exposure and chaos parse");
             const auto bad = a::parse_config("chaos = maybe\n", folder);
             check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
+            check(defaults.dlss_preset == 11, "preset K by default");
+            check(a::parse_config("dlss_preset = E\n", folder).dlss_preset == 5 &&
+                      a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
+                      a::parse_config("dlss_preset = m\n", folder).dlss_preset == 13,
+                  "dlss_preset parses E, default and M");
+            const auto wrong = a::parse_config("dlss_preset = z\n", folder);
+            check(wrong.dlss_preset == 11 && wrong.warnings.size() == 1, "a bad preset warns and stays K");
         }
         check(a::parse_config("", folder).generation_plugin &&
                   a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,

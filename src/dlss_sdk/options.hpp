@@ -9,4 +9,10 @@ namespace mhw::dlss_sdk {
 // texture, and the game's colour there is before tone mapping, so the image
 // may suffer: it is for timing, not for play.
 inline std::atomic<bool> auto_exposure{true};
+// The DLSS model preset for every mode (NVSDK_NGX_DLSS_Hint_Render_Preset_*:
+// 0 NVIDIA's default, 5 E and 6 F the CNN model, 10 J and 11 K the
+// transformer, 12 L and 13 M the second transformer), read when the feature
+// is created. K by default; the ini's dlss_preset (0.31.1, diagnostic) picks
+// another to time it.
+inline std::atomic<unsigned> render_preset{11};
 } // namespace mhw::dlss_sdk
