@@ -55,6 +55,9 @@ namespace mhw::settings {
 //   fg_wait = free          ; while DLSS-G is loaded the game's per-frame wait: free (Reflex
 //                           ; alone paces), chain (its latency waitable, before 0.32.0), ab
 //                           ; (the two every 10 s); diagnostic; reflex/presentation.hpp
+//   fg_queue = game         ; while DLSS-G is loaded the game's present waits for its last
+//                           ; frame on the GPU (game), the frame before (deep), or the two
+//                           ; every 10 s (ab); diagnostic; reflex/presentation.hpp
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -96,6 +99,7 @@ struct Config {
     bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
     bool jitter_ab{};                    // jitter_ab = on (diagnostic; not in the shipped ini)
     unsigned fg_wait{};                  // fg_wait: 0 free, 1 chain, 2 ab (reflex::GameWait; diagnostic)
+    unsigned fg_queue{};                 // fg_queue: 0 game, 1 deep, 2 ab (reflex::GameQueue; diagnostic)
     bool dlss_cnn{};                     // dlss_model = cnn
     unsigned dlss_preset = 11;           // the transformer's NGX preset: 0 recommended, 10 J, 11 K, 12 L, 13 M
     unsigned sharpness{};                // NVSharpen, 0 (off) to 100 %
@@ -304,6 +308,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 c.fg_wait = value == "free" ? 0U : value == "chain" ? 1U : 2U;
             else
                 c.warnings.push_back(where + "fg_wait must be free, chain or ab");
+        } else if (key == "fg_queue") {
+            if (value == "game" || value == "deep" || value == "ab")
+                c.fg_queue = value == "game" ? 0U : value == "deep" ? 1U : 2U;
+            else
+                c.warnings.push_back(where + "fg_queue must be game, deep or ab");
         } else if (key == "jitter_ab") {
             if (value == "on" || value == "off")
                 c.jitter_ab = value == "on";

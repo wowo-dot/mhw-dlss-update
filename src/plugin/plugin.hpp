@@ -148,6 +148,7 @@ void confirm_cancel() noexcept;
 // generation.cpp
 bool game_chain_qualified() noexcept;
 std::uintptr_t game_waitable_slot() noexcept;
+bool game_frame_fences(std::uintptr_t &index, std::uintptr_t &values) noexcept;
 bool game_resize_request() noexcept;
 // A switch in progress: asked at, game requests made, the presentation's
 // outcome count before it, and what was asked.

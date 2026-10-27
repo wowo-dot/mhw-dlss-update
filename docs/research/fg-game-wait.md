@@ -84,7 +84,38 @@ DLSS-G's workload on the game's critical path, about 1.5 ms here: the normal
 cost of frame generation meeting the game's short frame queue, not the mod's
 work.
 
-A candidate for after 0.32.0, unproven: while DLSS-G is loaded, let
-`present12` wait for the frame two back. The fence ring has three slots, so
-the slot being reused would still be complete, and Reflex bounds the
-latency; it changes the game's own pacing and needs reversing to prove safe.
+PresentMon (fgcap2) points the same way: at Performance CNN and 2x the GPU
+is busy 3.7 ms of each 5.7 ms real frame (at DLAA 5.3 of 5.7), so the
+frame waits on something other than GPU work.
+
+## The experiment: one more frame in flight (dev.19, `fg_queue`)
+
+What a deeper queue would touch (clean image, IDA):
+
+- Main:Update (0x1af2b60) begins the frame (sub_142293280: the frame
+  counter, `frame % 3`, `frame & 3`, the parity, then the backend's begin
+  sub_1423A2B50) and ends it with endFrame and present (sub_1422980B0) on the
+  same thread, so the next frame begins only after the present's wait.
+- The backend's begin increments the index and resets the command
+  allocators for `index % 3` (`MAX_INFLIGHT_COUNT`, three sets);
+  `mTempDynamicBuffer` is three frames' worth (sRender +0x1F420, picked by
+  `frame % 3`); the per-frame constant arena has three slots and, in mode 2
+  (this machine: one resource for the CPU and the GPU), no copy; the
+  deferred releases cycle four lists.
+- With the present waiting for the frame before its last, the next frame
+  reuses the slots of the frame three back, which that wait has completed.
+  Arena modes 0 and 1 copy at the next frame begin, which a deeper queue
+  would race: refused.
+- Not yet checked: per-frame CPU writes in two-deep (parity) buffers the GPU
+  reads, and CPU reads of GPU results that expect the last frame complete
+  (the frame counter has about 80 readers).
+
+`reflex::GameQueue` (ini `fg_queue`, diagnostic, `game` by default): `deep`
+makes the next present wait for the frame before its last while DLSS-G paces
+the chain, by replacing, at the game's Present, the fence value the next
+present waits on (this frame's, `values[index % 3]`) with the last frame's.
+Only when the index follows on by one and the value grew (`queue_follows`),
+so the wait never reaches further back. Gated: endFrame12's store, present12's
+wait, the index increment, the endFrame/present pair, Main:Update's two calls.
+`ab` alternates every 10 s; the frame heartbeat logs `game_queue` (phase,
+rewrites, refusals, present intervals per phase).

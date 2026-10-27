@@ -186,6 +186,10 @@ Session open_log(const std::filesystem::path &dll) {
         << quoted(config.fg_wait == 1   ? "chain"
                   : config.fg_wait == 2 ? "ab"
                                         : "free")
+        << ",\"fg_queue\":"
+        << quoted(config.fg_queue == 1   ? "deep"
+                  : config.fg_queue == 2 ? "ab"
+                                         : "game")
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
@@ -414,8 +418,15 @@ void arm_frame_generation() {
         static_assert(unsigned(mhw::reflex::GameWait::free) == 0 && unsigned(mhw::reflex::GameWait::chain) == 1 &&
                       unsigned(mhw::reflex::GameWait::ab) == 2);
         presentation->game_wait(static_cast<mhw::reflex::GameWait>(config.fg_wait));
+        // The ini's fg_queue numbers GameQueue's values (diagnostic).
+        static_assert(unsigned(mhw::reflex::GameQueue::game) == 0 && unsigned(mhw::reflex::GameQueue::deep) == 1 &&
+                      unsigned(mhw::reflex::GameQueue::ab) == 2);
+        std::uintptr_t fence_index{}, fence_values{};
+        const bool fences = game_chain_ready && config.fg_queue && game_frame_fences(fence_index, fence_values);
+        if (fences) presentation->frame_fences(fence_index, fence_values);
+        presentation->game_queue(static_cast<mhw::reflex::GameQueue>(config.fg_queue));
         log << "{\"event\":\"fg_switch_ready\",\"game_chain\":" << game_chain_ready
-            << ",\"identity\":" << presentation->snapshot().identity << "}\n"
+            << ",\"identity\":" << presentation->snapshot().identity << ",\"frame_fences\":" << fences << "}\n"
             << std::flush;
         if (!mhw::continuous_dlaa::dlss_off() && fg_loaded) mhw::frame_generation::game::arm(true);
         // DLSS-G's state is read on the present thread (Streamline
@@ -608,6 +619,11 @@ void run_session() {
                 << stats.wait_frames[1] << ',' << stats.wait_us[1] << "],\"present\":[[" << stats.present_calls[0]
                 << ',' << stats.present_us[0] << "],[" << stats.present_calls[1] << ',' << stats.present_us[1]
                 << "]]}"
+                // fg_queue (diagnostic): per queue phase, present intervals timed.
+                << ",\"game_queue\":{\"phase\":" << stats.queue_phase << ",\"rewrites\":" << stats.queue_rewrites
+                << ",\"refusals\":" << stats.queue_refusals << ",\"game\":[" << stats.queue_frames[0] << ','
+                << stats.queue_us[0] << "],\"deep\":[" << stats.queue_frames[1] << ',' << stats.queue_us[1]
+                << "]}"
                 // The phase is (tick_ms / 10000) % 2: this pair lines PresentMon's
                 // QPC times (--qpc_time) up with it.
                 << ",\"clock\":{\"qpc\":" << clock_qpc.QuadPart << ",\"tick_ms\":" << clock_tick

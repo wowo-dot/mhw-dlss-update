@@ -77,6 +77,25 @@ bool replace_slot_handle(std::uintptr_t slot, HANDLE expected, HANDLE value) noe
         return false;
     }
 }
+// The game's frame index and fence values (frame_fences()), the same way.
+bool slot_value(std::uintptr_t slot, std::uint64_t &out) noexcept {
+    if (!slot || slot % alignof(std::uint64_t)) return false;
+    __try {
+        out = *reinterpret_cast<const volatile std::uint64_t *>(slot);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+bool replace_slot_value(std::uintptr_t slot, std::uint64_t expected, std::uint64_t value) noexcept {
+    if (!slot || slot % alignof(std::uint64_t)) return false;
+    __try {
+        return InterlockedCompareExchange64(reinterpret_cast<volatile LONG64 *>(slot), static_cast<LONG64>(value),
+                                            static_cast<LONG64>(expected)) == static_cast<LONG64>(expected);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 std::atomic<Presentation::State *> dispatch{};
 // AL: where AL stores each detour's continuation (see astera_hooks.hpp).
 std::array<void *, Presentation::hook_capacity> chain_next{};
@@ -283,6 +302,57 @@ struct Presentation::State {
         ++stats.present_calls[stats.wait_phase];
         stats.present_us[stats.wait_phase] +=
             static_cast<std::uint64_t>((now.QuadPart - began) * 1000000 / frequency.QuadPart);
+    }
+    // 0.32.0 diagnostic (game_queue(), fg-game-wait.md). The game's present
+    // waits until the frame fence reaches the value kept for frame index - 1
+    // (values[(index + 2) % 3]); endFrame12 stores frame index's value at
+    // values[index % 3] just before. Deep: at this present the value the next
+    // present waits on (this frame's) becomes the last frame's, kept from the
+    // last present, so the next present waits for the frame before its last.
+    // Only when the index follows on by one and the value grows; a second
+    // present in the same frame changes nothing (its slot is already
+    // replaced), so the wait never reaches further back.
+    std::atomic<GameQueue> queue_mode{GameQueue::game};
+    std::uintptr_t fence_index{}, fence_values{};
+    std::uint64_t queue_index{}, queue_value{}, queue_last{};
+    void queue_present() noexcept {
+        if (!fence_index || !fence_values) return;
+        LARGE_INTEGER now{}, frequency{};
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&frequency);
+        const bool paced = contract == PresentationContract::sdk_paced;
+        std::uint64_t index{}, value{};
+        if (!slot_value(fence_index, index)) return;
+        if (index == queue_index) return;
+        if (paced && queue_last) {
+            const auto us = static_cast<std::uint64_t>((now.QuadPart - static_cast<LONGLONG>(queue_last)) * 1000000 /
+                                                       frequency.QuadPart);
+            if (us < 1000000) {
+                ++stats.queue_frames[stats.queue_phase];
+                stats.queue_us[stats.queue_phase] += us;
+            }
+        }
+        queue_last = paced ? static_cast<std::uint64_t>(now.QuadPart) : 0;
+        const auto slot = fence_values + 8 * (index % 3);
+        if (!slot_value(slot, value)) {
+            queue_index = 0;
+            stats.queue_phase = 0;
+            return;
+        }
+        const auto mode = queue_mode.load(std::memory_order_relaxed);
+        const bool deep =
+            paced && (mode == GameQueue::deep || (mode == GameQueue::ab && (GetTickCount64() / 10000) % 2));
+        unsigned phase = 0;
+        if (deep) {
+            if (queue_follows(queue_index, queue_value, index, value) && replace_slot_value(slot, value, queue_value)) {
+                phase = 1;
+                ++stats.queue_rewrites;
+            } else
+                ++stats.queue_refusals;
+        }
+        stats.queue_phase = phase;
+        queue_index = index;
+        queue_value = value;
     }
     // Before a switch (the game's resize, route mutex held): the chain's own
     // waitable back in the slot, as switch_chain() expects.
@@ -965,6 +1035,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain *self, UINT interval, UINT
             if (!(flags & DXGI_PRESENT_TEST)) host_frame();
             if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
             if (!(flags & DXGI_PRESENT_TEST)) s.wait_present();
+            if (!(flags & DXGI_PRESENT_TEST)) s.queue_present();
             const bool ticket =
                 s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
             SetLastError(before);
@@ -1076,6 +1147,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1 *self, UINT interval, UI
             if (!(flags & DXGI_PRESENT_TEST)) host_frame();
             if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
             if (!(flags & DXGI_PRESENT_TEST)) s.wait_present();
+            if (!(flags & DXGI_PRESENT_TEST)) s.queue_present();
             const bool ticket =
                 s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
             SetLastError(before);
@@ -1455,6 +1527,17 @@ bool Presentation::request_switch(bool frame_generation) noexcept {
 }
 void Presentation::game_wait(GameWait mode) noexcept {
     state_->wait_mode.store(mode, std::memory_order_relaxed);
+}
+void Presentation::frame_fences(std::uintptr_t index, std::uintptr_t values) noexcept {
+    auto &s = *state_;
+    std::lock_guard lock(s.mutex);
+    s.fence_index = index && values ? index : 0;
+    s.fence_values = index && values ? values : 0;
+    s.queue_index = 0;
+    s.queue_last = 0;
+}
+void Presentation::game_queue(GameQueue mode) noexcept {
+    state_->queue_mode.store(mode, std::memory_order_relaxed);
 }
 void Presentation::waitable_slot(std::uintptr_t address) noexcept {
     auto &s = *state_;

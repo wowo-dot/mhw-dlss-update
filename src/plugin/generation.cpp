@@ -38,6 +38,35 @@ std::uintptr_t game_waitable_slot() noexcept {
                ? backend + layout::d3d_render::latency_waitable
                : 0;
 }
+// 0.32.0 diagnostic (fg_queue, fg-game-wait.md): the game's frame fence ring.
+// - cD3DRender::endFrame12 (0x23a7930) signals the frame fence (+0x168) with
+//   v and stores v at +0x1F0 + 8 * (index % 3), the index at +0x1E8;
+// - cD3DRender::present12 (0x23a9ce0) waits until the fence reaches the value
+//   at (index + 2) % 3, the last frame's, before it presents;
+// - sub_1423A2B50, the backend's frame begin, increments the index and resets
+//   the command allocators for index % 3 (three frames' worth);
+// - Main:Update (0x1af2b60) begins the frame (sub_142293280) and ends it with
+//   endFrame and present (sub_1422980B0, gated) on its own thread, so a
+//   frame's present returns before the next frame begins.
+// The per-frame constant arena must be mode 2 (one resource; modes 0 and 1
+// copy it at the next frame begin, which a deeper queue would race).
+bool game_frame_fences(std::uintptr_t &index, std::uintptr_t &values) noexcept {
+    std::uintptr_t renderer{}, backend{};
+    unsigned mode{};
+    if (!pb::verify_code(image, 0x23a7ed7, 0x54, "b4673fa0d2870989ae87fcc820794a8828fb7d63b744925c5edd249f99902132") ||
+        !pb::verify_code(image, 0x23a9d4a, 0x71, "acae11ad9291fde94a6e3a81a4f4426752eb340c89dd00b1ec290fbc42e8d6ef") ||
+        !pb::verify_code(image, 0x23a2cfc, 0x34, "569990525d3bae1b5d0820d81b16f82ddd187f8ead4c5f438ef711ab4868bf64") ||
+        !pb::verify_code(image, 0x22983c4, 0x1b, "cfbdeb648c24b289bb230ce83edc1e5063561925a383c7680a5712f4bc2c2332") ||
+        !pb::verify_code(image, 0x1af2cd1, 0x5, "4973d52801687a9e8742ffaa13ec0a75400916855819303bf75596645b6a9ecb") ||
+        !pb::verify_code(image, 0x1af395c, 0x5, "2aa21e9611775c633e8b8bffe333b5d8fd271efd221367c473fcfe95a57396cd") ||
+        !pb::read(image + layout::image::renderer, renderer) || !renderer ||
+        !pb::read(renderer + layout::renderer::backend, backend) || !backend ||
+        !pb::read(backend + layout::d3d_render::arena_mode, mode) || mode != 2)
+        return false;
+    index = backend + layout::d3d_render::frame_index;
+    values = backend + layout::d3d_render::frame_fence_values;
+    return true;
+}
 bool game_resize_request() noexcept {
     std::uintptr_t renderer{};
     if (!pb::read(image + layout::image::renderer, renderer) || !renderer) return false;

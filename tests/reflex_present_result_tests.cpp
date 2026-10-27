@@ -36,6 +36,12 @@ int main() {
             require(mhw::astera::internal_call(), "still inside the outer scope");
         }
         require(!mhw::astera::internal_call(), "after the scope");
+        // fg_queue (fg-game-wait.md): only the next frame's present, with a grown value.
+        require(queue_follows(41, 1000, 42, 1001) && queue_follows(41, 1000, 42, 1005), "next frame, value grew");
+        require(!queue_follows(0, 0, 1, 1) && !queue_follows(41, 1000, 41, 1000) &&
+                    !queue_follows(41, 1000, 43, 1002) && !queue_follows(41, 1000, 40, 1001) &&
+                    !queue_follows(41, 1000, 42, 1000) && !queue_follows(41, 1000, 42, 999),
+                "no last frame, the same frame, a skipped or earlier frame, or a value that did not grow");
         // game-124: a fault under SDK pacing keeps the game on the SDK's chain.
         require(fault_keeps_routing(PresentationContract::sdk_paced, false) &&
                     !fault_keeps_routing(PresentationContract::synchronous_native, false),

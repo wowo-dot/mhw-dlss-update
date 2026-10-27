@@ -176,6 +176,12 @@ int main() {
                   "fg_wait: free, chain, ab");
             const auto bad_wait = a::parse_config("fg_wait = none\n", folder);
             check(bad_wait.fg_wait == 0 && bad_wait.warnings.size() == 1, "a bad fg_wait warns and stays free");
+            check(defaults.fg_queue == 0 && a::parse_config("fg_queue = deep\n", folder).fg_queue == 1 &&
+                      a::parse_config("fg_queue = AB\n", folder).fg_queue == 2 &&
+                      a::parse_config("fg_queue = game\n", folder).fg_queue == 0,
+                  "fg_queue: game, deep, ab");
+            const auto bad_queue = a::parse_config("fg_queue = 2\n", folder);
+            check(bad_queue.fg_queue == 0 && bad_queue.warnings.size() == 1, "a bad fg_queue warns and stays game");
             check(a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = Recommended\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = j\n", folder).dlss_preset == 10 &&
