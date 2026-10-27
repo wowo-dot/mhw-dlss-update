@@ -31,14 +31,15 @@ from fg_runtime import NGX, STREAMLINE
 # License files shipped with each NVIDIA source, by name inside the package.
 LICENSES = {
     'streamline': [('license.txt', 'Streamline-MIT-LICENSE.txt'),
-                   ('bin/x64/nvngx_dlss.license.txt', 'NVIDIA-RTX-SDKs-LICENSE-Streamline.txt'),
                    ('bin/x64/reflex.license.txt', 'NVIDIA-Reflex-SDK-LICENSE.txt')],
     'dlss': [('LICENSE.txt', 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt')],
 }
+# 0.32.0: both NGX DLLs come from the DLSS SDK (fg_runtime.NGX), so its license
+# covers them; Streamline's copy of that license is no longer shipped.
 COVERAGE = [
     ('sl.interposer.dll, sl.common.dll, sl.pcl.dll, sl.reflex.dll, sl.dlss_g.dll', 'NVIDIA Streamline',
      'Streamline-MIT-LICENSE.txt; Reflex components: NVIDIA-Reflex-SDK-LICENSE.txt'),
-    ('nvngx_dlssg.dll', 'NVIDIA DLSS Frame Generation', 'NVIDIA-RTX-SDKs-LICENSE-Streamline.txt'),
+    ('nvngx_dlssg.dll', 'NVIDIA DLSS Frame Generation', 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
     ('nvngx_dlss.dll', 'NVIDIA DLSS Super Resolution', 'NVIDIA-RTX-SDKs-LICENSE-DLSS.txt'),
 ]
 # Third-party code compiled into mhw_dlss.dll (its link map lists each library):

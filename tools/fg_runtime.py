@@ -19,9 +19,13 @@ STREAMLINE = {
     'sl.pcl.dll': '699ab461e64e95189a7fe6a21c79ad237cf56b60ea748cb6c840cd5431ba91d1',
     'sl.reflex.dll': '7e6e4ccc4b561bd449fb0da90709d9b96b08c3f6f4697362caaa359e72a58a67',
     'sl.dlss_g.dll': '1fec3f8fdfc59d78c4445c276c1a0fb798bf251985f348597dc2b44d0c995e52',
-    'nvngx_dlssg.dll': '135eaf0733c1e37381a8c28abcf7a862404a54132b81787c04e35d09efc5e36f',
 }
-NGX = {'nvngx_dlss.dll': 'be6e434a94ca32499515eb62ca0e6c274526055d568d0426e4c652dcdfb6ee6e'}
+# DLSS SDK 310.9.16 (0.32.0): DLSS Super Resolution and Frame Generation, both
+# from the SDK's lib/Windows_x86_64/rel (Streamline 2.12.0 bundles 310.7's DLSS-G).
+NGX = {
+    'nvngx_dlss.dll': 'd00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e',
+    'nvngx_dlssg.dll': '8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7',
+}
 
 
 def sha(path):

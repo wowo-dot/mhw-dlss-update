@@ -114,7 +114,8 @@ You need:
 - Python 3.12, for the tool tests and packaging;
 - two public NVIDIA SDKs, kept outside the repository. CMake checks each file
   it uses by SHA-256:
-  - the [DLSS SDK](https://github.com/NVIDIA/DLSS) at commit `a291cc7d`
+  - the [DLSS SDK](https://github.com/NVIDIA/DLSS) 310.9.16 (tag `v310.9.16`,
+    commit `9981c635`; a clone or GitHub's archive of the tag)
     (`MHW_NGX_SDK_ROOT`);
   - the [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline) 2.12.0
     (`MHW_STREAMLINE_SDK_ROOT`).

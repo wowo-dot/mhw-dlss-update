@@ -34,7 +34,7 @@ int main() {
 
     // 0.32.0: which DLSS files run (src/common/dlss_files.hpp). The run of
     // 2026-10-27 with the NVIDIA App's override on: NVIDIA's store copy,
-    // 310.9.16, signed by NVIDIA Corporation, and the shipped 310.7.
+    // 310.9.16, signed by NVIDIA Corporation, and 0.31's shipped 310.7.
     using mhw::DlssFile;
     const auto file = [](const char *internal, mhw::FileVersion v, bool shipped, bool signed_) {
         return DlssFile{internal, v, shipped, signed_, signed_ ? "NVIDIA Corporation" : ""};

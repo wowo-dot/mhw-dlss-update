@@ -138,12 +138,14 @@ attribution notice (`AGENTS.md`).
 
 ## NVIDIA DLSS SDK
 
-Source: <https://github.com/NVIDIA/DLSS>, commit
-`a291cc7d2cc642a51566f3dfd5376f635cd1b284` (`cmake/NgxReplay.cmake` pins the
-files by SHA-256). The mod compiles against its headers and links its NGX
-library `nvsdk_ngx_d.lib` into `mhw_dlss.dll`. License: NVIDIA RTX SDKs
-License, the SDK's `LICENSE.txt` (shipped in release packages as
-`NVIDIA-RTX-SDKs-LICENSE-DLSS.txt`).
+Source: <https://github.com/NVIDIA/DLSS>, tag `v310.9.16`, commit
+`9981c6350dc58c0ce21f024fd65e31e851c31689` (`cmake/NvidiaDlssSdk.cmake` pins the
+files by SHA-256; 0.31 and earlier used commit
+`a291cc7d2cc642a51566f3dfd5376f635cd1b284`, 310.7.0). The mod compiles against
+its headers and links its NGX library `nvsdk_ngx_d.lib` into `mhw_dlss.dll`.
+Release packages ship the SDK's unmodified `nvngx_dlss.dll` and (since 0.32.0)
+`nvngx_dlssg.dll`. License: NVIDIA RTX SDKs License, the SDK's `LICENSE.txt`
+(shipped in release packages as `NVIDIA-RTX-SDKs-LICENSE-DLSS.txt`).
 
 ## NVIDIA NVAPI declarations
 

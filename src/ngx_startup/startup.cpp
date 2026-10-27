@@ -34,7 +34,8 @@ std::atomic_bool finished{}, allowed{}, stopping{};
 bool installed{}, initialized{};
 HMODULE pinned_provider{};
 ComPtr<ID3D12Device> device; // retained by the pinned diagnostic until process exit
-constexpr char provider_sha[] = "be6e434a94ca32499515eb62ca0e6c274526055d568d0426e4c652dcdfb6ee6e";
+// The shipped nvngx_dlss.dll: DLSS SDK 310.9.16 (0.32.0; 310.7.0 before).
+constexpr char provider_sha[] = "d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e";
 // 0.32.0: the DLSS Super Resolution file NGX runs (dlss_files.hpp), set with
 // pinned_provider: its path and identity, for the log and Status.
 std::wstring provider_path;

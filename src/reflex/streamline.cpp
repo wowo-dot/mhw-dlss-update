@@ -109,8 +109,9 @@ void Streamline::initialize(const std::filesystem::path &runtime, const std::fil
     verify(root / L"sl.reflex.dll", "7e6e4ccc4b561bd449fb0da90709d9b96b08c3f6f4697362caaa359e72a58a67");
     if (frame_generation_) {
         verify(root / L"sl.dlss_g.dll", "1fec3f8fdfc59d78c4445c276c1a0fb798bf251985f348597dc2b44d0c995e52");
+        // The shipped DLSS-G: DLSS SDK 310.9.16 (0.32.0; Streamline's 310.7.0 before).
         verify_frame_generation(root / L"nvngx_dlssg.dll",
-                                "135eaf0733c1e37381a8c28abcf7a862404a54132b81787c04e35d09efc5e36f");
+                                "8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7");
         for (const auto name : {L"sl.dlss_g.dll", L"nvngx_dlssg.dll"})
             if (GetModuleHandleW(name))
                 throw std::runtime_error("Frame generation already loaded by another integration");
