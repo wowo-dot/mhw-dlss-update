@@ -576,7 +576,12 @@ void run_session() {
             }
             log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed
                 << ",\"tokens\":" << frames.tokens << ",\"sleeps\":" << frames.sleeps
-                << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults << ",\"owner\":" << frames.owner
+                << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults << ",\"owner\":"
+                << frames.owner
+                // 0.32.0: NVIDIA's PC Latency pings: received, sent, refused.
+                << ",\"latency_pings\":{\"subscribed\":" << latency_ping_subscribed
+                << ",\"message\":" << latency_ping_message.load() << ",\"seen\":" << latency_pings_seen.load()
+                << ",\"sent\":" << frames.pings << ",\"refused\":" << frames.ping_failures << '}'
                 << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents
                 << ",\"queues\":" << stats.queues << ",\"late_queues\":" << stats.late_queues
                 << ",\"presentation_faults\":" << stats.faults;

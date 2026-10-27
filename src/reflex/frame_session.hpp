@@ -3,6 +3,12 @@
 #include "streamline.hpp"
 
 namespace mhw::reflex {
+// 0.32.0: NVIDIA's PC Latency ping (Streamline's PCL guide). Any thread (the
+// game window's, which receives the ping message) asks for one; the next
+// simulation start sends ePCLatencyPing with its frame, the frame that picks
+// up the input. Process-lived: no session needs to exist.
+void request_latency_ping() noexcept;
+
 // Single-owner-thread adapter. Hook callers must qualify their engine/renderer
 // object before entering it and serialize lifecycle changes with that thread.
 // The SDK owns FrameToken storage. This class borrows the initialized SDK and
@@ -27,6 +33,10 @@ public:
     std::uint64_t tokens() const noexcept { return tokens_; }
     std::uint64_t sleeps() const noexcept { return sleeps_; }
     std::uint64_t markers() const noexcept { return markers_; }
+    // PC Latency pings sent, and refused by Streamline (optional: the frame
+    // goes on).
+    std::uint64_t pings() const noexcept { return pings_; }
+    std::uint64_t ping_failures() const noexcept { return ping_failures_; }
     // Borrow the existing Reflex token on its owner thread before Present.
     // Never cache it across end/stop or request another SDK token for FG.
     const sl::FrameToken *input_token(unsigned thread) const noexcept {
@@ -40,6 +50,6 @@ private:
     FramePolicy policy_;
     sl::FrameToken *token_{};
     sl::Result failure_{sl::Result::eOk};
-    std::uint64_t tokens_{}, sleeps_{}, markers_{};
+    std::uint64_t tokens_{}, sleeps_{}, markers_{}, pings_{}, ping_failures_{};
 };
 } // namespace mhw::reflex

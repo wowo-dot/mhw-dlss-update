@@ -93,6 +93,12 @@ inline bool mode_change_attempted{}, mode_restored{};
 inline bool fg_plugin = true, fg_loaded = false;
 inline unsigned fg_multiplier = 2;
 inline std::atomic<bool> fg_loaded_state{};
+// 0.32.0: NVIDIA's PC Latency ping (reflex::request_latency_ping): its window
+// message once Streamline is attached (0 until then), whether al.input took
+// the subscription, and the pings the game window received.
+inline std::atomic<std::uint32_t> latency_ping_message{};
+inline std::atomic<std::uint64_t> latency_pings_seen{};
+inline bool latency_ping_subscribed{};
 // The ini's frame generation mode and dynamic target (game_session.hpp).
 inline mhw::frame_generation::game::Mode fg_mode{};
 inline unsigned fg_target{};

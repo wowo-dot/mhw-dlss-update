@@ -230,6 +230,7 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
         }
     }
     api(sdk.attach(device_pin.Get()), "attach-native-device");
+    latency_ping_message.store(sdk.latency_ping_message());
     if (fg_plugin && sdk.frame_generation()) {
         // DLSS-G's own limits (guide 14.1, 14.2), while it is loaded; if it
         // cannot answer before a swap chain exists the session's first state

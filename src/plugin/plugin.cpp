@@ -10,6 +10,7 @@
 #include "../settings/status.hpp"
 #include "../settings/version.hpp"
 #include "../projection_binding/recorder.hpp"
+#include "../reflex/frame_session.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../scaled_temporal/stream_route.hpp"
 #include "../temporal_present/observer.hpp"
@@ -44,6 +45,16 @@ bool loader_graphics_running(std::string &why) noexcept {
     if (s.state != AL_D3D12_UNAVAILABLE) return true;
     why = s.reason ? s.reason : "al.d3d12 unavailable";
     return false;
+}
+// The game window's messages (al.input), on its thread: NVIDIA's PC Latency
+// ping asks the next simulation start for a ping marker. Never consumed.
+std::uint32_t AL_CALL on_message(al_plugin_t *, void *, std::uint32_t message, std::uintptr_t, std::intptr_t, void *) {
+    const auto ping = latency_ping_message.load(std::memory_order_relaxed);
+    if (ping && message == ping) {
+        mhw::reflex::request_latency_ping();
+        latency_pings_seen.fetch_add(1, std::memory_order_relaxed);
+    }
+    return 0;
 }
 void AL_CALL on_phase(al_plugin_t *, al_phase_t phase, const void *data) {
     try {
@@ -132,6 +143,14 @@ al_result_t start(const al_api_t *api, const al_init_t *init) {
     if (loader_d3d12->hook(init->self, table.data(), static_cast<std::uint32_t>(table.size())) != AL_OK)
         return refuse("graphics hook registration refused (see the log)");
     loader_log(AL_LOG_INFO, std::to_string(table.size()) + " graphics detours registered, presentation role held");
+    // 0.32.0: NVIDIA's PC Latency ping arrives as a window message, through
+    // al.input (CMFM uses it too). Optional: without it, PC Latency lacks its
+    // input-sampling part.
+    const auto *input =
+        static_cast<const al_input_t *>(api->get_interface(init->self, AL_INPUT_INTERFACE, AL_INPUT_VERSION));
+    latency_ping_subscribed =
+        input && input->size >= offsetof(al_input_t, subscribe_messages) + sizeof(input->subscribe_messages) &&
+        input->subscribe_messages && input->subscribe_messages(init->self, 0, on_message, nullptr) == AL_OK;
     startup_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!startup_ready) return refuse("startup event");
     const auto thread = CreateThread(nullptr, 0, worker, nullptr, 0, nullptr);

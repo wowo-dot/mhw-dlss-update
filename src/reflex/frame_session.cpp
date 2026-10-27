@@ -1,7 +1,14 @@
 #include "frame_session.hpp"
 #include <array>
+#include <atomic>
 
 namespace mhw::reflex {
+namespace {
+std::atomic<bool> latency_ping{};
+} // namespace
+void request_latency_ping() noexcept {
+    latency_ping.store(true, std::memory_order_relaxed);
+}
 sl::Result FrameSession::fail(sl::Result result) noexcept {
     policy_.abort();
     token_ = nullptr;
@@ -37,6 +44,10 @@ sl::Result FrameSession::apply(FrameStep step) {
         if (result != sl::Result::eOk) return fail(result);
         ++markers_;
     }
+    // A ping asked for since the last simulation start: this frame picks up
+    // its input. Optional: a refusal does not stop the frame's markers.
+    if ((step.actions & bits(FrameAction::simulation_start)) && latency_ping.exchange(false, std::memory_order_relaxed))
+        ++(sdk_.marker(sl::PCLMarker::ePCLatencyPing, *token_) == sl::Result::eOk ? pings_ : ping_failures_);
     return sl::Result::eOk;
 }
 sl::Result FrameSession::begin(unsigned thread, FrameStamp stamp) {

@@ -418,6 +418,8 @@ LiveFrameStats LiveFrames::snapshot() const {
     value.tokens = s.frames.tokens();
     value.sleeps = s.frames.sleeps();
     value.markers = s.frames.markers();
+    value.pings = s.frames.pings();
+    value.ping_failures = s.frames.ping_failures();
     value.frame_id = s.frames.id();
     value.pending_calls = s.calls.load();
     value.fault_reason = s.reason;

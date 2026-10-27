@@ -172,6 +172,9 @@ sl::Result Streamline::attach(void *native_device) {
         feature(feature_, sl::kFeaturePCL, "slPCLSetMarker", marker_);
         feature(feature_, sl::kFeatureReflex, "slReflexSetOptions", options_);
         feature(feature_, sl::kFeatureReflex, "slReflexGetState", state_);
+        // Optional (0.32.0): the PC Latency ping's message; without it, no pings.
+        if (void *address{}; feature_(sl::kFeaturePCL, "slPCLGetState", address) == sl::Result::eOk && address)
+            pcl_state_ = reinterpret_cast<PFun_slPCLGetState *>(address);
         // A plugin unloaded before attach, or one that failed to start on
         // this device (programming guide 2.2.1), is not used.
         bool loaded{};
@@ -281,6 +284,10 @@ sl::Result Streamline::sleep(const sl::FrameToken &token) const {
 sl::Result Streamline::marker(sl::PCLMarker value, const sl::FrameToken &token) const {
     return marker_ ? marker_(value, token) : sl::Result::eErrorNotInitialized;
 }
+std::uint32_t Streamline::latency_ping_message() const {
+    sl::PCLState state{};
+    return pcl_state_ && pcl_state_(state) == sl::Result::eOk ? state.statsWindowMessage : 0;
+}
 sl::Result Streamline::options(sl::ReflexMode mode) const {
     if (!options_) return sl::Result::eErrorNotInitialized;
     sl::ReflexOptions options{};
@@ -313,6 +320,7 @@ sl::Result Streamline::shutdown() noexcept {
         tags_ = nullptr;
         sleep_ = nullptr;
         marker_ = nullptr;
+        pcl_state_ = nullptr;
         options_ = nullptr;
         state_ = nullptr;
         requirements_ = nullptr;

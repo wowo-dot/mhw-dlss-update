@@ -61,6 +61,9 @@ public:
     sl::Result frame(sl::FrameToken *&token, const std::uint32_t *index) const;
     sl::Result sleep(const sl::FrameToken &token) const;
     sl::Result marker(sl::PCLMarker marker, const sl::FrameToken &token) const;
+    // 0.32.0: the window message NVIDIA's PC Latency ping arrives as (PCLState's
+    // statsWindowMessage); 0 before attach or without slPCLGetState.
+    std::uint32_t latency_ping_message() const;
     sl::Result options(sl::ReflexMode mode) const;
     sl::Result state(sl::ReflexState &state) const;
     sl::Result shutdown() noexcept;
@@ -89,6 +92,7 @@ private:
     PFun_slSetTagForFrame *tags_{};
     PFun_slReflexSleep *sleep_{};
     PFun_slPCLSetMarker *marker_{};
+    PFun_slPCLGetState *pcl_state_{};
     PFun_slReflexSetOptions *options_{};
     PFun_slReflexGetState *state_{};
     PFun_slDLSSGSetOptions *frame_generation_options_{};

@@ -8,6 +8,7 @@
 namespace mhw::reflex {
 struct LiveFrameStats {
     std::uint64_t completed{}, tokens{}, sleeps{}, markers{}, faults{}, present_tests{}, untracked_presents{};
+    std::uint64_t pings{}, ping_failures{}; // 0.32.0: PC Latency pings sent, refused
     unsigned owner{}, pending_calls{}, frame_id{};
     bool running{}, frame_active{}, restored{};
     // The game destroyed its presentation window (its exit): the session
