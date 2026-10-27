@@ -53,12 +53,38 @@ timed with their intervals and the Present calls' time.
 
 Auto mode stays: paused it now runs faster than generating's base rate.
 
-## Not explained yet
+## Generating: DLSS-G's work on the game's path (dev.18, run 37180)
 
-With DLSS-G loaded and generating, the game renders at about 180-190 fps in
-the hub against about 270 unloaded (about 1.5 ms a frame). The driver sets no
+With DLSS-G loaded and generating, the game renders at about 190 fps in the
+hub against about 270 unloaded (3.7 to 5.2 ms a frame). The driver sets no
 frame limit (its sleep interval, logged since dev.16, stays at 3.3-4.1 ms),
-the GPU load barely matters (DLAA and Performance CNN alike), and cpuopt lifts
-it to about 200: mostly CPU time on the frame's path. A profiling run follows.
-In the event hub the game is CPU-bound at about 180 fps even with DLSS-G
-unloaded; run 58748's "leftover" was that, not a limit left behind.
+the GPU load barely matters (DLAA and Performance CNN alike), 6x costs about
+what 2x does, and cpuopt lifts it to about 200. In the event hub the game is
+CPU-bound at about 180 fps even with DLSS-G unloaded; run 58748's "leftover"
+was that, not a limit left behind.
+
+The CPU sampler (FG off against 2x, three clean 20 s windows each, module
+level only for NVIDIA's DLLs):
+
+- the game's Present thread spends 49 % of its samples in ntdll (waiting),
+  against 29 %; the game's own code 35 against 38 %; this mod's DLL 0.8
+  against 1.8 %; Streamline's DLLs do not register on that thread;
+- its innermost game frame is `cD3DRender::present12` (0x23a9ce0) in 41.5 %
+  of the samples, against 8.3 %.
+
+`present12`, before it presents, waits on the frame fence (cD3DRender +0x168)
+until the previous frame's value: slot `(index + 2) % 3` of the three at
++0x1F0, which `endFrame12` (0x23a7ee0) fills right after its
+`mCmdQueue->Signal(mFence.Get(), v)`; the index (+0x1E8) is incremented by
+0x23a2b50. So MHW keeps one frame in flight. Streamline's DLSS-G header
+(2.12): on D3D12 the client's presenting queue "is blocked until DLSSG
+workload execution completes" (`DLSSGQueueParallelismMode`; the
+non-blocking mode is Vulkan only). Each real frame therefore carries
+DLSS-G's workload on the game's critical path, about 1.5 ms here: the normal
+cost of frame generation meeting the game's short frame queue, not the mod's
+work.
+
+A candidate for after 0.32.0, unproven: while DLSS-G is loaded, let
+`present12` wait for the frame two back. The fence ring has three slots, so
+the slot being reused would still be complete, and Reflex bounds the
+latency; it changes the game's own pacing and needs reversing to prove safe.
