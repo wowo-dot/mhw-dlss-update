@@ -58,6 +58,54 @@ bool apply_reflex_mode(bool loaded) {
     reflex_requested.store(reflex_applied.load());
     return false;
 }
+// 0.32.0 (dev.17, run 27544): the driver's status can lag the mode Streamline
+// set: low latency read false at the first check, right after a chain switch,
+// and true from the next heartbeat on, but the one sample had already turned
+// frame generation off for the session. A check that does not confirm is now
+// asked again every 500 ms for up to 10 s before Reflex counts as unconfirmed;
+// the outcome is logged as reflex_confirm with the time it took.
+namespace {
+constexpr std::uint64_t confirm_ms = 10000, confirm_every_ms = 500;
+struct PendingConfirm {
+    const char *phase{}; // null: nothing pending
+    std::uint64_t began{}, next{};
+    unsigned queries{};
+    bool expected{};
+} pending_confirm;
+} // namespace
+void confirm_reflex(const char *phase) {
+    const bool expected = reflex_applied.load() != 0;
+    if (driver_mode(phase, expected)) {
+        pending_confirm = {};
+        return;
+    }
+    const auto now = GetTickCount64();
+    pending_confirm = {phase, now, now + confirm_every_ms, 1, expected};
+}
+void confirm_pending() {
+    auto &p = pending_confirm;
+    if (!p.phase) return;
+    const auto now = GetTickCount64();
+    if (now < p.next) return;
+    const auto state =
+        live_frames ? live_frames->driver_status(device_pin.Get()) : mhw::reflex::driver_sleep_status(device_pin.Get());
+    ++p.queries;
+    const bool confirmed = state.result == 0 && state.low_latency == p.expected;
+    if (!confirmed && now - p.began < confirm_ms) {
+        p.next = now + confirm_every_ms;
+        return;
+    }
+    log << "{\"event\":\"reflex_confirm\",\"phase\":" << quoted(p.phase) << ",\"confirmed\":" << confirmed
+        << ",\"queries\":" << p.queries << ",\"ms\":" << now - p.began << ",\"result\":" << state.result
+        << ",\"low_latency\":" << state.low_latency << "}\n"
+        << std::flush;
+    const auto phase = p.phase;
+    p = {};
+    if (!confirmed) reflex_unconfirmed(phase);
+}
+void confirm_cancel() noexcept {
+    pending_confirm = {};
+}
 // The worker, while the session runs: the driver did not confirm the applied
 // mode (driver_mode logged its status). Up to 0.28.6 this ended the worker,
 // which left DLSS running but stopped the menu and the log. Now, as for a

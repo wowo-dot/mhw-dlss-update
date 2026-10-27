@@ -138,6 +138,12 @@ void mode_options(const char *phase, sl::ReflexMode mode, sl::Result result);
 const char *reflex_mode_name(unsigned mode) noexcept;
 bool apply_reflex_mode(bool loaded);
 void reflex_unconfirmed(const char *phase);
+// 0.32.0: the driver's confirmation of the applied mode (driver_mode), asked
+// again every 500 ms for up to 10 s before reflex_unconfirmed; the worker calls
+// confirm_pending() each turn and confirm_cancel() when a newer mode applies.
+void confirm_reflex(const char *phase);
+void confirm_pending();
+void confirm_cancel() noexcept;
 
 // generation.cpp
 bool game_chain_qualified() noexcept;

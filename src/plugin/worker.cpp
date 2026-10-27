@@ -508,12 +508,16 @@ void run_session() {
         if (!frames.running || frames.faults || !stats.routing) break;
         if (reflex_requested.load() != reflex_applied.load()) {
             std::lock_guard lock(sdk_mutex);
-            if (apply_reflex_mode(fg_loaded)) live_check_sleeps = live_frames->snapshot().sleeps + 2;
+            if (apply_reflex_mode(fg_loaded)) {
+                live_check_sleeps = live_frames->snapshot().sleeps + 2;
+                confirm_cancel(); // the newer mode is checked instead
+            }
         } else if (live_check_sleeps && frames.sleeps >= live_check_sleeps) {
             // As at the first heartbeat: low latency on for On and Boost, off for Off.
             live_check_sleeps = 0;
-            if (!driver_mode("live", reflex_applied.load() != 0)) reflex_unconfirmed("live");
+            confirm_reflex("live");
         }
+        confirm_pending();
         mhw::render_resolution::write_captures(log);
         if (perf_ab_next && GetTickCount64() >= perf_ab_next) {
             perf_ab_paused = !perf_ab_paused;
@@ -578,7 +582,7 @@ void run_session() {
             log_latency(log);
             mhw::perf::sampler::write(log);
             if (!reflex_confirmed && frames.completed >= reflex_check_frames) {
-                if (!driver_mode("running_on", reflex_applied.load() != 0)) reflex_unconfirmed("running_on");
+                confirm_reflex("running_on");
                 reflex_confirmed = true;
             }
             // 0.32.0 (fg pacing study): the driver's own frame limit and frame
