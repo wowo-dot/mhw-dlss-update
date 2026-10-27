@@ -275,6 +275,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
             edge_row =
                 static_cast<float>(runtime.height) * planned.quantized > static_cast<float>(planned.render.height);
             scaled_geometry = geometry;
+            jitter_phases = dlss_sdk::jitter_phases(geometry);
             configured_mode = requested;
             // Published requests, depths and projections belong to frames at
             // the old extent; none is consumed now. The next frame resets.

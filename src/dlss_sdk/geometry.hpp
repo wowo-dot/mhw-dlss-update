@@ -93,7 +93,8 @@ struct PixelJitter {
 inline bool projection_jitter(const Geometry &g, PixelJitter native, float viewport_width, float viewport_height,
                               PixelJitter &out) noexcept {
     out = {};
-    // The game's table spans -0.5..0.5; full_pixel_jitter doubles it (options.hpp).
+    // The game's table spans -0.5..0.5; the mod's own jitter writes up to twice
+    // that, a whole render pixel (jitter.hpp).
     if (!valid_geometry(g) || !std::isfinite(native.x) || !std::isfinite(native.y) || std::abs(native.x) > 1.F ||
         std::abs(native.y) > 1.F || !std::isfinite(viewport_width) || !std::isfinite(viewport_height))
         return false;

@@ -105,7 +105,7 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     mhw::perf::chaos::enabled = config.chaos;
     mhw::dlss_sdk::auto_exposure = config.auto_exposure;
     mhw::dlss_sdk::render_preset = config.dlss_preset;
-    mhw::dlss_sdk::full_pixel_jitter = config.full_pixel_jitter;
+    mhw::dlss_sdk::jitter_ab = config.jitter_ab;
     reflex_requested.store(config.reflex == mhw::settings::ReflexMode::off     ? 0U
                            : config.reflex == mhw::settings::ReflexMode::boost ? 2U
                                                                                : 1U);
@@ -177,7 +177,7 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"hook_timing\":" << config.hook_timing << ",\"texture_bias\":" << config.texture_bias
         << ",\"texture_bias_ab\":" << config.texture_bias_ab << ",\"gpu_timing\":" << config.gpu_timing
         << ",\"auto_exposure\":" << config.auto_exposure << ",\"chaos\":" << config.chaos
-        << ",\"dlss_preset\":" << config.dlss_preset << ",\"full_pixel_jitter\":" << config.full_pixel_jitter
+        << ",\"dlss_preset\":" << config.dlss_preset << ",\"jitter_ab\":" << config.jitter_ab
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";

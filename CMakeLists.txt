@@ -208,7 +208,7 @@ if(BUILD_TESTING)
         src/continuous_dlaa/activation_entry.asm tests/runtime_neighbours.cpp tests/fake_astera.cpp ${temporal_binding_sources} ${binding_common}
         INCLUDES ${binding_includes} DEFINES MHW_TEMPORAL_FIXTURE
         LIBS minhook mhw_astera_hooks bcrypt d3d12 dxgi dxguid mhw_ngx_startup mhw_temporal_state mhw_dlss_inline NO_TEST)
-    foreach(mode continuous jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate
+    foreach(mode continuous own-jitter jitter_exception jitter_stop jitter_provider jitter_matrix jitter_false_return queues early-reset duplicate
             pending-retirement released-lists held-lists unfiltered-copy reconstruction state-trace native-state-trace
             native-state-admission depth-eligibility depth-destination shutdown-success shutdown-partial
             requests-consumed requests-same-frame requests-wrap requests-blocked requests-unmatched requests-multiple requests-changed
@@ -228,6 +228,7 @@ if(BUILD_TESTING)
     mhw_test(ngx_readiness_tests SOURCES tests/ngx_readiness_tests.cpp TEST ngx_readiness)
     mhw_test(ngx_providers_tests SOURCES tests/ngx_providers_tests.cpp TEST ngx_providers)
     mhw_test(texture_bias_tests SOURCES tests/texture_bias_tests.cpp TEST texture_bias)
+    mhw_test(jitter_tests SOURCES tests/jitter_tests.cpp TEST jitter)
 
     # Activation (AA ownership, TAA2's comparison stubs) and render resolution.
     mhw_test(native_activation_tests SOURCES tests/native_activation_tests.cpp tests/native_activation_fixture.asm tests/fake_astera.cpp

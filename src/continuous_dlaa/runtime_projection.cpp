@@ -95,12 +95,24 @@ bool projection_before(const NativeFrame &f) {
         return false;
     }
     ++projection_viewports[(f.call.gpr[1] - s.camera - 0x50) / 0x1a0];
-    if (dlss_sdk::full_pixel_jitter.load(std::memory_order_relaxed)) {
-        // Diagnostic (options.hpp): the table's value doubled covers the whole pixel.
-        const auto x = 2.F * std::bit_cast<float>(static_cast<std::uint32_t>(projection.candidate)),
-                   y = 2.F * std::bit_cast<float>(static_cast<std::uint32_t>(projection.candidate >> 32));
-        projection.candidate =
-            std::uint64_t(std::bit_cast<std::uint32_t>(x)) | (std::uint64_t(std::bit_cast<std::uint32_t>(y)) << 32);
+    // 0.31.1: the mod's own jitter over the whole render pixel, in the phases
+    // DLSS's geometry asks (dlss_sdk/jitter.hpp); the game's table before the
+    // geometry is known, and in the A/B's other half (options.hpp).
+    const auto phases = jitter_phases.load(std::memory_order_relaxed);
+    if (phases && !(dlss_sdk::jitter_ab.load(std::memory_order_relaxed) && (GetTickCount64() / 10000) % 2)) {
+        const auto offset = dlss_sdk::jitter_offset(s.anchor.frame, phases);
+        const auto value = dlss_sdk::camera_jitter(offset);
+        projection.candidate = std::uint64_t(std::bit_cast<std::uint32_t>(value.x)) |
+                               (std::uint64_t(std::bit_cast<std::uint32_t>(value.y)) << 32);
+        const auto widen = [](std::atomic<float> &low, std::atomic<float> &high, float v) {
+            if (v < low.load(std::memory_order_relaxed)) low.store(v, std::memory_order_relaxed);
+            if (v > high.load(std::memory_order_relaxed)) high.store(v, std::memory_order_relaxed);
+        };
+        widen(own_jitter_x_min, own_jitter_x_max, offset.x);
+        widen(own_jitter_y_min, own_jitter_y_max, offset.y);
+        ++own_jitters;
+    } else {
+        ++table_jitters;
     }
     if (!reconstruction.jitter()) {
         projection.candidate = 0;

@@ -48,6 +48,7 @@
 #include "../perf/in_flight.hpp"
 #include "../dlss_sdk/inline.hpp"
 #include "../dlss_sdk/options.hpp"
+#include "../dlss_sdk/jitter.hpp"
 #include "../gpu_memory/budget.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
@@ -156,6 +157,13 @@ inline RecordingPins recording_pins;
 inline UnfilteredLifetime unfiltered_lifetime;
 inline ReconstructionState reconstruction;
 inline std::atomic<std::uint64_t> zero_jitter_projections{};
+// The camera jitter (0.31.1, dlss_sdk/jitter.hpp): the phases for the geometry
+// DLSS runs, set with it (0, the game's table, before), and per source the
+// projections jittered; the mod's own offsets' range in render pixels.
+// projection_before is their only writer.
+inline std::atomic<unsigned> jitter_phases{};
+inline std::atomic<std::uint64_t> own_jitters{}, table_jitters{};
+inline std::atomic<float> own_jitter_x_min{}, own_jitter_x_max{}, own_jitter_y_min{}, own_jitter_y_max{};
 // Skip reason 12 (0.30.2): the game's TAA without reprojection ran instead.
 inline std::array<std::uint64_t, 13> dispatch_reasons{};
 // TAA's producer refusals (taa_before), by the first failing check: 1 call

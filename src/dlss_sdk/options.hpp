@@ -15,11 +15,8 @@ inline std::atomic<bool> auto_exposure{true};
 // is created. K by default; the ini's dlss_preset (0.31.1, diagnostic) picks
 // another to time it.
 inline std::atomic<unsigned> render_preset{11};
-// The camera jitter while DLSS draws. The game's table (scene +0xe6a0, 20
-// Halton values in -0.5..0.5) moves the image by half its value in render
-// pixels (projection_snapshot.cpp's relation), so its samples cover only the
-// middle half of each pixel; DLSS expects the whole pixel. The ini's
-// full_pixel_jitter = on (0.31.1, diagnostic) writes the table's values
-// doubled, so they span -0.5..0.5 pixels.
-inline std::atomic<bool> full_pixel_jitter{false};
+// The camera jitter while DLSS draws is the mod's own, over the whole render
+// pixel (jitter.hpp). The ini's jitter_ab = on (0.31.1, diagnostic) alternates
+// it every 10 s with the game's table, to compare in one launch.
+inline std::atomic<bool> jitter_ab{false};
 } // namespace mhw::dlss_sdk

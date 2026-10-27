@@ -67,6 +67,12 @@ void write_summary(std::ostream &out) {
         out << projection_viewports[i].load();
     }
     out << ']';
+    // The camera jitter (0.31.1): the phases, the projections each source
+    // jittered, and the mod's own offsets' range in render pixels.
+    out << ",\"jitter\":{\"phases\":" << jitter_phases.load() << ",\"ab\":" << dlss_sdk::jitter_ab.load()
+        << ",\"own\":" << own_jitters.load() << ",\"table\":" << table_jitters.load() << ",\"x\":["
+        << own_jitter_x_min.load() << ',' << own_jitter_x_max.load() << "],\"y\":[" << own_jitter_y_min.load() << ','
+        << own_jitter_y_max.load() << "]}";
     // Skip reason 7 is a missing depth lease or a route readiness rejection.
     {
         DepthTraceLock trace_lock;

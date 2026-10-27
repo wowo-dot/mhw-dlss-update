@@ -613,6 +613,27 @@ int main(int argc, char **argv) {
         std::cout << "}\n";
         return 0;
     }
+    // 0.31.1: with DLSS's geometry known, the mod's own jitter (jitter.hpp)
+    // replaces the table's 0.375, in the game's units, frame by frame.
+    if (mode == "own-jitter") {
+        cd::jitter_phases = 19;
+        for (unsigned i = 0; i < 40; ++i) {
+            fixture.stage(5 + i);
+            auto f = fixture.frame();
+            cd::native(4, &f);
+            const auto want = mhw::dlss_sdk::camera_jitter(mhw::dlss_sdk::jitter_offset(5 + i, 19));
+            const auto &p = cd::projections[(5 + i) % cd::projections.size()];
+            check(p.valid && p.source.projection.jitter_bits[0] == std::bit_cast<unsigned>(want.x) &&
+                      p.source.projection.jitter_bits[1] == std::bit_cast<unsigned>(want.y),
+                  "the projection carries the mod's own jitter");
+            check(get<std::uint64_t>(fixture.camera.p + 0x38) == 0, "scoped camera restoration");
+        }
+        check(cd::own_jitters == 40 && cd::table_jitters == 0 && cd::own_jitter_x_min < -.35F &&
+                  cd::own_jitter_x_max > .35F && cd::healthy(),
+              "every projection took the mod's jitter over the whole pixel");
+        std::cout << "Continuous callback fixture passed: own-jitter\n";
+        return 0;
+    }
     const unsigned count = mode == "continuous" ? 1000 : 2;
     for (unsigned i = 0; i < count; ++i) {
         fixture.stage(5 + i);
