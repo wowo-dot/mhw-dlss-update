@@ -1,6 +1,5 @@
 #pragma once
 #include <windows.h>
-#include <cstdint>
 
 namespace mhw::reflex {
 enum class PresentationContract { synchronous_native, sdk_paced };
@@ -68,14 +67,5 @@ enum class IdentityRoute { forward, real, unroutable };
 constexpr IdentityRoute identity_route(bool bypass, bool identity_self, bool real_chain) noexcept {
     if (bypass || !identity_self) return IdentityRoute::forward;
     return real_chain ? IdentityRoute::real : IdentityRoute::unroutable;
-}
-// fg_queue's deep step at a present (0.32.0 diagnostic, fg-game-wait.md): the
-// fence value of frame `index` may become `last_value`, the true value read at
-// the last present for frame `last_index`, only when this present is the next
-// frame's and the value grew. Then the next present waits for frame index - 1,
-// never further back: the game's per-frame slots are three deep.
-constexpr bool queue_follows(std::uint64_t last_index, std::uint64_t last_value, std::uint64_t index,
-                             std::uint64_t value) noexcept {
-    return last_index != 0 && index == last_index + 1 && value > last_value;
 }
 } // namespace mhw::reflex

@@ -81,9 +81,7 @@ inline constexpr Offset barrier_plan_count = 0x7af28; // (sub_14229CEE0; full_po
 
 // cD3DRender, the D3D12 backend (image::d3d_render, renderer::backend).
 namespace d3d_render {
-inline constexpr Offset device = 0x18;              // ID3D12Device*
-inline constexpr Offset frame_index = 0x1e8;        // the frame index (sub_1423A2B50 increments it; fg-game-wait.md)
-inline constexpr Offset frame_fence_values = 0x1f0; // three: the frame fence's value for frame index % 3 (endFrame12)
+inline constexpr Offset device = 0x18;        // ID3D12Device*
 inline constexpr Offset compute_root = 0x2a0; // the compute root signature recordings cache (dlaa-output-handoff.md)
 inline constexpr Offset latency_waitable = 0x10f0; // the swap chain's frame latency waitable (fg-live-toggle.md)
 inline constexpr Offset swap_chain = 0x1470;       // IDXGISwapChain*

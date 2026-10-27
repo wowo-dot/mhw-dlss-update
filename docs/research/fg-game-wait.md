@@ -79,16 +79,13 @@ until the previous frame's value: slot `(index + 2) % 3` of the three at
 0x23a2b50. So MHW keeps one frame in flight. Streamline's DLSS-G header
 (2.12): on D3D12 the client's presenting queue "is blocked until DLSSG
 workload execution completes" (`DLSSGQueueParallelismMode`; the
-non-blocking mode is Vulkan only). Each real frame therefore carries
-DLSS-G's workload on the game's critical path, about 1.5 ms here: the normal
-cost of frame generation meeting the game's short frame queue, not the mod's
-work.
+non-blocking mode is Vulkan only). The hypothesis: each real frame carries
+DLSS-G's workload on the game's critical path, and one more frame in flight
+would hide it. PresentMon's fgcap2 (dev.13/14, before the free wait) seemed
+to agree: at Performance CNN and 2x the GPU was busy 3.7 ms of each 5.7 ms
+real frame. The experiment below disproved it.
 
-PresentMon (fgcap2) points the same way: at Performance CNN and 2x the GPU
-is busy 3.7 ms of each 5.7 ms real frame (at DLAA 5.3 of 5.7), so the
-frame waits on something other than GPU work.
-
-## The experiment: one more frame in flight (dev.19, `fg_queue`)
+## The experiment: one more frame in flight (dev.19, `fg_queue`, removed)
 
 What a deeper queue would touch (clean image, IDA):
 
@@ -117,5 +114,22 @@ present waits on (this frame's, `values[index % 3]`) with the last frame's.
 Only when the index follows on by one and the value grew (`queue_follows`),
 so the wait never reaches further back. Gated: endFrame12's store, present12's
 wait, the index increment, the endFrame/present pair, Main:Update's two calls.
-`ab` alternates every 10 s; the frame heartbeat logs `game_queue` (phase,
+`ab` alternated every 10 s; the frame heartbeat logged `game_queue` (phase,
 rewrites, refusals, present intervals per phase).
+
+Run 56996 (dev.19, hub, standing still, 2x, PresentMon 2.6.0 session
+`20261027-fgqueue`; per 20 s window and phase, 0 refusals):
+
+| Mode | game's wait | deep | GPU busy per real frame |
+|---|---|---|---|
+| DLAA | 194 fps, PCL 15.4 ms | 194 fps, PCL 15.4 ms | 5.3 ms (frame 5.15 ms) |
+| Performance CNN | 285 fps, PCL 11.1 ms | 285 fps, PCL 11.1 ms | 3.65 ms (frame 3.5 ms) |
+
+No difference in either mode: since the free wait (dev.17) the generating
+game is GPU-bound, the GPU busy for the whole real frame. At DLAA frame
+generation adds about 1.8 ms of GPU work per real frame (5.3 against about
+3.5 ms unloaded, fgcap2): DLSS-G's own work plus the mod's input copies for
+it. At Performance CNN the base rate (285 fps) is the unloaded one. The code
+was removed again (an unaudited path for no gain); what is left to trim is
+the mod's own GPU work (its copies), which helps DLSS and frame generation
+alike.

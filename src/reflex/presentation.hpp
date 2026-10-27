@@ -17,11 +17,6 @@ namespace mhw::reflex {
 // that does not generate held the game at about 110 fps); ab: the two every
 // 10 s (diagnostic).
 enum class GameWait : unsigned { free, chain, ab };
-// 0.32.0 diagnostic (fg-game-wait.md): how far the game's present runs ahead
-// of the GPU while DLSS-G paces the chain. game: it waits for its last frame
-// (one in flight, the game's own); deep: for the frame before; ab: the two
-// every 10 s.
-enum class GameQueue : unsigned { game, deep, ab };
 struct PresentationStats {
     std::uint64_t queues{}, swapchains{}, presents{}, native_presents{}, test_presents{}, resizes{}, faults{},
         sdk_paced_presents{};
@@ -65,13 +60,6 @@ struct PresentationStats {
     // The time the game's Present calls spent in Streamline's proxy, per phase
     // (calls, microseconds), while DLSS-G paces the chain.
     std::array<std::uint64_t, 2> present_calls{}, present_us{};
-    // 0.32.0 diagnostic (game_queue): the phase the last present set (0 the
-    // game's wait, 1 deep), the presents that set deep and those that wanted it
-    // but found the frame index or value not following on, and per phase the
-    // present intervals (count, microseconds) while DLSS-G paces the chain.
-    unsigned queue_phase{};
-    std::uint64_t queue_rewrites{}, queue_refusals{};
-    std::array<std::uint64_t, 2> queue_frames{}, queue_us{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
@@ -147,12 +135,6 @@ public:
     // The game's wait while DLSS-G paces the chain (ini fg_wait; free by
     // default). Any thread.
     void game_wait(GameWait mode) noexcept;
-    // Worker: the game's frame index and its three frame fence values
-    // (cD3DRender+0x1E8 and +0x1F0, checked by the caller's code gates; 0 when
-    // not qualified), and how far its present runs ahead (ini fg_queue). Any
-    // thread.
-    void frame_fences(std::uintptr_t index, std::uintptr_t values) noexcept;
-    void game_queue(GameQueue mode) noexcept;
     // Ends routing: without AL the host's later calls on the identity chain
     // reach its own methods, which cannot present with a game's flags
     // (tifa-6), so only for a host done with its chain (the fixtures). Under
