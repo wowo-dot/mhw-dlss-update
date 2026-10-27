@@ -169,6 +169,8 @@ int main() {
             check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
             check(defaults.dlss_preset == 11 && !defaults.jitter_ab, "preset K, the jitter A/B off by default");
             check(a::parse_config("jitter_ab = on\n", folder).jitter_ab, "jitter_ab = on");
+            check(!defaults.waitable_ab && a::parse_config("waitable_ab = on\n", folder).waitable_ab,
+                  "waitable_ab off by default, on parses");
             check(a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = Recommended\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = j\n", folder).dlss_preset == 10 &&

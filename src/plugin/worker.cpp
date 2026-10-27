@@ -183,6 +183,7 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"dlss_model\":" << quoted(mhw::settings::dlss_model_value(config.dlss_cnn))
         << ",\"dlss_preset\":" << quoted(mhw::settings::dlss_preset_value(config.dlss_preset))
         << ",\"sharpness\":" << config.sharpness << ",\"jitter_ab\":" << config.jitter_ab
+        << ",\"waitable_ab\":" << config.waitable_ab
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
@@ -407,6 +408,7 @@ void arm_frame_generation() {
         fg_ready = true;
         game_chain_ready = game_chain_qualified();
         if (game_chain_ready) presentation->waitable_slot(game_waitable_slot());
+        presentation->waitable_ab(config.waitable_ab); // 0.32.0 diagnostic
         log << "{\"event\":\"fg_switch_ready\",\"game_chain\":" << game_chain_ready
             << ",\"identity\":" << presentation->snapshot().identity << "}\n"
             << std::flush;
@@ -582,7 +584,12 @@ void run_session() {
                 << ",\"latency_pings\":{\"subscribed\":" << latency_ping_subscribed
                 << ",\"message\":" << latency_ping_message.load() << ",\"seen\":" << latency_pings_seen.load()
                 << ",\"sent\":" << frames.pings << ",\"refused\":" << frames.ping_failures << '}'
-                << ",\"presents\":" << stats.presents << ",\"native_presents\":" << stats.native_presents
+                << ",\"presents\":" << stats.presents << ",\"native_presents\":"
+                << stats.native_presents
+                // 0.32.0 diagnostic (waitable_ab): per phase, presents timed and their microseconds.
+                << ",\"waitable_ab\":{\"phase\":" << stats.ab_phase << ",\"flips\":" << stats.ab_flips << ",\"wait\":["
+                << stats.ab_frames[0] << ',' << stats.ab_us[0] << "],\"free\":[" << stats.ab_frames[1] << ','
+                << stats.ab_us[1] << "]}"
                 << ",\"queues\":" << stats.queues << ",\"late_queues\":" << stats.late_queues
                 << ",\"presentation_faults\":" << stats.faults;
             // The first callers of late queue creations, by module (tifa-6: whose they were).

@@ -52,6 +52,9 @@ namespace mhw::settings {
 //                           ; show start-up races (diagnostic; perf/chaos.hpp)
 //   jitter_ab = off         ; on: the camera jitter alternates every 10 s between the
 //                           ; mod's own and the game's table (diagnostic; dlss_sdk/jitter.hpp)
+//   waitable_ab = off       ; on: while DLSS-G is loaded, the game's per-frame wait
+//                           ; alternates every 10 s between its chain's latency waitable
+//                           ; and none (Reflex alone paces; diagnostic; reflex/presentation.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -92,6 +95,7 @@ struct Config {
     bool auto_exposure = true;           // auto_exposure = off (diagnostic; not in the shipped ini)
     bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
     bool jitter_ab{};                    // jitter_ab = on (diagnostic; not in the shipped ini)
+    bool waitable_ab{};                  // waitable_ab = on (diagnostic; not in the shipped ini)
     bool dlss_cnn{};                     // dlss_model = cnn
     unsigned dlss_preset = 11;           // the transformer's NGX preset: 0 recommended, 10 J, 11 K, 12 L, 13 M
     unsigned sharpness{};                // NVSharpen, 0 (off) to 100 %
@@ -295,6 +299,11 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
         } else if (key == "sharpness") {
             if (!parse_sharpness(value, c.sharpness))
                 c.warnings.push_back(where + "sharpness must be off or a whole number from 0 to 100");
+        } else if (key == "waitable_ab") {
+            if (value == "on" || value == "off")
+                c.waitable_ab = value == "on";
+            else
+                c.warnings.push_back(where + "waitable_ab must be on or off");
         } else if (key == "jitter_ab") {
             if (value == "on" || value == "off")
                 c.jitter_ab = value == "on";

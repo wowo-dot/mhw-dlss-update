@@ -44,6 +44,12 @@ struct PresentationStats {
     // The first failed attempt's HRESULT, and the last one's when the switch
     // fell back further (the chain as before, then the last resort).
     std::uint32_t switch_last_hr{}, switch_final_hr{};
+    // 0.32.0 diagnostic (waitable_ab): the phase (0 the chain's waitable, 1 an
+    // always-set event), flips, and per phase the game's presents timed and
+    // their summed intervals in microseconds, while DLSS-G paces the chain.
+    unsigned ab_phase{};
+    std::uint64_t ab_flips{};
+    std::array<std::uint64_t, 2> ab_frames{}, ab_us{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
@@ -116,6 +122,11 @@ public:
     // identity chain (cD3DRender+0x10F0, checked by the caller's code gate);
     // a switch replaces it there.
     void waitable_slot(std::uintptr_t address) noexcept;
+    // 0.32.0 diagnostic (ini waitable_ab, fg pacing study): while DLSS-G paces
+    // the chain, the game's per-frame wait alternates every 10 s between the
+    // chain's latency waitable and an always-set event (Reflex's sleep alone
+    // then paces the game). Any thread.
+    void waitable_ab(bool on) noexcept;
     // Ends routing: without AL the host's later calls on the identity chain
     // reach its own methods, which cannot present with a game's flags
     // (tifa-6), so only for a host done with its chain (the fixtures). Under
