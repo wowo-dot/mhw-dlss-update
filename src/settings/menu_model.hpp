@@ -43,7 +43,16 @@ struct Settings {
     bool generation_auto{};
     bool cnn{};           // 0.32.0: "Model" CNN (dlss_model = cnn)
     unsigned preset = 11; // "Preset": the transformer's NGX preset (dlss_preset)
+    unsigned sharpness{}; // "Sharpness": NVSharpen, 0 (off) to 100 % (sharpness)
 };
+
+// 0.32.0: "Sharpness", a slider in steps of 5 %. The ini takes any whole
+// percent; the slider shows the nearest step.
+inline constexpr unsigned sharpness_step = 5;
+constexpr int sharpness_shown(unsigned percent) {
+    const unsigned p = percent > max_sharpness ? max_sharpness : percent;
+    return static_cast<int>((p + sharpness_step / 2) / sharpness_step * sharpness_step);
+}
 
 // 0.32.0: "Model" and "Preset" choices (config.hpp's ngx_preset). Preset
 // applies to the transformer; CNN has one (E).
@@ -188,7 +197,18 @@ inline Offer offer_for(const capabilities::Capabilities &c) {
 }
 
 // The Settings page's rows.
-enum class Row : unsigned { dlss, mode, frame_generation, multiplier, pacing, target, reflex, model, preset };
+enum class Row : unsigned {
+    dlss,
+    mode,
+    frame_generation,
+    multiplier,
+    pacing,
+    target,
+    reflex,
+    model,
+    preset,
+    sharpness
+};
 // Why `row` cannot change now (the help line while it is greyed), or empty.
 // `fg_requested`: DLSS-G loads at start (frame_generation_plugin = auto).
 inline std::string lock_reason(Row row, const Settings &s, const capabilities::Capabilities &c, const Offer &offer,
@@ -200,6 +220,7 @@ inline std::string lock_reason(Row row, const Settings &s, const capabilities::C
     case Row::mode:
     case Row::model:
     case Row::preset:
+    case Row::sharpness:
         if (!caps::available(c, caps::Option::dlss, 0, why)) return why;
         if (!s.dlss) return "Turn DLSS on first.";
         return row == Row::preset && s.cnn ? "CNN has one preset; choose Transformer for J, K, L or M." : std::string();

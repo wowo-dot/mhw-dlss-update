@@ -259,6 +259,10 @@ void settings_model() {
         check(lock(m::Row::model, s, other) == lock(m::Row::dlss, s, other) &&
                   lock(m::Row::preset, s, other) == lock(m::Row::dlss, s, other),
               "not NVIDIA: model and preset locked");
+        check(lock(m::Row::sharpness, s, rtx30).empty() &&
+                  lock(m::Row::sharpness, off, rtx50) == "Turn DLSS on first." &&
+                  lock(m::Row::sharpness, s, other) == lock(m::Row::dlss, s, other),
+              "Sharpness: as Mode");
         auto cnn = s;
         cnn.cnn = true;
         check(lock(m::Row::model, cnn, rtx50).empty() &&
@@ -281,6 +285,11 @@ void settings_model() {
             check(m::preset_at(i, p) && m::preset_index(p) == i, "preset index round trip");
         check(std::string_view(m::model_names[0]) == "Transformer" && std::string_view(m::model_names[1]) == "CNN",
               "model names");
+        // The Sharpness slider steps 5 %: an ini value shows as the nearest step.
+        check(m::Settings{}.sharpness == 0 && m::sharpness_shown(0) == 0 && m::sharpness_shown(35) == 35 &&
+                  m::sharpness_shown(7) == 5 && m::sharpness_shown(8) == 10 && m::sharpness_shown(98) == 100 &&
+                  m::sharpness_shown(250) == 100,
+              "sharpness on the slider");
     }
     using mhw::settings::ReflexMode;
     check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 &&

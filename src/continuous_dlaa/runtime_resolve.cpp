@@ -374,6 +374,18 @@ void fg_final_scene(ID3D12GraphicsCommandList *list, const temporal_present::Bin
                     std::uint64_t frame, std::uint64_t epoch, D3D12_RESOURCE_STATES scene_state) noexcept {
     const bool outer = injected;
     injected = true;
+    // 0.32.0: NVSharpen first, so frame generation's HUD-less copy is the
+    // sharpened frame. The HDR10 state as CBRenderFrame takes it.
+    if (sharpen::percent()) {
+        sharpen::Hdr hdr;
+        std::uintptr_t renderer{};
+        std::uint8_t on{};
+        hdr.known = pb::read(cfg.image + layout::image::renderer, renderer) && renderer &&
+                    pb::read(renderer + layout::renderer::hdr_output, on) &&
+                    (!on || pb::read(renderer + layout::renderer::hdr_white_level, hdr.white));
+        hdr.on = on != 0;
+        sharpen::record(list, roots, scene, scene_state, hdr);
+    }
     frame_generation::game::record(list, roots, scene, frame, epoch, scene_state);
     injected = outer;
 }

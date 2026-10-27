@@ -50,6 +50,7 @@
 #include "../dlss_sdk/options.hpp"
 #include "../dlss_sdk/jitter.hpp"
 #include "../gpu_memory/budget.hpp"
+#include "../sharpen/sharpen.hpp"
 #include "../temporal_present/observer.hpp"
 #include "../ngx_startup/startup.hpp"
 #include "../frame_generation/game_session.hpp"

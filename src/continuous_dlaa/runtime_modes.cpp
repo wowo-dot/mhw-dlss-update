@@ -231,6 +231,8 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
             if (spatial->recorded() && !spatial->retired()) spatial->retire(fence.Get(), r.barrier, true);
             pass->retire(fence.Get(), r.barrier);
         }
+        // NVSharpen's scratch image and scene views follow the new targets.
+        sharpen::reset();
         // The private copies of the game's inputs are scene-sized.
         std::array<ComPtr<ID3D12Resource>, 3> copies{raw[0], raw[1], raw[2]};
         if (new_copies) {

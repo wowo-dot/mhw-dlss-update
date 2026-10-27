@@ -43,6 +43,7 @@ endfunction()
 include(cmake/NvidiaDlssSdk.cmake)
 include(cmake/NvidiaStreamline.cmake)
 include(cmake/DxbcHash.cmake)
+include(cmake/EmbedText.cmake)
 
 # --- The shipped mod's libraries ----------------------------------------------
 
@@ -140,12 +141,14 @@ add_library(mhw_dlss SHARED
     # game's own DLSS rules for its AA and resolution scaling options; the
     # texture mip bias.
     src/settings/status.cpp src/settings/menu.cpp src/continuous_dlaa/game_options.cpp
-    src/continuous_dlaa/texture_bias.cpp)
+    src/continuous_dlaa/texture_bias.cpp
+    # NVIDIA Image Scaling's NVSharpen on the final scene (third_party/nis).
+    src/sharpen/sharpen.cpp src/sharpen/sharpen_pass.cpp)
 mhw_cxx(mhw_dlss)
 target_compile_options(mhw_dlss PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/guard:cf>)
-target_include_directories(mhw_dlss PRIVATE src/projection_binding src/game_memory)
+target_include_directories(mhw_dlss PRIVATE src/projection_binding src/game_memory "${MHW_GENERATED_DIR}")
 target_compile_definitions(mhw_dlss PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_dlss PRIVATE bcrypt d3d12 dxgi dxguid
+target_link_libraries(mhw_dlss PRIVATE bcrypt d3d12 dxgi dxguid d3dcompiler
     mhw_ngx_startup mhw_temporal_state mhw_dlss_inline mhw_fg_reflex_presentation mhw_scaled_effects mhw_scaled_resolve)
 # The map file names this DLL's functions in crash stacks and stack-sampler
 # profiles (tools/profile_report.py; keep it with each handed-out build).
@@ -291,6 +294,11 @@ if(BUILD_TESTING)
     mhw_test(frame_generation_game_tests SOURCES tests/frame_generation_game_tests.cpp TEST frame_generation_game)
     mhw_test(hudless_pass_warp SOURCES tests/hudless_pass_warp.cpp src/frame_generation/hudless_pass.cpp
         LIBS d3d12 dxgi dxguid d3dcompiler)
+
+    # NVSharpen: its constants, and the pass on WARP (both encodings).
+    mhw_test(sharpen_tests SOURCES tests/sharpen_tests.cpp TEST sharpen)
+    mhw_test(sharpen_pass_warp SOURCES tests/sharpen_pass_warp.cpp src/sharpen/sharpen_pass.cpp
+        INCLUDES "${MHW_GENERATED_DIR}" LIBS d3d12 dxgi dxguid d3dcompiler)
 
     # Reflex and presentation: frame policies, the boundary stubs' ABI, Present
     # results, the identity chain, owned interfaces.

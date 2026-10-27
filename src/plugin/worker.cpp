@@ -23,6 +23,7 @@
 #include "../dlss_sdk/options.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../render_resolution/runtime.hpp"
+#include "../sharpen/sharpen.hpp"
 #include "../reflex/temporal_coexistence.hpp"
 #include <iterator>
 #include <sstream>
@@ -107,6 +108,7 @@ void read_configuration(const std::filesystem::path &dll, const std::filesystem:
     mhw::dlss_sdk::auto_exposure = config.auto_exposure;
     mhw::dlss_sdk::render_preset = mhw::settings::ngx_preset(config.dlss_cnn, config.dlss_preset);
     mhw::dlss_sdk::jitter_ab = config.jitter_ab;
+    mhw::sharpen::percent(config.sharpness); // 0.32.0: the menu changes it live
     reflex_requested.store(config.reflex == mhw::settings::ReflexMode::off     ? 0U
                            : config.reflex == mhw::settings::ReflexMode::boost ? 2U
                                                                                : 1U);
@@ -180,7 +182,8 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"auto_exposure\":" << config.auto_exposure << ",\"chaos\":" << config.chaos
         << ",\"dlss_model\":" << quoted(mhw::settings::dlss_model_value(config.dlss_cnn))
         << ",\"dlss_preset\":" << quoted(mhw::settings::dlss_preset_value(config.dlss_preset))
-        << ",\"jitter_ab\":" << config.jitter_ab << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
+        << ",\"sharpness\":" << config.sharpness << ",\"jitter_ab\":" << config.jitter_ab
+        << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
     for (unsigned i = 0; i < config.warnings.size(); ++i) log << (i ? "," : "") << quoted(config.warnings[i]);

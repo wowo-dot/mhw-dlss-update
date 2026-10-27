@@ -14,6 +14,7 @@
 #include "version.hpp"
 #include "../continuous_dlaa/runtime.hpp"
 #include "../dlss_sdk/options.hpp"
+#include "../sharpen/sharpen.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
@@ -46,6 +47,7 @@ enum Row : std::uint32_t {
     reflex_row,
     dlss_model_row, // 0.32.0
     dlss_preset_row,
+    sharpness_row,
     upscaling_section = 20,
     generation_section,
     latency_section,
@@ -76,6 +78,7 @@ bool model_row(std::uint32_t id, mm::Row &row) {
     case reflex_row: row = mm::Row::reflex; return true;
     case dlss_model_row: row = mm::Row::model; return true;
     case dlss_preset_row: row = mm::Row::preset; return true;
+    case sharpness_row: row = mm::Row::sharpness; return true;
     default: return false;
     }
 }
@@ -90,7 +93,8 @@ struct State {
     mm::Settings settings; // what the ini holds, or will hold once saved
     bool dirty{};          // changed since the last save
     bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{}; // which keys
-    bool model_dirty{};  // dlss_model and dlss_preset (0.32.0)
+    bool model_dirty{}; // dlss_model and dlss_preset (0.32.0)
+    bool sharpness_dirty{};
     bool fg_requested{}; // DLSS-G loads at start where supported: frame generation applies live
     // Fixed when the pages are added (CMFM keeps the choices): what this card
     // offers, the target frame rates, and the texts built from them.
@@ -188,10 +192,12 @@ void save() {
     const auto target = dynamic_target_value(s.dynamic_target);
     const std::string automatic = s.generation_auto ? "on" : "off";
     const std::string model = dlss_model_value(s.cnn), preset = dlss_preset_value(s.preset);
+    const auto sharpness = std::to_string(s.sharpness);
     auto updated = text;
     if (state.mode_dirty) updated = with_value(updated, "dlss_mode", mode);
     // Both keys: the preset line may hold 0.31.1's "e" (read as cnn).
     if (state.model_dirty) updated = with_value(with_value(updated, "dlss_model", model), "dlss_preset", preset);
+    if (state.sharpness_dirty) updated = with_value(updated, "sharpness", sharpness);
     if (state.generation_dirty) updated = with_frame_generation(updated, value);
     if (state.target_dirty) updated = with_value(updated, "dynamic_target", target);
     if (state.auto_dirty) updated = with_value(updated, "frame_generation_auto", automatic);
@@ -205,10 +211,11 @@ void save() {
         (state.target_dirty && check.dynamic_target != s.dynamic_target) ||
         (state.auto_dirty && check.generation_auto != s.generation_auto) ||
         (state.reflex_dirty && check.reflex != s.reflex) ||
-        (state.model_dirty && (check.dlss_cnn != s.cnn || check.dlss_preset != s.preset))) {
+        (state.model_dirty && (check.dlss_cnn != s.cnn || check.dlss_preset != s.preset)) ||
+        (state.sharpness_dirty && check.sharpness != s.sharpness)) {
         log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", dlss_model = " + model +
-                              ", dlss_preset = " + preset + ", frame_generation = " + value +
-                              ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
+                              ", dlss_preset = " + preset + ", sharpness = " + sharpness + ", frame_generation = " +
+                              value + ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
                               ", reflex = " + reflex + " would not read back; not written");
         return;
     }
@@ -218,10 +225,11 @@ void save() {
         return;
     }
     state.dirty = state.mode_dirty = state.generation_dirty = state.reflex_dirty = state.target_dirty =
-        state.auto_dirty = state.model_dirty = false;
+        state.auto_dirty = state.model_dirty = state.sharpness_dirty = false;
     log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", dlss_model = " + model +
-                         ", dlss_preset = " + preset + ", frame_generation = " + value + ", dynamic_target = " +
-                         target + ", frame_generation_auto = " + automatic + ", reflex = " + reflex);
+                         ", dlss_preset = " + preset + ", sharpness = " + sharpness + ", frame_generation = " + value +
+                         ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
+                         ", reflex = " + reflex);
 }
 
 // Page opened: the ini as it is now (players may edit it while the game runs),
@@ -238,6 +246,8 @@ void reload() {
     state.settings.cnn = c.dlss_cnn;
     state.settings.preset = c.dlss_preset;
     dlss_sdk::render_preset = ngx_preset(c.dlss_cnn, c.dlss_preset);
+    state.settings.sharpness = c.sharpness;
+    sharpen::percent(c.sharpness);
     state.settings.frame_generation = c.frame_generation;
     if (c.frame_generation) {
         state.settings.dynamic = c.dynamic;
@@ -314,6 +324,7 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
         case reflex_row: value->i = mm::choice_of(s.reflex); break;
         case dlss_model_row: value->i = s.cnn ? 1 : 0; break;
         case dlss_preset_row: value->i = mm::preset_index(s.preset); break;
+        case sharpness_row: value->i = mm::sharpness_shown(s.sharpness); break;
         default: return CMFM_ERROR;
         }
         return CMFM_OK;
@@ -380,6 +391,9 @@ cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *v
             if (id == dlss_model_row) return value->i == 0 || value->i == 1 ? CMFM_OK : refuse("Unknown model.");
             return value->i >= 0 && value->i < static_cast<int>(mm::presets.size()) ? CMFM_OK
                                                                                     : refuse("Unknown preset.");
+        case sharpness_row:
+            if (!caps::available(c, caps::Option::dlss, 0, reason)) return refuse(reason);
+            return value->i >= 0 && value->i <= static_cast<int>(max_sharpness) ? CMFM_OK : refuse("From 0 to 100 %.");
         default: return CMFM_OK;
         }
     } catch (...) {
@@ -460,6 +474,14 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
         case dlss_preset_row:
             if (!mm::preset_at(value->i, s.preset)) return CMFM_ERROR;
             apply_model(s);
+            return CMFM_OK;
+        case sharpness_row:
+            // Live: the next frame's final scene is sharpened at it (0 off).
+            if (value->i < 0 || value->i > static_cast<int>(max_sharpness)) return CMFM_ERROR;
+            s.sharpness = static_cast<unsigned>(value->i);
+            state.dirty = state.sharpness_dirty = true;
+            sharpen::percent(s.sharpness);
+            log(AL_LOG_INFO, "menu: sharpness = " + std::to_string(s.sharpness) + " (applied now)");
             return CMFM_OK;
         default: return CMFM_ERROR;
         }
@@ -643,6 +665,9 @@ void add_now(unsigned waited_ms) noexcept {
                 help_text(
                     "Recommended: NVIDIA's per mode (K, M at Performance). L and M: less ghosting, slower on RTX 20 "
                     "and 30. J: like K.")),
+            row(sharpness_row, CMFM_TYPE_INT, label_text("Sharpness"),
+                help_text("NVIDIA's NVSharpen on the game's image while DLSS draws; the HUD is not sharpened. 0 % is "
+                          "off.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
                 help_text(
@@ -683,6 +708,11 @@ void add_now(unsigned waited_ms) noexcept {
         setting(dlss_preset_row).choices = mm::preset_names;
         setting(dlss_preset_row).choice_count = static_cast<std::uint32_t>(std::size(mm::preset_names));
         setting(dlss_preset_row).default_value.i = mm::preset_index(defaults.dlss_preset);
+        setting(sharpness_row).min = 0;
+        setting(sharpness_row).max = max_sharpness;
+        setting(sharpness_row).step = mm::sharpness_step;
+        setting(sharpness_row).unit = "%";
+        setting(sharpness_row).default_value.i = mm::sharpness_shown(defaults.sharpness);
         {
             std::lock_guard lock(state.mutex);
             setting(multiplier_row).help = state.multiplier_help.c_str();
@@ -807,9 +837,9 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.menu = menu;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.dlss_mode, config.dlss,       config.frame_generation, config.multiplier,
-                              config.reflex,    config.dynamic,    config.dynamic_target,   config.generation_auto,
-                              config.dlss_cnn,  config.dlss_preset};
+            state.settings = {config.dlss_mode, config.dlss,        config.frame_generation, config.multiplier,
+                              config.reflex,    config.dynamic,     config.dynamic_target,   config.generation_auto,
+                              config.dlss_cnn,  config.dlss_preset, config.sharpness};
             state.fg_requested = fg_requested;
             state.targets = mm::target_choices(config.dynamic_target);
         }

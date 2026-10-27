@@ -3,6 +3,7 @@
 #include "../src/scaled_temporal/resolve.hpp"
 #include "../src/continuous_dlaa/game_options.hpp"
 #include "../src/frame_generation/game_session.hpp"
+#include "../src/sharpen/sharpen.hpp"
 #include <string>
 
 namespace nb = mhw::test::neighbours;
@@ -191,3 +192,18 @@ bool capture_wanted() noexcept {
 void submitted(std::uint64_t, std::uint64_t, std::uint64_t) noexcept {}
 void reset(std::uint64_t, std::uint64_t) noexcept {}
 } // namespace mhw::frame_generation::game
+
+// NVSharpen stays off in the runtime's tests (tests/sharpen_pass_warp.cpp has it).
+namespace mhw::sharpen {
+void percent(unsigned) noexcept {}
+unsigned percent() noexcept {
+    return 0;
+}
+bool prepare(ID3D12Device *, std::string &) noexcept {
+    return true;
+}
+void reset() noexcept {}
+void record(ID3D12GraphicsCommandList *, const temporal_present::Bindings &, ID3D12Resource *, D3D12_RESOURCE_STATES,
+            Hdr) noexcept {}
+void write(std::ostream &) {}
+} // namespace mhw::sharpen

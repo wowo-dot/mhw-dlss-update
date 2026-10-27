@@ -22,6 +22,8 @@ namespace mhw::settings {
 //                           ; cost on RTX 20/30, softer)
 //   dlss_preset = k         ; the transformer's preset: recommended (NVIDIA's per
 //                           ; mode), j, k, l or m (0.32.0; e and f, the CNN's, read as cnn)
+//   sharpness = 0           ; 0 (off) to 100: NVIDIA's NVSharpen on the image while DLSS
+//                           ; draws (0.32.0, sharpen/sharpen.hpp)
 //   frame_generation = off  ; off, 2x, 3x, 4x, 6x, dynamic (the menu turns it on and off live)
 //   frame_generation_plugin = auto ; auto: DLSS-G loads where the card supports
 //                           ; it; off: never (no frame generation, Reflex Off possible)
@@ -92,6 +94,7 @@ struct Config {
     bool jitter_ab{};                    // jitter_ab = on (diagnostic; not in the shipped ini)
     bool dlss_cnn{};                     // dlss_model = cnn
     unsigned dlss_preset = 11;           // the transformer's NGX preset: 0 recommended, 10 J, 11 K, 12 L, 13 M
+    unsigned sharpness{};                // NVSharpen, 0 (off) to 100 %
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -176,6 +179,23 @@ inline bool parse_dynamic_target(std::string_view value, unsigned &target) {
     }
     if (n < min_dynamic_target || n > max_dynamic_target) return false;
     target = n;
+    return true;
+}
+// The sharpness of an ini value: off (0) or a whole number from 0 to 100.
+inline constexpr unsigned max_sharpness = 100;
+inline bool parse_sharpness(std::string_view value, unsigned &sharpness) {
+    if (value == "off") {
+        sharpness = 0;
+        return true;
+    }
+    if (value.empty() || value.size() > 3) return false;
+    unsigned n = 0;
+    for (const char c : value) {
+        if (c < '0' || c > '9') return false;
+        n = n * 10 + static_cast<unsigned>(c - '0');
+    }
+    if (n > max_sharpness) return false;
+    sharpness = n;
     return true;
 }
 // The ini value of the DLSS setting: "off" or the mode's.
@@ -272,6 +292,9 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 c.dlss_cnn = true;
             else
                 c.warnings.push_back(where + "dlss_preset must be recommended, j, k, l or m");
+        } else if (key == "sharpness") {
+            if (!parse_sharpness(value, c.sharpness))
+                c.warnings.push_back(where + "sharpness must be off or a whole number from 0 to 100");
         } else if (key == "jitter_ab") {
             if (value == "on" || value == "off")
                 c.jitter_ab = value == "on";

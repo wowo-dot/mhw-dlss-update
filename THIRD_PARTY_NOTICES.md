@@ -160,6 +160,15 @@ DirectXShaderCompiler, commit `69c311af7091953427a6d67c16e811ce65313b93`
 (`third_party/dxc_hash`). University of Illinois/NCSA Open Source License:
 `third_party/dxc_hash/LICENSE.TXT`.
 
+## NVIDIA Image Scaling SDK (NVSharpen)
+
+`third_party/nis/NIS_Scaler.h` and `NIS_Config.h` from
+NVIDIAGameWorks/NVIDIAImageScaling 1.0.3, commit
+`35e13ba316c98eeecf16f37eae70ce88019911f6` (since 0.32.0). The shader is compiled
+at run time from its text, embedded in `mhw_dlss.dll`; `NIS_Scaler.h` carries
+one marked change (`third_party/nis/README.md`). MIT license:
+`third_party/nis/LICENSE.txt`.
+
 ## Astera Loader and CMFM headers
 
 `third_party/al/al_plugin.h` (Astera Loader's plugin API) and

@@ -60,8 +60,11 @@ inline constexpr Offset scale_previous = 0x1f8;
 inline constexpr Offset content_scale_desired = 0x200;
 inline constexpr Offset content_scale = 0x204;
 inline constexpr Offset combined_scale = 0x208; // the clamped product
-inline constexpr Offset context = 0x710;        // the primary render context, embedded (depth-copy-frame-map.md)
-inline constexpr Offset bank = 0x1f200;         // the command bank, toggled each frame (queued-work-provenance.md)
+// CBRenderFrame's HDR10 fields come from here (0x142288bd0, nvsharpen.md).
+inline constexpr Offset hdr_output = 0x21a;      // byte: bHdrOutput (latched from +0x219, 0x142293435)
+inline constexpr Offset hdr_white_level = 0x21c; // float: fHdrOutputWhiteLevel, nits (init 300)
+inline constexpr Offset context = 0x710;         // the primary render context, embedded (depth-copy-frame-map.md)
+inline constexpr Offset bank = 0x1f200;          // the command bank, toggled each frame (queued-work-provenance.md)
 inline constexpr Offset epoch = 0x1f208;
 inline constexpr Offset frame = 0x1f210;        // the counter temporal history and jitter use
 inline constexpr Offset window_width = 0x1f448; // live-aspect.md

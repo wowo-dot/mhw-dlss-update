@@ -39,7 +39,7 @@ int main() {
     }
     {
         const auto c = mhw::settings::parse_config(
-            "frame_generation = 5x\nreflex = off\nsharpness = 1\nnot a pair\nlog_dir =\n", folder);
+            "frame_generation = 5x\nreflex = off\ndlss_sharpness = 1\nnot a pair\nlog_dir =\n", folder);
         check(!c.frame_generation && c.multiplier == 2, "bad multiplier keeps the default (off, 2x)");
         check(c.reflex == mhw::settings::ReflexMode::off, "reflex off kept: frame generation is off");
         check(c.warnings.size() == 4, "four warnings");
@@ -190,6 +190,17 @@ int main() {
             check(old_e.dlss_cnn && old_e.dlss_preset == 11 && old_e.warnings.empty() &&
                       a::parse_config("dlss_preset = f\n", folder).dlss_cnn,
                   "dlss_preset = e or f reads as the CNN");
+            // 0.32.0: NVSharpen's sharpness, off by default.
+            check(defaults.sharpness == 0 && a::parse_config("sharpness = 35\n", folder).sharpness == 35 &&
+                      a::parse_config("sharpness = 100\n", folder).sharpness == 100 &&
+                      a::parse_config("sharpness = 7\n", folder).sharpness == 7 &&
+                      a::parse_config("sharpness = 30\nsharpness = OFF\n", folder).sharpness == 0,
+                  "sharpness: 0 to 100, or off");
+            for (const char *bad_sharpness : {"sharpness = 101\n", "sharpness = -5\n", "sharpness = 50%\n",
+                                              "sharpness = \n", "sharpness = 0.5\n"}) {
+                const auto c = a::parse_config(bad_sharpness, folder);
+                check(c.sharpness == 0 && c.warnings.size() == 1, "a bad sharpness warns and stays off");
+            }
             const auto bad_model = a::parse_config("dlss_model = dlss3\n", folder);
             check(!bad_model.dlss_cnn && bad_model.warnings.size() == 1, "a bad model warns and stays transformer");
             check(std::string_view(a::dlss_model_value(true)) == "cnn" &&

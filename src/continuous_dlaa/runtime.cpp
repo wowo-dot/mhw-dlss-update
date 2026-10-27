@@ -211,6 +211,10 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
             throw std::runtime_error(reason);
         if (!sr::prepare(cfg, runtime.width, runtime.height, render_width(), render_height(), reason))
             throw std::runtime_error(reason);
+        // NVSharpen (0.32.0) is optional: its refusal is in the summary, and
+        // the frame stays as it was.
+        std::string sharpen_refusal;
+        sharpen::prepare(device, sharpen_refusal);
         sr::observe_final_scene(&fg_final_scene);
         for (unsigned i = 0; i < targets.size(); ++i) {
             if (i < first_api_hook) {

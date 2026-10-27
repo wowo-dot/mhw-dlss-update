@@ -100,6 +100,9 @@ void write_summary(std::ostream &out) {
     // The sampler table cache's fill and the material bank (texture-mip-bias.md).
     out << ",\"texture_bias\":";
     texture_bias::write(out);
+    // NVSharpen on the final scene (nvsharpen.md).
+    out << ",\"sharpen\":";
+    sharpen::write(out);
     out << ",\"native_choices\":";
     activation::write_choices(out);
     out << '}';
