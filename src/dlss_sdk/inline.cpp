@@ -217,7 +217,7 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
                     init == 1,
                 "inline capability values");
         // The SDK's quality value and the preset hint it reads for that value;
-        // preset K (transformer) for every mode.
+        // the player's preset (render_preset, set below) for every mode.
         NVSDK_NGX_PerfQuality_Value quality = NVSDK_NGX_PerfQuality_Value_MaxPerf;
         const char *preset = NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance;
         switch (geometry.mode) {

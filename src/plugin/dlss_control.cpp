@@ -59,10 +59,11 @@ void change_dlss_mode(const mhw::continuous_dlaa::ModeRequest &wanted, DlssRetry
     log << "{\"event\":\"dlss_mode_change\",\"from\":"
         << quoted(from_off ? "off" : mhw::settings::dlss_mode_value(from))
         << ",\"requested\":" << quoted(wanted.off ? "off" : mhw::settings::dlss_mode_value(wanted.mode))
-        << ",\"mode\":" << quoted(r.off ? "off" : mhw::settings::dlss_mode_value(r.mode)) << ",\"scene\":" << r.scene
-        << ",\"ok\":" << r.ok << ",\"unchanged\":" << r.unchanged << ",\"resumed\":" << r.resumed
-        << ",\"phase\":" << r.phase << ",\"reason\":" << quoted(r.reason) << ",\"render\":[" << r.render_width << ','
-        << r.render_height << "],\"barrier\":" << r.barrier << ",\"phase_us\":[";
+        << ",\"mode\":" << quoted(r.off ? "off" : mhw::settings::dlss_mode_value(r.mode))
+        << ",\"preset\":" << cd::preset_in_use() << ",\"scene\":" << r.scene << ",\"ok\":" << r.ok
+        << ",\"unchanged\":" << r.unchanged << ",\"resumed\":" << r.resumed << ",\"phase\":" << r.phase
+        << ",\"reason\":" << quoted(r.reason) << ",\"render\":[" << r.render_width << ',' << r.render_height
+        << "],\"barrier\":" << r.barrier << ",\"phase_us\":[";
     for (unsigned i = 1; i < r.us.size(); ++i) log << (i > 1 ? "," : "") << r.us[i];
     log << "],\"frame_generation\":{\"paused\":" << generation << ",\"settle_ms\":" << fg_ms
         << ",\"settled\":" << settled << ",\"released\":" << released << ",\"configured\":" << configured

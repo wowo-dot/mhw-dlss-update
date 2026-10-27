@@ -537,31 +537,37 @@ void CMFM_CALL on_event(void *, cmfm_event_t event) {
 // src/menu/menu.cpp: label 64 bytes, help and page help 200, page title 24).
 // v0.20.0 lost its Settings page to a 230-byte help line, so every literal
 // goes through these checks and an overlong text fails the build instead.
+// Help lines stay well under CMFM's limit: the game's help bar squeezes a
+// longer one to fit (dev.8's 198-byte Preset help was hard to read).
+inline constexpr std::size_t help_fits = 120;
+static_assert(help_fits <= 200, "CMFM: a help line is at most 200 bytes");
 template <std::size_t N> consteval const char *label_text(const char (&text)[N]) {
     static_assert(N - 1 <= 64, "CMFM: a label is at most 64 bytes");
     return text;
 }
 template <std::size_t N> consteval const char *help_text(const char (&text)[N]) {
-    static_assert(N - 1 <= 200, "CMFM: a help line is at most 200 bytes");
+    static_assert(N - 1 <= help_fits, "a help line is at most 120 bytes (the game's help bar)");
     return text;
 }
 template <std::size_t N> consteval const char *title_text(const char (&text)[N]) {
     static_assert(N - 1 <= 24, "CMFM: a page title is at most 24 bytes");
     return text;
 }
-// Help lines built at runtime: cut at 200 bytes (never needed: the longest
-// variant is checked below).
+// Help lines built at runtime: cut at CMFM's 200 bytes (never needed: the
+// longest variant is checked below).
 std::string help_built(std::string text) {
     if (text.size() > 200) text.resize(200);
     return text;
 }
 constexpr std::string_view pacing_help_dynamic =
-    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when the game runs faster without it. Dynamic: the count "
-    "that reaches the target frame rate. Applies at once.";
+    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when it would slow the game. Dynamic: aims at the target.";
 constexpr std::string_view pacing_help_fixed =
-    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when the game runs faster without it. Applies at once.";
-static_assert(pacing_help_dynamic.size() <= 200 && pacing_help_fixed.size() <= 200,
-              "CMFM: a help line is at most 200 bytes");
+    "Fixed: always the multiplier. Auto pause: NVIDIA pauses it when it would slow the game.";
+constexpr std::string_view multiplier_help_most =
+    "Frames shown for each rendered frame; this graphics card shows up to 6x.";
+static_assert(pacing_help_dynamic.size() <= help_fits && pacing_help_fixed.size() <= help_fits &&
+                  multiplier_help_most.size() <= help_fits,
+              "a help line is at most 120 bytes (the game's help bar)");
 // CHOICE names: at most 32 bytes each.
 constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i)
@@ -618,43 +624,41 @@ void add_now(unsigned waited_ms) noexcept {
             state.multiplier_help = help_built(
                 "Frames shown for each rendered frame" +
                 (c.max_multiplier ? "; this graphics card shows up to " + mm::multiplier_name(most) : std::string()) +
-                ". Applies at once.");
+                ".");
             state.pacing_help = std::string(state.offer.dynamic ? pacing_help_dynamic : pacing_help_fixed);
         }
         cmfm_setting_t settings[]{
             row(upscaling_section, CMFM_TYPE_SECTION, label_text("Upscaling"), nullptr),
             row(dlss_row, CMFM_TYPE_BOOL, label_text("DLSS"),
-                help_text(
-                    "NVIDIA DLSS Super Resolution and DLAA. Off gives the game back: its own anti-aliasing and resolution, as "
-                    "without the mod. Applies at once.")),
+                help_text("NVIDIA DLSS Super Resolution and DLAA. Off: the game's own anti-aliasing and resolution, as "
+                          "without the mod.")),
             row(mode_row, CMFM_TYPE_CHOICE, label_text("Mode"),
-                help_text(
-                    "DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, upscaled by DLSS. "
-                    "Applies at once.")),
+                help_text("DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, "
+                          "upscaled by DLSS.")),
             row(dlss_model_row, CMFM_TYPE_CHOICE, label_text("Model"),
                 help_text(
-                    "Transformer: DLSS 4's model, sharper and steadier in motion. CNN: the older model (preset E), cheaper on "
-                    "RTX 20 and 30 cards but softer. Applies at once.")),
+                    "Transformer: DLSS 4's model, sharper and steadier. CNN: the older one, cheaper on RTX 20 and 30 "
+                    "but softer.")),
             row(dlss_preset_row, CMFM_TYPE_CHOICE, label_text("Preset"),
                 help_text(
-                    "K: NVIDIA's pick for DLAA, Quality and Balanced. M and L: newer, less ghosting, slower on RTX 20 and 30 "
-                    "(M: NVIDIA's for Performance). J: close to K. Recommended: NVIDIA's per mode. Applies at once.")),
+                    "Recommended: NVIDIA's per mode (K, M at Performance). L and M: less ghosting, slower on RTX 20 "
+                    "and 30. J: like K.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
                 help_text(
-                    "DLSS Frame Generation shows generated frames between the rendered ones (RTX 40 and 50 series). Needs "
-                    "DLSS on. Applies at once. Its model can be set in the NVIDIA App.")),
+                    "DLSS Frame Generation (RTX 40 and 50) adds frames between the rendered ones; needs DLSS. Its "
+                    "model: the NVIDIA App.")),
             row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"), nullptr),
             row(pacing_row, CMFM_TYPE_CHOICE, label_text("Pacing"), nullptr),
             row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
                 help_text(
-                    "The frame rate Dynamic pacing aims for: the display's refresh rate or a set rate. It never goes past it. "
-                    "Applies at once.")),
+                    "The frame rate Dynamic pacing aims for: the display's refresh rate or a set rate. It never goes "
+                    "past it.")),
             row(latency_section, CMFM_TYPE_SECTION, label_text("Latency"), nullptr),
             row(reflex_row, CMFM_TYPE_CHOICE, label_text("Reflex"),
                 help_text(
-                    "NVIDIA Reflex Low Latency shortens the frame queue; Boost also keeps the graphics card's clocks up. Off "
-                    "only while frame generation is off (it needs Reflex). Applies at once.")),
+                    "NVIDIA Reflex shortens the frame queue; Boost also keeps the clocks up. Off only while frame "
+                    "generation is off.")),
         };
         const auto setting = [&settings](std::uint32_t id) -> cmfm_setting_t & {
             for (auto &s : settings)
@@ -724,8 +728,7 @@ void add_now(unsigned waited_ms) noexcept {
                 CMFM_FLAG_LIVE),
             row(support_line_row, CMFM_TYPE_TEXT, label_text("Frame generation support"),
                 help_text(
-                    "What DLSS Frame Generation can do with this graphics card, driver and Windows: the most frames per "
-                    "rendered frame, and Dynamic pacing."),
+                    "What DLSS Frame Generation can do here: the most frames per rendered frame, and Dynamic pacing."),
                 CMFM_FLAG_LIVE),
         };
 
