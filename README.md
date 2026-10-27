@@ -141,7 +141,7 @@ cmake --build build --config Release --target mhw_dlss
 The mod is `build/bin/Release/mhw_dlss.dll` (the target was `mhw_dlss_alpha`
 up to 0.28.6). Leave out `--target` to build the tests as well.
 
-**Tests:** run `ctest --test-dir build -C Release -j 32` (85 tests, about ten
+**Tests:** run `ctest --test-dir build -C Release -j 32` (92 tests, about ten
 seconds: the C++ tests and one for the Python tools). They come in two tiers:
 - `quick`: everything under about a second. While iterating, run
   `ctest -L quick` plus the changed area's own tests (`ctest -R <name>`).
