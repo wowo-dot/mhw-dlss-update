@@ -69,6 +69,26 @@ The image looked the same to the user; frame generation ran throughout.
   makes its own copies as before. Frame generation copies from both without a
   transition.
 
+Run 6460 (dev.21, hub, 2x, 5090 at 1440p, DLAA → Quality → DLAA →
+Performance CNN, frame generation Off and On once): frame generation's
+staging copies 0, keyed hits 60,684, early final draws 2,258 (2,253
+confirmed), record failures, size and frame mismatches 0, 4 input releases
+(the mode changes); DLSS fault 0.
+
+| Segment, us a frame | DLAA | Quality | Performance CNN |
+|---|---|---|---|
+| inputs | 28-31 | 21-25 | 12-15 |
+| conversion | 13 | 9-11 | 6-7 |
+| dlss | 478-487 | 474-479 | 205-222 |
+| output | 0.07 | 0.07 | 0.07 |
+
+The mod's own work (everything but the evaluation) from dev.19 to dev.21:
+DLAA about 166 to 42 us, Performance CNN about 93 to 20 us; the evaluation
+itself 85 and 50 us faster. The user saw slight ghosting on fast-moving
+things at Performance CNN with frame generation, as expected of the CNN
+model at 720p (fur motion and a reactive mask are open input leads, handoff
+section 4).
+
 ## Left
 
 - The input copies themselves (24 bytes a pixel of the rendered rectangle):
