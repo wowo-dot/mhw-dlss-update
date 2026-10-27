@@ -270,6 +270,17 @@ struct Presentation::State {
             ab_last = 0; // the first present after a flip is not timed
         }
     }
+    // The game's Present into Streamline's proxy, timed per phase while DLSS-G
+    // paces the chain (route mutex held).
+    void ab_present_time(LONGLONG began) noexcept {
+        if (contract != PresentationContract::sdk_paced) return;
+        LARGE_INTEGER now{}, frequency{};
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&frequency);
+        ++stats.ab_present_calls[stats.ab_phase];
+        stats.ab_present_us[stats.ab_phase] +=
+            static_cast<std::uint64_t>((now.QuadPart - began) * 1000000 / frequency.QuadPart);
+    }
     // Before a switch (the game's resize, route mutex held): the chain's own
     // waitable back in the slot, as switch_chain() expects.
     void ab_restore() noexcept {
@@ -956,7 +967,10 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain *self, UINT interval, UINT
             SetLastError(before);
             auto *target = s.native_of(self);
             Capture capture(target);
+            LARGE_INTEGER began{};
+            QueryPerformanceCounter(&began);
             const auto hr = s.proxy_swap->Present(interval, flags);
+            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present_time(began.QuadPart);
             if (flags & DXGI_PRESENT_TEST)
                 ++s.stats.test_presents;
             else
@@ -1064,7 +1078,10 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1 *self, UINT interval, UI
             SetLastError(before);
             auto *target = s.native_of(self);
             Capture capture(target);
+            LARGE_INTEGER began{};
+            QueryPerformanceCounter(&began);
             const auto hr = s.proxy_swap->Present1(interval, flags, params);
+            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present_time(began.QuadPart);
             if (flags & DXGI_PRESENT_TEST)
                 ++s.stats.test_presents;
             else

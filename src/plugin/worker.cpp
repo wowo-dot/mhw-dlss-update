@@ -576,6 +576,10 @@ void run_session() {
                 if (!driver_mode("running_on", reflex_applied.load() != 0)) reflex_unconfirmed("running_on");
                 reflex_confirmed = true;
             }
+            LARGE_INTEGER clock_qpc{}, clock_frequency{};
+            QueryPerformanceCounter(&clock_qpc);
+            QueryPerformanceFrequency(&clock_frequency);
+            const auto clock_tick = GetTickCount64();
             log << "{\"event\":\"frame_heartbeat\",\"completed\":" << frames.completed
                 << ",\"tokens\":" << frames.tokens << ",\"sleeps\":" << frames.sleeps
                 << ",\"markers\":" << frames.markers << ",\"faults\":" << frames.faults << ",\"owner\":"
@@ -589,9 +593,14 @@ void run_session() {
                 // 0.32.0 diagnostic (waitable_ab): per phase, presents timed and their microseconds.
                 << ",\"waitable_ab\":{\"phase\":" << stats.ab_phase << ",\"flips\":" << stats.ab_flips << ",\"wait\":["
                 << stats.ab_frames[0] << ',' << stats.ab_us[0] << "],\"free\":[" << stats.ab_frames[1] << ','
-                << stats.ab_us[1] << "]}"
-                << ",\"queues\":" << stats.queues << ",\"late_queues\":" << stats.late_queues
-                << ",\"presentation_faults\":" << stats.faults;
+                << stats.ab_us[1] << "],\"present\":[[" << stats.ab_present_calls[0] << ',' << stats.ab_present_us[0]
+                << "],[" << stats.ab_present_calls[1] << ',' << stats.ab_present_us[1]
+                << "]]}"
+                // The phase is (tick_ms / 10000) % 2: this pair lines PresentMon's
+                // QPC times (--qpc_time) up with it.
+                << ",\"clock\":{\"qpc\":" << clock_qpc.QuadPart << ",\"tick_ms\":" << clock_tick
+                << ",\"frequency\":" << clock_frequency.QuadPart << '}' << ",\"queues\":" << stats.queues
+                << ",\"late_queues\":" << stats.late_queues << ",\"presentation_faults\":" << stats.faults;
             // The first callers of late queue creations, by module (tifa-6: whose they were).
             log << ",\"late_queue_callers\":[";
             for (unsigned i = 0, n = 0; i < stats.late_queue_callers.size(); ++i)

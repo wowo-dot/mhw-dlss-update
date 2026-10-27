@@ -50,6 +50,9 @@ struct PresentationStats {
     unsigned ab_phase{};
     std::uint64_t ab_flips{};
     std::array<std::uint64_t, 2> ab_frames{}, ab_us{};
+    // The time the game's Present calls spent in Streamline's proxy, per phase
+    // (calls, microseconds), while DLSS-G paces the chain.
+    std::array<std::uint64_t, 2> ab_present_calls{}, ab_present_us{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
