@@ -69,7 +69,7 @@ struct InlineFrame::Impl {
     unsigned width{}, height{}, create_result{}, evaluate_result{}, release_result{}, destroy_result{};
     Geometry geometry;
     Extent optimal{}, minimum{}, maximum{};
-    unsigned optimal_result{}, quality{};
+    unsigned optimal_result{}, quality{}, preset{};
     float sharpness{};
     bool creation_completed{}, attempted{}, issued{}, restored{}, copied{}, released{};
     bool reset{true};
@@ -248,7 +248,10 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
         // HDR, low-resolution motion, inverted depth, and auto exposure
         // unless the diagnostic turned it off (options.hpp).
         create.InFeatureCreateFlags = auto_exposure.load() ? 75 : 11;
-        p.parameters->Set(preset, render_preset.load()); // K unless the diagnostic chose (options.hpp)
+        // The player's model and preset (options.hpp), kept for the log and the
+        // runtime's rebuild check; the NVIDIA App's DLSS override may set another.
+        p.preset = render_preset.load();
+        p.parameters->Set(preset, p.preset);
         p.create_result = NGX_D3D12_CREATE_DLSS_EXT(p.create_list.Get(), 1, 1, &p.feature, p.parameters, &create);
         require(p.create_result == 1 && p.feature, "inline CreateFeature");
         hr(p.create_list->Close(), "inline create close");
@@ -407,6 +410,9 @@ RecordAttempt InlineFrame::last_attempt() const noexcept {
 Geometry InlineFrame::geometry() const noexcept {
     return impl_->geometry;
 }
+unsigned InlineFrame::preset() const noexcept {
+    return impl_->preset;
+}
 ID3D12Resource *InlineFrame::raw_color() const noexcept {
     return impl_->raw[0].Get();
 }
@@ -429,8 +435,8 @@ void InlineFrame::write(std::ostream &o) const {
       << ",\"last_attempt\":{\"commands\":" << p.last.commands << ",\"bindings_restored\":" << p.last.bindings_restored
       << ",\"native_output_written\":" << p.last.native_output_written << ",\"success\":" << p.last.success << '}'
       << ",\"device\":" << reinterpret_cast<std::uintptr_t>(p.device.Get())
-      << ",\"create_flags\":75,\"mode\":" << p.quality
-      << ",\"preset\":11,\"input_formats\":[26,41,42],\"converted_formats\":[2,41,16],\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
+      << ",\"create_flags\":75,\"mode\":" << p.quality << ",\"preset\":" << p.preset
+      << ",\"input_formats\":[26,41,42],\"converted_formats\":[2,41,16],\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
       << reinterpret_cast<std::uintptr_t>(p.raw[0].Get()) << ',' << reinterpret_cast<std::uintptr_t>(p.raw[1].Get())
       << ',' << reinterpret_cast<std::uintptr_t>(p.raw[2].Get()) << ']' << ",\"command\":" << p.list_identity
       << ",\"native_output\":" << p.native_identity << ",\"width\":" << p.width << ",\"height\":" << p.height

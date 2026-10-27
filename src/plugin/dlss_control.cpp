@@ -20,6 +20,7 @@ void dlss_status() {
     mhw::reflex::temporal::scene_extent(sw, sh, ww, wh);
     mhw::settings::status::dlss_sizes(rw, rh, sw, sh);
     mhw::settings::status::dlss_mode(mhw::settings::dlss_mode_name(cd::reconstruction_mode()));
+    mhw::settings::status::dlss_model(mhw::settings::status::model_name(cd::preset_in_use()));
     mhw::settings::status::dlss(mhw::settings::status::Stage::running);
 }
 // Worker: a live preset change (continuous_dlaa::change_mode), the player's

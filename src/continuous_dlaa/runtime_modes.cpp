@@ -130,8 +130,10 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
         r.mode = mode;
         r.render_width = planned.render.width;
         r.render_height = planned.render.height;
+        // The same mode and size with the same model and preset (0.32.0: the
+        // menu's Model and Preset rebuild DLSS at the mode it runs).
         if (!scene && !from_off && mode == scaled_geometry.mode && planned.render.width == render_width() &&
-            planned.render.height == render_height()) {
+            planned.render.height == render_height() && pass->preset() == dlss_sdk::render_preset.load()) {
             configured_mode = requested;
             r.ok = r.unchanged = true;
             return r;
@@ -457,6 +459,11 @@ bool render_extent(unsigned &width, unsigned &height) noexcept {
     width = render_width();
     height = render_height();
     return true;
+}
+// The NGX preset DLSS runs with (the worker's thread, as the rebuild's), or
+// the one it will start with.
+unsigned preset_in_use() noexcept {
+    return pass ? pass->preset() : dlss_sdk::render_preset.load();
 }
 // The worker's thread, as the rebuild's: `pass`, `runtime` and the render
 // size change only there.

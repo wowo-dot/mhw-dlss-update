@@ -52,6 +52,15 @@ void dlss_mode(std::string_view name) noexcept {
 void reflex_mode(std::string_view name) noexcept {
     change([&](View &v) { v.reflex_mode = name; });
 }
+void dlss_model(std::string_view name) noexcept {
+    change([&](View &v) { v.dlss_model = name; });
+}
+void dlss_file(std::string_view version, std::string_view source) noexcept {
+    change([&](View &v) {
+        v.dlss_version = version;
+        v.dlss_source = source;
+    });
+}
 void card_capabilities(const capabilities::Capabilities &c) noexcept {
     change([&](View &v) { v.caps = c; });
 }

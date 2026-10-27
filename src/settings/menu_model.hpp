@@ -26,6 +26,9 @@
 //   Auto pause. While Off or Dynamic the multiplier is kept in memory.
 // - "Reflex": Off only while DLSS-G is not loaded (it paces the swap chain and
 //   needs Reflex); turning frame generation on turns Reflex on again.
+// - "Model" and "Preset" (0.32.0; dlss_model, dlss_preset): Transformer or
+//   CNN, and the transformer's preset (locked while CNN, kept for the way
+//   back). DLSS is created with them, so a change rebuilds it at its mode.
 // Pure (tests/settings_menu_tests.cpp).
 namespace mhw::settings::menu_model {
 
@@ -38,7 +41,28 @@ struct Settings {
     bool dynamic{};
     unsigned dynamic_target{}; // 0: the display's refresh rate
     bool generation_auto{};
+    bool cnn{};           // 0.32.0: "Model" CNN (dlss_model = cnn)
+    unsigned preset = 11; // "Preset": the transformer's NGX preset (dlss_preset)
 };
+
+// 0.32.0: "Model" and "Preset" choices (config.hpp's ngx_preset). Preset
+// applies to the transformer; CNN has one (E).
+inline constexpr const char *model_names[]{"Transformer", "CNN"};
+inline constexpr std::array<unsigned, 5> presets{0, 10, 11, 12, 13};
+inline constexpr const char *preset_names[]{"Recommended", "J", "K", "L", "M"};
+static_assert(std::size(preset_names) == presets.size());
+// The CHOICE index of a preset (K's for any other value).
+constexpr int preset_index(unsigned preset) {
+    for (unsigned i = 0; i < presets.size(); ++i)
+        if (presets[i] == preset) return static_cast<int>(i);
+    return 2;
+}
+// The preset at a CHOICE index; false outside the list.
+constexpr bool preset_at(int index, unsigned &preset) {
+    if (index < 0 || index >= static_cast<int>(presets.size())) return false;
+    preset = presets[static_cast<unsigned>(index)];
+    return true;
+}
 
 // "Mode" choices, highest quality first.
 inline constexpr std::array<dlss_sdk::ReconstructionMode, 4> modes{
@@ -164,7 +188,7 @@ inline Offer offer_for(const capabilities::Capabilities &c) {
 }
 
 // The Settings page's rows.
-enum class Row : unsigned { dlss, mode, frame_generation, multiplier, pacing, target, reflex };
+enum class Row : unsigned { dlss, mode, frame_generation, multiplier, pacing, target, reflex, model, preset };
 // Why `row` cannot change now (the help line while it is greyed), or empty.
 // `fg_requested`: DLSS-G loads at start (frame_generation_plugin = auto).
 inline std::string lock_reason(Row row, const Settings &s, const capabilities::Capabilities &c, const Offer &offer,
@@ -174,8 +198,11 @@ inline std::string lock_reason(Row row, const Settings &s, const capabilities::C
     switch (row) {
     case Row::dlss: return caps::available(c, caps::Option::dlss, 0, why) ? std::string() : why;
     case Row::mode:
+    case Row::model:
+    case Row::preset:
         if (!caps::available(c, caps::Option::dlss, 0, why)) return why;
-        return s.dlss ? std::string() : "Turn DLSS on first.";
+        if (!s.dlss) return "Turn DLSS on first.";
+        return row == Row::preset && s.cnn ? "CNN has one preset; choose Transformer for J, K, L or M." : std::string();
     case Row::reflex: return caps::available(c, caps::Option::reflex, 0, why) ? std::string() : why;
     case Row::frame_generation:
     case Row::multiplier:

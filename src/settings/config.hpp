@@ -18,6 +18,10 @@ namespace mhw::settings {
 // multiplier (2x) are what turning them on starts with.
 //
 //   dlss_mode = off         ; off, dlaa, quality, balanced, performance
+//   dlss_model = transformer ; transformer, or cnn (the older model: about half the
+//                           ; cost on RTX 20/30, softer)
+//   dlss_preset = k         ; the transformer's preset: recommended (NVIDIA's per
+//                           ; mode), j, k, l or m (0.32.0; e and f, the CNN's, read as cnn)
 //   frame_generation = off  ; off, 2x, 3x, 4x, 6x, dynamic (the menu turns it on and off live)
 //   frame_generation_plugin = auto ; auto: DLSS-G loads where the card supports
 //                           ; it; off: never (no frame generation, Reflex Off possible)
@@ -46,8 +50,6 @@ namespace mhw::settings {
 //                           ; show start-up races (diagnostic; perf/chaos.hpp)
 //   jitter_ab = off         ; on: the camera jitter alternates every 10 s between the
 //                           ; mod's own and the game's table (diagnostic; dlss_sdk/jitter.hpp)
-//   dlss_preset = k         ; default, e, f (CNN), j, k (transformer), l, m (second
-//                           ; transformer): the DLSS model (diagnostic; dlss_sdk/options.hpp)
 //
 // The DLSS mode sets the render scale asked of the game (Performance 50%,
 // Balanced 58%, Quality 67%, DLAA 100%). Off: the mod steps aside and the
@@ -88,7 +90,8 @@ struct Config {
     bool auto_exposure = true;           // auto_exposure = off (diagnostic; not in the shipped ini)
     bool chaos{};                        // chaos = on (diagnostic; not in the shipped ini)
     bool jitter_ab{};                    // jitter_ab = on (diagnostic; not in the shipped ini)
-    unsigned dlss_preset = 11;           // dlss_preset: the NGX preset value (diagnostic; not in the shipped ini)
+    bool dlss_cnn{};                     // dlss_model = cnn
+    unsigned dlss_preset = 11;           // the transformer's NGX preset: 0 recommended, 10 J, 11 K, 12 L, 13 M
     std::filesystem::path runtime_dir, log_dir;
     std::vector<std::string> warnings;
 };
@@ -136,6 +139,24 @@ inline bool parse_reflex(std::string_view value, ReflexMode &m) {
             return true;
         }
     return false;
+}
+// The DLSS model (0.32.0): the NGX render preset DLSS is created with (CNN: E,
+// the CNN's latest; the transformer: its preset, 0 being NVIDIA's own per
+// mode), and the ini's spellings.
+constexpr unsigned ngx_preset(bool cnn, unsigned preset) noexcept {
+    return cnn ? 5U : preset;
+}
+inline const char *dlss_model_value(bool cnn) {
+    return cnn ? "cnn" : "transformer";
+}
+inline const char *dlss_preset_value(unsigned preset) {
+    switch (preset) {
+    case 0: return "recommended";
+    case 10: return "j";
+    case 12: return "l";
+    case 13: return "m";
+    default: return "k";
+    }
 }
 // The ini value of a dynamic target ("display" for 0), and the target of an
 // ini value (false if not display or a whole number from 30 to 1000).
@@ -234,15 +255,23 @@ inline Config parse_config(std::string_view text, const std::filesystem::path &d
                 (key == "texture_bias" ? c.texture_bias : c.texture_bias_ab) = value == "on";
             else
                 c.warnings.push_back(where + key + " must be on or off");
+        } else if (key == "dlss_model") {
+            if (value == "transformer" || value == "cnn")
+                c.dlss_cnn = value == "cnn";
+            else
+                c.warnings.push_back(where + "dlss_model must be transformer or cnn");
         } else if (key == "dlss_preset") {
-            constexpr std::pair<std::string_view, unsigned> presets[]{{"default", 0}, {"e", 5},  {"f", 6}, {"j", 10},
-                                                                      {"k", 11},      {"l", 12}, {"m", 13}};
+            // 0.31.1's diagnostic values stay: default is recommended, e and f the CNN.
+            constexpr std::pair<std::string_view, unsigned> presets[]{{"recommended", 0}, {"default", 0}, {"j", 10},
+                                                                      {"k", 11},          {"l", 12},      {"m", 13}};
             const auto found =
                 std::find_if(std::begin(presets), std::end(presets), [&](const auto &p) { return p.first == value; });
             if (found != std::end(presets))
                 c.dlss_preset = found->second;
+            else if (value == "e" || value == "f")
+                c.dlss_cnn = true;
             else
-                c.warnings.push_back(where + "dlss_preset must be default, e, f, j, k, l or m");
+                c.warnings.push_back(where + "dlss_preset must be recommended, j, k, l or m");
         } else if (key == "jitter_ab") {
             if (value == "on" || value == "off")
                 c.jitter_ab = value == "on";

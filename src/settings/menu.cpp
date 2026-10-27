@@ -13,6 +13,7 @@
 #include "status.hpp"
 #include "version.hpp"
 #include "../continuous_dlaa/runtime.hpp"
+#include "../dlss_sdk/options.hpp"
 #include "../frame_generation/game_session.hpp"
 #include "../reflex/reflex_mode.hpp"
 #include "../../third_party/cmfm/cmfm.h"
@@ -43,6 +44,8 @@ enum Row : std::uint32_t {
     pacing_row,
     target_row,
     reflex_row,
+    dlss_model_row, // 0.32.0
+    dlss_preset_row,
     upscaling_section = 20,
     generation_section,
     latency_section,
@@ -57,6 +60,7 @@ enum Row : std::uint32_t {
     memory_line_row,
     driver_line_row,
     support_line_row,
+    dlss_version_line_row, // 0.32.0
     now_section = 60,
     system_section,
 };
@@ -70,6 +74,8 @@ bool model_row(std::uint32_t id, mm::Row &row) {
     case pacing_row: row = mm::Row::pacing; return true;
     case target_row: row = mm::Row::target; return true;
     case reflex_row: row = mm::Row::reflex; return true;
+    case dlss_model_row: row = mm::Row::model; return true;
+    case dlss_preset_row: row = mm::Row::preset; return true;
     default: return false;
     }
 }
@@ -84,6 +90,7 @@ struct State {
     mm::Settings settings; // what the ini holds, or will hold once saved
     bool dirty{};          // changed since the last save
     bool mode_dirty{}, generation_dirty{}, reflex_dirty{}, target_dirty{}, auto_dirty{}; // which keys
+    bool model_dirty{};  // dlss_model and dlss_preset (0.32.0)
     bool fg_requested{}; // DLSS-G loads at start where supported: frame generation applies live
     // Fixed when the pages are added (CMFM keeps the choices): what this card
     // offers, the target frame rates, and the texts built from them.
@@ -180,8 +187,11 @@ void save() {
     const std::string reflex = reflex_value(s.reflex);
     const auto target = dynamic_target_value(s.dynamic_target);
     const std::string automatic = s.generation_auto ? "on" : "off";
+    const std::string model = dlss_model_value(s.cnn), preset = dlss_preset_value(s.preset);
     auto updated = text;
     if (state.mode_dirty) updated = with_value(updated, "dlss_mode", mode);
+    // Both keys: the preset line may hold 0.31.1's "e" (read as cnn).
+    if (state.model_dirty) updated = with_value(with_value(updated, "dlss_model", model), "dlss_preset", preset);
     if (state.generation_dirty) updated = with_frame_generation(updated, value);
     if (state.target_dirty) updated = with_value(updated, "dynamic_target", target);
     if (state.auto_dirty) updated = with_value(updated, "frame_generation_auto", automatic);
@@ -194,8 +204,10 @@ void save() {
         (state.generation_dirty && generation_differs) ||
         (state.target_dirty && check.dynamic_target != s.dynamic_target) ||
         (state.auto_dirty && check.generation_auto != s.generation_auto) ||
-        (state.reflex_dirty && check.reflex != s.reflex)) {
-        log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", frame_generation = " + value +
+        (state.reflex_dirty && check.reflex != s.reflex) ||
+        (state.model_dirty && (check.dlss_cnn != s.cnn || check.dlss_preset != s.preset))) {
+        log(AL_LOG_ERROR, "menu: mhw_dlss.ini edited for dlss_mode = " + mode + ", dlss_model = " + model +
+                              ", dlss_preset = " + preset + ", frame_generation = " + value +
                               ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
                               ", reflex = " + reflex + " would not read back; not written");
         return;
@@ -206,10 +218,10 @@ void save() {
         return;
     }
     state.dirty = state.mode_dirty = state.generation_dirty = state.reflex_dirty = state.target_dirty =
-        state.auto_dirty = false;
-    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", frame_generation = " + value +
-                         ", dynamic_target = " + target + ", frame_generation_auto = " + automatic +
-                         ", reflex = " + reflex);
+        state.auto_dirty = state.model_dirty = false;
+    log(AL_LOG_INFO, "menu: mhw_dlss.ini saved with dlss_mode = " + mode + ", dlss_model = " + model +
+                         ", dlss_preset = " + preset + ", frame_generation = " + value + ", dynamic_target = " +
+                         target + ", frame_generation_auto = " + automatic + ", reflex = " + reflex);
 }
 
 // Page opened: the ini as it is now (players may edit it while the game runs),
@@ -221,6 +233,11 @@ void reload() {
     // While off the ini holds "off": the mode to come back with stays.
     state.settings.dlss = c.dlss;
     if (c.dlss) state.settings.dlss_mode = c.dlss_mode;
+    // Shown as the ini holds it; DLSS takes it at its next rebuild (a change
+    // made in the menu rebuilds at once).
+    state.settings.cnn = c.dlss_cnn;
+    state.settings.preset = c.dlss_preset;
+    dlss_sdk::render_preset = ngx_preset(c.dlss_cnn, c.dlss_preset);
     state.settings.frame_generation = c.frame_generation;
     if (c.frame_generation) {
         state.settings.dynamic = c.dynamic;
@@ -256,6 +273,22 @@ void apply_dlss(const mm::Settings &s) {
                          (now ? " (applied now)" : " (from the next start)"));
 }
 
+// Under the lock: the dlss_model and dlss_preset keys (0.32.0). DLSS is
+// created with the NGX preset, so a running one is rebuilt at its mode; while
+// off or not running yet it starts with it.
+void apply_model(const mm::Settings &s) {
+    state.dirty = state.model_dirty = true;
+    const auto preset = ngx_preset(s.cnn, s.preset);
+    const bool changed = dlss_sdk::render_preset.exchange(preset) != preset;
+    const bool now = changed && continuous_dlaa::live_modes() && s.dlss && !continuous_dlaa::dlss_off();
+    if (now) continuous_dlaa::request_mode(s.dlss_mode);
+    log(AL_LOG_INFO, std::string("menu: dlss_model = ") + dlss_model_value(s.cnn) +
+                         ", dlss_preset = " + dlss_preset_value(s.preset) +
+                         (now       ? " (applied now)"
+                          : changed ? " (when DLSS runs)"
+                                    : " (no change to DLSS)"));
+}
+
 // Under the lock: the frame generation keys, now where DLSS-G loads at start.
 void apply_generation(const mm::Settings &s, bool auto_changed) {
     state.dirty = state.generation_dirty = true;
@@ -279,6 +312,8 @@ cmfm_result_t CMFM_CALL get(void *, std::uint32_t id, cmfm_value_t *value) {
         case pacing_row: value->i = static_cast<int>(mm::pacing(s, state.offer.dynamic)); break;
         case target_row: value->i = std::max(0, mm::target_index(state.targets, s.dynamic_target)); break;
         case reflex_row: value->i = mm::choice_of(s.reflex); break;
+        case dlss_model_row: value->i = s.cnn ? 1 : 0; break;
+        case dlss_preset_row: value->i = mm::preset_index(s.preset); break;
         default: return CMFM_ERROR;
         }
         return CMFM_OK;
@@ -337,6 +372,14 @@ cmfm_result_t CMFM_CALL validate(void *, std::uint32_t id, const cmfm_value_t *v
                 return CMFM_OK;
             return refuse(reason);
         }
+        // As Mode: kept while DLSS is off. The preset is kept while CNN runs
+        // (Reset to defaults sets it then), for the way back to Transformer.
+        case dlss_model_row:
+        case dlss_preset_row:
+            if (!caps::available(c, caps::Option::dlss, 0, reason)) return refuse(reason);
+            if (id == dlss_model_row) return value->i == 0 || value->i == 1 ? CMFM_OK : refuse("Unknown model.");
+            return value->i >= 0 && value->i < static_cast<int>(mm::presets.size()) ? CMFM_OK
+                                                                                    : refuse("Unknown preset.");
         default: return CMFM_OK;
         }
     } catch (...) {
@@ -409,6 +452,15 @@ cmfm_result_t CMFM_CALL set(void *, std::uint32_t id, const cmfm_value_t *value)
                                  (now ? " (applied now)" : " (from the next start; frame generation runs until then)"));
             return CMFM_OK;
         }
+        case dlss_model_row:
+            if (value->i != 0 && value->i != 1) return CMFM_ERROR;
+            s.cnn = value->i == 1;
+            apply_model(s);
+            return CMFM_OK;
+        case dlss_preset_row:
+            if (!mm::preset_at(value->i, s.preset)) return CMFM_ERROR;
+            apply_model(s);
+            return CMFM_OK;
         default: return CMFM_ERROR;
         }
     } catch (...) {
@@ -462,6 +514,7 @@ void CMFM_CALL get_text(void *, std::uint32_t id, char *text, std::uint32_t text
         case memory_line_row: line = caps::memory_line(v.caps); break;
         case driver_line_row: line = caps::driver_line(v.caps); break;
         case support_line_row: line = caps::generation_support_line(card()); break;
+        case dlss_version_line_row: line = status::dlss_version_line(v); break;
         default: line = "?";
         }
         copy(text, text_size, line);
@@ -517,13 +570,17 @@ constexpr bool choice_names_fit(const char *const *names, std::size_t count) {
 }
 static_assert(choice_names_fit(mm::mode_names, std::size(mm::mode_names)) &&
                   choice_names_fit(mm::pacing_names, std::size(mm::pacing_names)) &&
-                  choice_names_fit(mm::reflex_names, mm::reflex_modes.size()),
+                  choice_names_fit(mm::reflex_names, mm::reflex_modes.size()) &&
+                  choice_names_fit(mm::model_names, std::size(mm::model_names)) &&
+                  choice_names_fit(mm::preset_names, std::size(mm::preset_names)),
               "CMFM: a choice name is at most 32 bytes");
 // CMFM refuses a whole page whose CHOICE default is not one of its choices
 // (v0.27.0 lost its Settings page so).
 static_assert(mm::choice_of(dlss_sdk::ReconstructionMode::performance) < static_cast<int>(std::size(mm::mode_names)) &&
                   static_cast<unsigned>(mm::Pacing::fixed) < mm::pacing_count(false) &&
-                  mm::choice_of(ReflexMode::on) < static_cast<int>(mm::reflex_modes.size()),
+                  mm::choice_of(ReflexMode::on) < static_cast<int>(mm::reflex_modes.size()) &&
+                  mm::preset_index(Config{}.dlss_preset) < static_cast<int>(mm::presets.size()) &&
+                  std::size(mm::model_names) == 2,
               "CMFM: a default is one of its choices");
 // The target names are built at start: "Display refresh" or "<n> fps" with n
 // up to 1000, and at most CMFM_MAX_CHOICES of them.
@@ -574,11 +631,19 @@ void add_now(unsigned waited_ms) noexcept {
                 help_text(
                     "DLAA renders at full resolution; Quality, Balanced and Performance at 67%, 58% and 50%, upscaled by DLSS. "
                     "Applies at once.")),
+            row(dlss_model_row, CMFM_TYPE_CHOICE, label_text("Model"),
+                help_text(
+                    "Transformer: DLSS 4's model, sharper and steadier in motion. CNN: the older model (preset E), cheaper on "
+                    "RTX 20 and 30 cards but softer. Applies at once.")),
+            row(dlss_preset_row, CMFM_TYPE_CHOICE, label_text("Preset"),
+                help_text(
+                    "K: NVIDIA's pick for DLAA, Quality and Balanced. M and L: newer, less ghosting, slower on RTX 20 and 30 "
+                    "(M: NVIDIA's for Performance). J: close to K. Recommended: NVIDIA's per mode. Applies at once.")),
             row(generation_section, CMFM_TYPE_SECTION, label_text("Frame generation"), nullptr),
             row(frame_generation_row, CMFM_TYPE_BOOL, label_text("Frame generation"),
                 help_text(
                     "DLSS Frame Generation shows generated frames between the rendered ones (RTX 40 and 50 series). Needs "
-                    "DLSS on. Applies at once.")),
+                    "DLSS on. Applies at once. Its model can be set in the NVIDIA App.")),
             row(multiplier_row, CMFM_TYPE_CHOICE, label_text("Multiplier"), nullptr),
             row(pacing_row, CMFM_TYPE_CHOICE, label_text("Pacing"), nullptr),
             row(target_row, CMFM_TYPE_CHOICE, label_text("Target frame rate"),
@@ -608,6 +673,12 @@ void add_now(unsigned waited_ms) noexcept {
         setting(reflex_row).choices = mm::reflex_names;
         setting(reflex_row).choice_count = static_cast<std::uint32_t>(mm::reflex_modes.size());
         setting(reflex_row).default_value.i = mm::choice_of(defaults.reflex);
+        setting(dlss_model_row).choices = mm::model_names;
+        setting(dlss_model_row).choice_count = static_cast<std::uint32_t>(std::size(mm::model_names));
+        setting(dlss_model_row).default_value.i = defaults.dlss_cnn ? 1 : 0;
+        setting(dlss_preset_row).choices = mm::preset_names;
+        setting(dlss_preset_row).choice_count = static_cast<std::uint32_t>(std::size(mm::preset_names));
+        setting(dlss_preset_row).default_value.i = mm::preset_index(defaults.dlss_preset);
         {
             std::lock_guard lock(state.mutex);
             setting(multiplier_row).help = state.multiplier_help.c_str();
@@ -627,7 +698,8 @@ void add_now(unsigned waited_ms) noexcept {
             row(mod_line_row, CMFM_TYPE_TEXT, label_text("Mod"),
                 help_text("The mod's state, as Astera Loader shows it."), CMFM_FLAG_LIVE),
             row(dlss_line_row, CMFM_TYPE_TEXT, label_text("DLSS"),
-                help_text("The DLSS mode. Off: the game's own anti-aliasing and resolution."), CMFM_FLAG_LIVE),
+                help_text("The DLSS mode and model. Off: the game's own anti-aliasing and resolution."),
+                CMFM_FLAG_LIVE),
             row(resolution_line_row, CMFM_TYPE_TEXT, label_text("Resolution"),
                 help_text("The resolution the game renders at, and the one DLSS outputs."), CMFM_FLAG_LIVE),
             row(generation_line_row, CMFM_TYPE_TEXT, label_text("Frame generation"),
@@ -645,6 +717,11 @@ void add_now(unsigned waited_ms) noexcept {
             row(memory_line_row, CMFM_TYPE_TEXT, label_text("Video memory"),
                 help_text("The graphics card's own memory.")),
             row(driver_line_row, CMFM_TYPE_TEXT, label_text("Driver"), help_text("The NVIDIA driver version.")),
+            row(dlss_version_line_row, CMFM_TYPE_TEXT, label_text("DLSS version"),
+                help_text(
+                    "The DLSS file that runs: the mod's own, or the one the NVIDIA App's DLSS override picked (310 or "
+                    "newer runs)."),
+                CMFM_FLAG_LIVE),
             row(support_line_row, CMFM_TYPE_TEXT, label_text("Frame generation support"),
                 help_text(
                     "What DLSS Frame Generation can do with this graphics card, driver and Windows: the most frames per "
@@ -727,8 +804,9 @@ void add_pages(const al_api_t *api, al_plugin_t *self, const Config &config, con
             state.menu = menu;
             state.folder = folder;
             state.ini = folder / L"mhw_dlss.ini";
-            state.settings = {config.dlss_mode, config.dlss,    config.frame_generation, config.multiplier,
-                              config.reflex,    config.dynamic, config.dynamic_target,   config.generation_auto};
+            state.settings = {config.dlss_mode, config.dlss,       config.frame_generation, config.multiplier,
+                              config.reflex,    config.dynamic,    config.dynamic_target,   config.generation_auto,
+                              config.dlss_cnn,  config.dlss_preset};
             state.fg_requested = fg_requested;
             state.targets = mm::target_choices(config.dynamic_target);
         }

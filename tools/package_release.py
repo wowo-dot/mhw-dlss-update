@@ -56,7 +56,9 @@ BUILT_IN = [
 INI = """# MHW DLSS / Frame Generation configuration.
 # Lines are "key = value"; '#' or ';' starts a comment. Folders are relative to this folder.
 dlss_mode = off            ; off, dlaa, quality, balanced, performance (off: the game's own anti-aliasing and resolution)
-frame_generation = off     ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
+dlss_model = transformer   ; transformer, or cnn (the older model: cheaper on RTX 20 and 30, softer)
+dlss_preset = k            ; the transformer's preset: recommended (NVIDIA's per mode), j, k, l, m
+frame_generation = off    ; off, 2x, 3x, 4x, 6x, dynamic (3x and above and dynamic need an RTX 50 series GPU)
 dynamic_target = display   ; dynamic only: display (its refresh rate) or a frame rate from 30 to 1000
 frame_generation_auto = off ; on: 2x to 6x pause by themselves when the game would run faster without them
 reflex = off            ; on, boost, off (off only while DLSS Frame Generation is not loaded)
@@ -109,7 +111,15 @@ Performance render at 67%, 58% and 50% and upscale. The package starts with
 DLSS, frame generation and Reflex off; turn them on in the menu or here.
 Off hands the game back: its own anti-aliasing, resolution and other options
 work as without the mod, and frame generation pauses until DLSS is back on.
-Frame generation (frame_generation): Off, a fixed multiplier (2x to 6x), or
+DLSS model (dlss_model, dlss_preset): Transformer, DLSS 4's model, or CNN,
+the older one (cheaper on RTX 20 and 30 GPUs, softer). The transformer's
+preset: K by default (NVIDIA's for DLAA, Quality and Balanced); L and M are
+newer, with less ghosting, and slower on RTX 20 and 30 GPUs (M is NVIDIA's for
+Performance); Recommended lets NVIDIA pick per mode. A newer DLSS from the
+NVIDIA App's DLSS override (310 or newer) runs in place of the mod's own; the
+menu's Status page shows which one runs. Frame generation's model is set in
+the NVIDIA App.
+Frame generation (frame_generation):Off, a fixed multiplier (2x to 6x), or
 Dynamic, which picks the count itself to reach a target frame rate
 (dynamic_target: the display's refresh rate by default).
 frame_generation_auto = on lets NVIDIA's Auto mode pause a fixed multiplier

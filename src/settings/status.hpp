@@ -23,6 +23,8 @@ struct View {
     Loader loader = Loader::active;
     std::string loader_reason;
     std::string dlss_mode = "Performance"; // as players read it
+    std::string dlss_model;                // 0.32.0: "Transformer K", "CNN" (model_name); empty: not shown
+    std::string dlss_version, dlss_source; // 0.32.0: the DLSS file NGX runs (ngx_startup::active_provider)
     std::string reflex_mode = "On";        // the mode applied: On, Boost or Off
     Stage dlss = Stage::starting, reflex = Stage::starting;
     std::string dlss_reason, reflex_reason;
@@ -56,6 +58,10 @@ void generation(Generation, std::string_view reason = {}) noexcept;
 void dlss_sizes(unsigned render_width, unsigned render_height, unsigned scene_width, unsigned scene_height) noexcept;
 void dlss_mode(std::string_view name) noexcept;
 void reflex_mode(std::string_view name) noexcept;
+// 0.32.0: the model DLSS runs (model_name), and its file: version and source
+// ("mod", "nvidia_app" or "replaced").
+void dlss_model(std::string_view name) noexcept;
+void dlss_file(std::string_view version, std::string_view source) noexcept;
 // v0.27.5: what this card offers, at start (capabilities.hpp), then as learned:
 // DLSS (NGX's capability, at arming) and DLSS-G's multiplier limit and
 // Dynamic support (its state, once read).
@@ -138,6 +144,19 @@ inline std::string mod_line(const View &v) {
     return "Active";
 }
 
+// 0.32.0: the model for an NGX render preset, as players read it.
+inline std::string model_name(unsigned ngx_preset) {
+    switch (ngx_preset) {
+    case 5:
+    case 6: return "CNN";
+    case 0: return "Transformer, Recommended";
+    case 10: return "Transformer J";
+    case 12: return "Transformer L";
+    case 13: return "Transformer M";
+    default: return "Transformer K";
+    }
+}
+
 // The Now lines (v0.28.0): the state in a few words, short enough for the
 // value box; the help lines explain.
 inline std::string dlss_line(const View &v) {
@@ -145,7 +164,19 @@ inline std::string dlss_line(const View &v) {
     if (v.dlss == Stage::off) return with_reason("Off", reason_text(v.dlss_reason));
     if (!v.dlss_healthy) return "Stopped (see the log)";
     if (v.dlss == Stage::player_off) return "Off";
-    return v.dlss_mode;
+    return v.dlss_model.empty() ? v.dlss_mode : v.dlss_mode + ", " + v.dlss_model;
+}
+
+// 0.32.0: the DLSS file NGX runs and where from (System section).
+inline std::string dlss_version_line(const View &v) {
+    if (v.dlss_version.empty()) return v.dlss == Stage::off ? "Not running" : "Not known yet";
+    const std::string_view source = v.dlss_source;
+    std::string version = v.dlss_version;
+    if (version.ends_with(".0")) version.resize(version.size() - 2); // 310.9.16.0 reads 310.9.16
+    return version + (source == "mod"          ? " (this mod)"
+                      : source == "nvidia_app" ? " (NVIDIA App override)"
+                      : source == "replaced"   ? " (replaced file)"
+                                               : "");
 }
 
 // The render resolution and the output, or the game's own while DLSS is not

@@ -101,6 +101,9 @@ bool render_extent(unsigned &width, unsigned &height) noexcept;
 // doesn't (not installed, the player's Off, stopped). The texture mip bias
 // follows it (texture_bias.hpp).
 float texture_scale() noexcept;
+// Worker: the NGX render preset DLSS runs with, or will start with (0.32.0;
+// dlss_sdk/options.hpp).
+unsigned preset_in_use() noexcept;
 // Worker-only cleanup receipt. Does not release NGX's process-lived ownership.
 bool quiescent() noexcept;
 void finish() noexcept;

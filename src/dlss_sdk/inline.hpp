@@ -39,6 +39,8 @@ public:
                 HistoryFrame, bool reset, float frame_ms) noexcept;
     RecordAttempt last_attempt() const noexcept;
     Geometry geometry() const noexcept;
+    // The NGX render preset it was created with (options.hpp's render_preset).
+    unsigned preset() const noexcept;
     ID3D12Resource *raw_color() const noexcept;
     // Borrowed private images after a successful record: converted inputs in
     // NON_PIXEL_SHADER_RESOURCE, SDK/packed output in COPY_SOURCE. Caller must

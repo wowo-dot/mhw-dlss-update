@@ -250,6 +250,37 @@ void settings_model() {
         check(lock(m::Row::dlss, s, other) == "DLSS needs an NVIDIA GeForce RTX graphics card." &&
                   lock(m::Row::mode, s, other) == lock(m::Row::dlss, s, other),
               "not NVIDIA: DLSS locked");
+        // 0.32.0: Model and Preset, as Mode; the preset is the transformer's.
+        check(lock(m::Row::model, s, rtx30).empty() && lock(m::Row::preset, s, rtx30).empty(),
+              "RTX 30 with DLSS on: model and preset open");
+        check(lock(m::Row::model, off, rtx50) == "Turn DLSS on first." &&
+                  lock(m::Row::preset, off, rtx50) == "Turn DLSS on first.",
+              "DLSS off: model and preset locked");
+        check(lock(m::Row::model, s, other) == lock(m::Row::dlss, s, other) &&
+                  lock(m::Row::preset, s, other) == lock(m::Row::dlss, s, other),
+              "not NVIDIA: model and preset locked");
+        auto cnn = s;
+        cnn.cnn = true;
+        check(lock(m::Row::model, cnn, rtx50).empty() &&
+                  lock(m::Row::preset, cnn, rtx50) == "CNN has one preset; choose Transformer for J, K, L or M.",
+              "CNN: preset locked");
+    }
+    {
+        // 0.32.0: the preset choices and the NGX values behind them.
+        check(m::Settings{}.preset == 11 && !m::Settings{}.cnn && m::preset_index(11) == 2 &&
+                  std::string_view(m::preset_names[m::preset_index(11)]) == "K",
+              "transformer K by default");
+        check(m::preset_index(0) == 0 && m::preset_index(10) == 1 && m::preset_index(13) == 4 &&
+                  m::preset_index(5) == 2 && m::preset_index(99) == 2,
+              "preset index, K for others");
+        unsigned p{};
+        check(m::preset_at(0, p) && p == 0 && m::preset_at(4, p) && p == 13 && !m::preset_at(5, p) &&
+                  !m::preset_at(-1, p) && p == 13,
+              "preset at index");
+        for (int i = 0; i < static_cast<int>(m::presets.size()); ++i)
+            check(m::preset_at(i, p) && m::preset_index(p) == i, "preset index round trip");
+        check(std::string_view(m::model_names[0]) == "Transformer" && std::string_view(m::model_names[1]) == "CNN",
+              "model names");
     }
     using mhw::settings::ReflexMode;
     check(m::choice_of(ReflexMode::on) == 0 && m::choice_of(ReflexMode::boost) == 1 &&
@@ -345,6 +376,31 @@ void status_lines() {
         q.dlss_mode = "DLAA";
         q.render_width = 2560, q.render_height = 1440;
         check(s::dlss_line(q) == "DLAA" && s::resolution_line(q) == "2560x1440", "DLAA");
+        // 0.32.0: the model after the mode, and the DLSS file.
+        q.dlss_mode = "Quality";
+        q.dlss_model = s::model_name(11);
+        check(s::dlss_line(q) == "Quality, Transformer K", "mode and model");
+        q.dlss_model = s::model_name(5);
+        check(s::dlss_line(q) == "Quality, CNN", "the CNN");
+        check(s::model_name(6) == "CNN" && s::model_name(0) == "Transformer, Recommended" &&
+                  s::model_name(10) == "Transformer J" && s::model_name(12) == "Transformer L" &&
+                  s::model_name(13) == "Transformer M",
+              "model names by NGX preset");
+        check(s::dlss_version_line(q) == "Not known yet", "DLSS file not known yet");
+        q.dlss_version = "310.7.0.0";
+        q.dlss_source = "mod";
+        check(s::dlss_version_line(q) == "310.7.0 (this mod)", "the mod's own (one .0 cut)");
+        q.dlss_version = "310.9.16.0";
+        q.dlss_source = "nvidia_app";
+        check(s::dlss_version_line(q) == "310.9.16 (NVIDIA App override)", "the NVIDIA App's");
+        q.dlss_source = "replaced";
+        check(s::dlss_version_line(q) == "310.9.16 (replaced file)", "a replaced file");
+        q.dlss_source = "";
+        check(s::dlss_version_line(q) == "310.9.16", "no source");
+        auto failed = q;
+        failed.dlss_version.clear();
+        failed.dlss = s::Stage::off;
+        check(s::dlss_version_line(failed) == "Not running", "DLSS off: not running");
     }
     check(s::reflex_line(v) == "On", "reflex on");
     {

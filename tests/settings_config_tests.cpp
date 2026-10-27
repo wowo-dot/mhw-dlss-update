@@ -169,12 +169,47 @@ int main() {
             check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
             check(defaults.dlss_preset == 11 && !defaults.jitter_ab, "preset K, the jitter A/B off by default");
             check(a::parse_config("jitter_ab = on\n", folder).jitter_ab, "jitter_ab = on");
-            check(a::parse_config("dlss_preset = E\n", folder).dlss_preset == 5 &&
-                      a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
+            check(a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
+                      a::parse_config("dlss_preset = Recommended\n", folder).dlss_preset == 0 &&
+                      a::parse_config("dlss_preset = j\n", folder).dlss_preset == 10 &&
+                      a::parse_config("dlss_preset = l\n", folder).dlss_preset == 12 &&
                       a::parse_config("dlss_preset = m\n", folder).dlss_preset == 13,
-                  "dlss_preset parses E, default and M");
+                  "dlss_preset parses recommended, default, J, L and M");
             const auto wrong = a::parse_config("dlss_preset = z\n", folder);
-            check(wrong.dlss_preset == 11 && wrong.warnings.size() == 1, "a bad preset warns and stays K");
+            check(wrong.dlss_preset == 11 && !wrong.dlss_cnn && wrong.warnings.size() == 1,
+                  "a bad preset warns and stays K");
+            // 0.32.0: the model. 0.31.1's dlss_preset = e (the CNN's) reads as
+            // the CNN, the transformer's preset staying K.
+            check(!defaults.dlss_cnn && a::ngx_preset(defaults.dlss_cnn, defaults.dlss_preset) == 11,
+                  "the transformer with K by default");
+            const auto cnn = a::parse_config("dlss_model = CNN\ndlss_preset = m\n", folder);
+            check(cnn.dlss_cnn && cnn.dlss_preset == 13 && a::ngx_preset(cnn.dlss_cnn, cnn.dlss_preset) == 5 &&
+                      cnn.warnings.empty(),
+                  "dlss_model = cnn runs preset E and keeps the transformer's");
+            const auto old_e = a::parse_config("dlss_preset = E\n", folder);
+            check(old_e.dlss_cnn && old_e.dlss_preset == 11 && old_e.warnings.empty() &&
+                      a::parse_config("dlss_preset = f\n", folder).dlss_cnn,
+                  "dlss_preset = e or f reads as the CNN");
+            const auto bad_model = a::parse_config("dlss_model = dlss3\n", folder);
+            check(!bad_model.dlss_cnn && bad_model.warnings.size() == 1, "a bad model warns and stays transformer");
+            check(std::string_view(a::dlss_model_value(true)) == "cnn" &&
+                      std::string_view(a::dlss_model_value(false)) == "transformer" &&
+                      std::string_view(a::dlss_preset_value(0)) == "recommended" &&
+                      std::string_view(a::dlss_preset_value(10)) == "j" &&
+                      std::string_view(a::dlss_preset_value(11)) == "k" &&
+                      std::string_view(a::dlss_preset_value(13)) == "m" &&
+                      std::string_view(a::dlss_preset_value(99)) == "k",
+                  "the ini spellings of the model and preset");
+            for (const unsigned p : {0U, 10U, 11U, 12U, 13U})
+                check(a::parse_config(std::string("dlss_preset = ") + a::dlss_preset_value(p) + "\n", folder)
+                              .dlss_preset == p,
+                      "every preset reads back");
+            // The menu writes both keys over 0.31.1's line.
+            const auto rewritten =
+                a::with_value(a::with_value("dlss_preset = e\r\n", "dlss_model", "transformer"), "dlss_preset", "k");
+            check(rewritten == "dlss_preset = k\r\ndlss_model = transformer\r\n" &&
+                      !a::parse_config(rewritten, folder).dlss_cnn,
+                  "the menu's model keys replace 0.31.1's e");
         }
         check(a::parse_config("", folder).generation_plugin &&
                   a::parse_config("frame_generation_plugin = Auto\n", folder).generation_plugin,
