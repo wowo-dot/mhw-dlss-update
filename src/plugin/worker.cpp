@@ -182,8 +182,10 @@ Session open_log(const std::filesystem::path &dll) {
         << ",\"auto_exposure\":" << config.auto_exposure << ",\"chaos\":" << config.chaos
         << ",\"dlss_model\":" << quoted(mhw::settings::dlss_model_value(config.dlss_cnn))
         << ",\"dlss_preset\":" << quoted(mhw::settings::dlss_preset_value(config.dlss_preset))
-        << ",\"sharpness\":" << config.sharpness << ",\"jitter_ab\":" << config.jitter_ab
-        << ",\"waitable_ab\":" << config.waitable_ab
+        << ",\"sharpness\":" << config.sharpness << ",\"jitter_ab\":" << config.jitter_ab << ",\"fg_wait\":"
+        << quoted(config.fg_wait == 1   ? "chain"
+                  : config.fg_wait == 2 ? "ab"
+                                        : "free")
         << ",\"reflex\":" << quoted(mhw::settings::reflex_value(config.reflex))
         << ",\"runtime_dir\":" << quoted(mhw::log_path(config.runtime_dir))
         << ",\"log_dir\":" << quoted(mhw::log_path(config.log_dir)) << ",\"warnings\":[";
@@ -408,7 +410,10 @@ void arm_frame_generation() {
         fg_ready = true;
         game_chain_ready = game_chain_qualified();
         if (game_chain_ready) presentation->waitable_slot(game_waitable_slot());
-        presentation->waitable_ab(config.waitable_ab); // 0.32.0 diagnostic
+        // 0.32.0 (fg-game-wait.md): the ini's fg_wait numbers GameWait's values.
+        static_assert(unsigned(mhw::reflex::GameWait::free) == 0 && unsigned(mhw::reflex::GameWait::chain) == 1 &&
+                      unsigned(mhw::reflex::GameWait::ab) == 2);
+        presentation->game_wait(static_cast<mhw::reflex::GameWait>(config.fg_wait));
         log << "{\"event\":\"fg_switch_ready\",\"game_chain\":" << game_chain_ready
             << ",\"identity\":" << presentation->snapshot().identity << "}\n"
             << std::flush;
@@ -593,11 +598,11 @@ void run_session() {
                 << ",\"sent\":" << frames.pings << ",\"refused\":" << frames.ping_failures << '}'
                 << ",\"presents\":" << stats.presents << ",\"native_presents\":"
                 << stats.native_presents
-                // 0.32.0 diagnostic (waitable_ab): per phase, presents timed and their microseconds.
-                << ",\"waitable_ab\":{\"phase\":" << stats.ab_phase << ",\"flips\":" << stats.ab_flips << ",\"wait\":["
-                << stats.ab_frames[0] << ',' << stats.ab_us[0] << "],\"free\":[" << stats.ab_frames[1] << ','
-                << stats.ab_us[1] << "],\"present\":[[" << stats.ab_present_calls[0] << ',' << stats.ab_present_us[0]
-                << "],[" << stats.ab_present_calls[1] << ',' << stats.ab_present_us[1]
+                // 0.32.0 (fg-game-wait.md): per wait phase, presents timed and their microseconds.
+                << ",\"game_wait\":{\"phase\":" << stats.wait_phase << ",\"flips\":" << stats.wait_flips
+                << ",\"chain\":[" << stats.wait_frames[0] << ',' << stats.wait_us[0] << "],\"free\":["
+                << stats.wait_frames[1] << ',' << stats.wait_us[1] << "],\"present\":[[" << stats.present_calls[0]
+                << ',' << stats.present_us[0] << "],[" << stats.present_calls[1] << ',' << stats.present_us[1]
                 << "]]}"
                 // The phase is (tick_ms / 10000) % 2: this pair lines PresentMon's
                 // QPC times (--qpc_time) up with it.

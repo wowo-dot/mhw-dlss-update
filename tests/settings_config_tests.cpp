@@ -169,8 +169,13 @@ int main() {
             check(!bad.chaos && bad.warnings.size() == 1, "a bad chaos value warns and stays off");
             check(defaults.dlss_preset == 11 && !defaults.jitter_ab, "preset K, the jitter A/B off by default");
             check(a::parse_config("jitter_ab = on\n", folder).jitter_ab, "jitter_ab = on");
-            check(!defaults.waitable_ab && a::parse_config("waitable_ab = on\n", folder).waitable_ab,
-                  "waitable_ab off by default, on parses");
+            // 0.32.0: the game's wait while DLSS-G is loaded, free by default.
+            check(defaults.fg_wait == 0 && a::parse_config("fg_wait = chain\n", folder).fg_wait == 1 &&
+                      a::parse_config("fg_wait = AB\n", folder).fg_wait == 2 &&
+                      a::parse_config("fg_wait = free\n", folder).fg_wait == 0,
+                  "fg_wait: free, chain, ab");
+            const auto bad_wait = a::parse_config("fg_wait = none\n", folder);
+            check(bad_wait.fg_wait == 0 && bad_wait.warnings.size() == 1, "a bad fg_wait warns and stays free");
             check(a::parse_config("dlss_preset = default\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = Recommended\n", folder).dlss_preset == 0 &&
                       a::parse_config("dlss_preset = j\n", folder).dlss_preset == 10 &&

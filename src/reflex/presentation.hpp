@@ -11,6 +11,12 @@
 #include <vector>
 
 namespace mhw::reflex {
+// 0.32.0 (fg-game-wait.md): the game's per-frame wait while DLSS-G paces the
+// chain. free (the default): an always-set event, Reflex's sleep alone paces
+// the game; chain: the chain's latency waitable, as before 0.32.0 (a DLSS-G
+// that does not generate held the game at about 110 fps); ab: the two every
+// 10 s (diagnostic).
+enum class GameWait : unsigned { free, chain, ab };
 struct PresentationStats {
     std::uint64_t queues{}, swapchains{}, presents{}, native_presents{}, test_presents{}, resizes{}, faults{},
         sdk_paced_presents{};
@@ -44,15 +50,16 @@ struct PresentationStats {
     // The first failed attempt's HRESULT, and the last one's when the switch
     // fell back further (the chain as before, then the last resort).
     std::uint32_t switch_last_hr{}, switch_final_hr{};
-    // 0.32.0 diagnostic (waitable_ab): the phase (0 the chain's waitable, 1 an
-    // always-set event), flips, and per phase the game's presents timed and
-    // their summed intervals in microseconds, while DLSS-G paces the chain.
-    unsigned ab_phase{};
-    std::uint64_t ab_flips{};
-    std::array<std::uint64_t, 2> ab_frames{}, ab_us{};
+    // 0.32.0 (game_wait, fg-game-wait.md): what the game's per-frame wait is on
+    // (0 the chain's latency waitable, 1 the always-set event), the flips, and
+    // per phase the game's presents timed and their summed intervals in
+    // microseconds, while DLSS-G paces the chain.
+    unsigned wait_phase{};
+    std::uint64_t wait_flips{};
+    std::array<std::uint64_t, 2> wait_frames{}, wait_us{};
     // The time the game's Present calls spent in Streamline's proxy, per phase
     // (calls, microseconds), while DLSS-G paces the chain.
-    std::array<std::uint64_t, 2> ab_present_calls{}, ab_present_us{};
+    std::array<std::uint64_t, 2> present_calls{}, present_us{};
 };
 struct PresentationHook {
     std::uintptr_t target{};
@@ -125,11 +132,9 @@ public:
     // identity chain (cD3DRender+0x10F0, checked by the caller's code gate);
     // a switch replaces it there.
     void waitable_slot(std::uintptr_t address) noexcept;
-    // 0.32.0 diagnostic (ini waitable_ab, fg pacing study): while DLSS-G paces
-    // the chain, the game's per-frame wait alternates every 10 s between the
-    // chain's latency waitable and an always-set event (Reflex's sleep alone
-    // then paces the game). Any thread.
-    void waitable_ab(bool on) noexcept;
+    // The game's wait while DLSS-G paces the chain (ini fg_wait; free by
+    // default). Any thread.
+    void game_wait(GameWait mode) noexcept;
     // Ends routing: without AL the host's later calls on the identity chain
     // reach its own methods, which cannot present with a game's flags
     // (tifa-6), so only for a host done with its chain (the fixtures). Under

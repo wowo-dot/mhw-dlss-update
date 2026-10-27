@@ -235,58 +235,61 @@ struct Presentation::State {
     // (waitable_slot(); 0 unknown).
     HANDLE game_waitable{};
     std::uintptr_t waitable_slot{};
-    // 0.32.0 diagnostic (waitable_ab()): the always-set event of phase 1 (kept
-    // for the process: the game may still wait on it after a flip back), and
-    // the last timed present.
-    std::atomic<bool> ab_on{};
-    HANDLE ab_event{};
-    std::uint64_t ab_last{};
+    // 0.32.0 (game_wait(), fg-game-wait.md): while DLSS-G paces the chain the
+    // game's per-frame wait is on an always-set event (phase 1, "free") and
+    // Reflex's sleep alone paces it; the chain's waitable (phase 0) otherwise,
+    // and always for a switch. The event is kept for the process (the game may
+    // still wait on it after a flip back); the last timed present.
+    std::atomic<GameWait> wait_mode{GameWait::free};
+    HANDLE free_event{};
+    std::uint64_t wait_last{};
     // The game's present (route mutex held): flips the slot when the phase
-    // changes and times the present interval for the phase it ran in. Phase 1
-    // only while DLSS-G paces the chain; both handles stay open, so a frame
-    // waiting on the other one is fine.
-    void ab_present() noexcept {
+    // changes and times the present interval for the phase it ran in. Both
+    // handles stay open, so a frame waiting on the other one is fine.
+    void wait_present() noexcept {
         LARGE_INTEGER now{}, frequency{};
         QueryPerformanceCounter(&now);
         QueryPerformanceFrequency(&frequency);
         const bool paced = contract == PresentationContract::sdk_paced;
-        if (paced && ab_last) {
-            const auto us = static_cast<std::uint64_t>((now.QuadPart - static_cast<LONGLONG>(ab_last)) * 1000000 /
+        if (paced && wait_last) {
+            const auto us = static_cast<std::uint64_t>((now.QuadPart - static_cast<LONGLONG>(wait_last)) * 1000000 /
                                                        frequency.QuadPart);
             if (us < 1000000) {
-                ++stats.ab_frames[stats.ab_phase];
-                stats.ab_us[stats.ab_phase] += us;
+                ++stats.wait_frames[stats.wait_phase];
+                stats.wait_us[stats.wait_phase] += us;
             }
         }
-        ab_last = paced ? static_cast<std::uint64_t>(now.QuadPart) : 0;
-        const unsigned want = ab_on.load(std::memory_order_relaxed) && paced && (GetTickCount64() / 10000) % 2 ? 1 : 0;
-        if (want == stats.ab_phase || !game_waitable || !waitable_slot) return;
-        if (!ab_event) ab_event = CreateEventW(nullptr, TRUE, TRUE, nullptr);
-        if (!ab_event) return;
-        const HANDLE from = stats.ab_phase ? ab_event : game_waitable, to = want ? ab_event : game_waitable;
+        wait_last = paced ? static_cast<std::uint64_t>(now.QuadPart) : 0;
+        const auto mode = wait_mode.load(std::memory_order_relaxed);
+        const bool free = paced && (mode == GameWait::free || (mode == GameWait::ab && (GetTickCount64() / 10000) % 2));
+        const unsigned want = free ? 1 : 0;
+        if (want == stats.wait_phase || !game_waitable || !waitable_slot) return;
+        if (!free_event) free_event = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+        if (!free_event) return;
+        const HANDLE from = stats.wait_phase ? free_event : game_waitable, to = want ? free_event : game_waitable;
         if (replace_slot_handle(waitable_slot, from, to)) {
-            stats.ab_phase = want;
-            ++stats.ab_flips;
-            ab_last = 0; // the first present after a flip is not timed
+            stats.wait_phase = want;
+            ++stats.wait_flips;
+            wait_last = 0; // the first present after a flip is not timed
         }
     }
     // The game's Present into Streamline's proxy, timed per phase while DLSS-G
     // paces the chain (route mutex held).
-    void ab_present_time(LONGLONG began) noexcept {
+    void wait_present_time(LONGLONG began) noexcept {
         if (contract != PresentationContract::sdk_paced) return;
         LARGE_INTEGER now{}, frequency{};
         QueryPerformanceCounter(&now);
         QueryPerformanceFrequency(&frequency);
-        ++stats.ab_present_calls[stats.ab_phase];
-        stats.ab_present_us[stats.ab_phase] +=
+        ++stats.present_calls[stats.wait_phase];
+        stats.present_us[stats.wait_phase] +=
             static_cast<std::uint64_t>((now.QuadPart - began) * 1000000 / frequency.QuadPart);
     }
     // Before a switch (the game's resize, route mutex held): the chain's own
     // waitable back in the slot, as switch_chain() expects.
-    void ab_restore() noexcept {
-        if (stats.ab_phase && ab_event && replace_slot_handle(waitable_slot, ab_event, game_waitable))
-            stats.ab_phase = 0;
-        ab_last = 0;
+    void wait_restore() noexcept {
+        if (stats.wait_phase && free_event && replace_slot_handle(waitable_slot, free_event, game_waitable))
+            stats.wait_phase = 0;
+        wait_last = 0;
     }
     // switch_chain() requests: 0 none, 1 without DLSS-G, 2 with (outcomes in stats).
     std::atomic<unsigned> switch_request{};
@@ -601,7 +604,7 @@ struct Presentation::State {
         Bypass internal(true);
         BOOL fullscreen{};
         if (FAILED(swap->GetFullscreenState(&fullscreen, nullptr)) || fullscreen) return refuse(4);
-        ab_restore();
+        wait_restore();
         HANDLE held{};
         if (game_waitable && (!slot_handle(waitable_slot, held) || held != game_waitable)) return refuse(5);
         DXGI_SWAP_CHAIN_DESC1 current{};
@@ -961,7 +964,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain *self, UINT interval, UINT
             const auto before = GetLastError();
             if (!(flags & DXGI_PRESENT_TEST)) host_frame();
             if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
-            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present();
+            if (!(flags & DXGI_PRESENT_TEST)) s.wait_present();
             const bool ticket =
                 s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
             SetLastError(before);
@@ -970,7 +973,7 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain *self, UINT interval, UINT
             LARGE_INTEGER began{};
             QueryPerformanceCounter(&began);
             const auto hr = s.proxy_swap->Present(interval, flags);
-            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present_time(began.QuadPart);
+            if (!(flags & DXGI_PRESENT_TEST)) s.wait_present_time(began.QuadPart);
             if (flags & DXGI_PRESENT_TEST)
                 ++s.stats.test_presents;
             else
@@ -1072,7 +1075,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1 *self, UINT interval, UI
             const auto before = GetLastError();
             if (!(flags & DXGI_PRESENT_TEST)) host_frame();
             if (!(flags & DXGI_PRESENT_TEST)) s.scene_present_entry(self);
-            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present();
+            if (!(flags & DXGI_PRESENT_TEST)) s.wait_present();
             const bool ticket =
                 s.observer.begin && s.observer.begin(s.observer.context, reinterpret_cast<std::uintptr_t>(self), flags);
             SetLastError(before);
@@ -1081,7 +1084,7 @@ HRESULT STDMETHODCALLTYPE present1_hook(IDXGISwapChain1 *self, UINT interval, UI
             LARGE_INTEGER began{};
             QueryPerformanceCounter(&began);
             const auto hr = s.proxy_swap->Present1(interval, flags, params);
-            if (!(flags & DXGI_PRESENT_TEST)) s.ab_present_time(began.QuadPart);
+            if (!(flags & DXGI_PRESENT_TEST)) s.wait_present_time(began.QuadPart);
             if (flags & DXGI_PRESENT_TEST)
                 ++s.stats.test_presents;
             else
@@ -1450,8 +1453,8 @@ bool Presentation::request_switch(bool frame_generation) noexcept {
     s.switch_request.store(frame_generation ? 2U : 1U);
     return true;
 }
-void Presentation::waitable_ab(bool on) noexcept {
-    state_->ab_on.store(on, std::memory_order_relaxed);
+void Presentation::game_wait(GameWait mode) noexcept {
+    state_->wait_mode.store(mode, std::memory_order_relaxed);
 }
 void Presentation::waitable_slot(std::uintptr_t address) noexcept {
     auto &s = *state_;
