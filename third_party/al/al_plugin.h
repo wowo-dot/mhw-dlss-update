@@ -1,4 +1,4 @@
-/* AL plugin API, version 1.4. C ABI, 64-bit Windows.
+/* AL plugin API, version 1.8. C ABI, 64-bit Windows.
  *
  * A plugin is one DLL in its own folder:  <game>\AsteraLoader\plugins\<name>\<name>.dll
  * Other files in that folder (its own DLLs, config, data) belong to the
@@ -23,7 +23,9 @@
  *   - The info struct and everything it points to stay valid while the
  *     plugin is loaded (use static data).
  *   - No C++ exceptions cross this boundary.
- *   - Once al_plugin_init has been called, AL never unloads the plugin.
+ *   - Once al_plugin_init has been called, AL never unloads the plugin, so
+ *     a hook's detour or a value written through al.patch may point into
+ *     the plugin's DLL until the process exits.
  *   - The api and init pointers, and the strings they hold, stay valid until
  *     the process exits. API functions may be called from any thread.
  *
@@ -31,6 +33,13 @@
  * additive only (new fields at the end, `size` grows). AL refuses a plugin
  * built for another major version, or for a newer minor version than it
  * provides; a plugin built for an older minor version keeps working.
+ *   - Structs a plugin passes in: AL accepts any `size` at least the size
+ *     the struct had in the version that introduced it, and reads a later
+ *     field only when `size` covers it.
+ *   - Structs AL passes out: check `size` before reading a field added
+ *     after the version the plugin was built for.
+ *   - Results: any value other than AL_OK is a failure; later versions may
+ *     add codes. Functions returning a handle return 0 on failure.
  *
  * Services (1.1): api->get_interface returns versioned tables by name, such
  * as "al.game" and "al.scanner" below, or tables other plugins publish
@@ -40,8 +49,11 @@
  * Phases (1.2): besides PRE_MAIN, AL now dispatches WIN_MAIN,
  * DEVICE_CREATED and SHUTDOWN, each at most once and in that order, with a
  * payload struct as `data` (see below). 1.3 adds SWAPCHAIN_CREATED and
- * FIRST_PRESENT between DEVICE_CREATED and SHUTDOWN. GAME_READY is reserved
- * and does not fire yet.
+ * FIRST_PRESENT between DEVICE_CREATED and SHUTDOWN. 1.5 adds EXITING,
+ * before SHUTDOWN, and 1.7 GAME_READY, when the title screen starts.
+ * Phase numbers are names, not firing order. Phases fire in this order:
+ * PRE_MAIN, WIN_MAIN, DEVICE_CREATED, SWAPCHAIN_CREATED, FIRST_PRESENT,
+ * GAME_READY, EXITING, SHUTDOWN.
  *
  * Direct3D 12 (1.3): the "al.d3d12" service shares the game's DXGI and
  * D3D12 calls between plugins: events, and detours chained on one hook per
@@ -49,6 +61,19 @@
  *
  * Game functions (1.4): the "al.hooks" service does the same for
  * functions in the game's own code.
+ *
+ * Frames (1.5): the "al.frame" service calls plugins on the game's frame
+ * thread every frame and runs tasks posted to it from any thread.
+ *
+ * Input (1.6): the "al.input" service gives hotkeys, key and pad state from
+ * the game's own reads, the game window's messages, and input capture for
+ * menus.
+ *
+ * Game ready (1.7): AL_PHASE_GAME_READY fires once the game has booted and
+ * its title screen starts.
+ *
+ * Byte changes (1.8): the "al.patch" service changes bytes in the game's
+ * code and data, checked and with one owner per byte, shared with al.hooks.
  */
 #ifndef AL_PLUGIN_H
 #define AL_PLUGIN_H
@@ -65,7 +90,7 @@ extern "C" {
 #define AL_VERSION_MINOR(version) ((uint32_t)(version) & 0xffffu)
 
 #define AL_API_VERSION_MAJOR 1u
-#define AL_API_VERSION_MINOR 4u
+#define AL_API_VERSION_MINOR 8u
 #define AL_API_VERSION AL_MAKE_VERSION(AL_API_VERSION_MAJOR, AL_API_VERSION_MINOR)
 
 /* x64 Windows has one calling convention; this names it for readers. */
@@ -78,7 +103,8 @@ extern "C" {
 
 typedef uint32_t al_result_t;
 #define AL_OK 0u
-#define AL_ERROR 1u /* the plugin could not start; set_status says why */
+#define AL_ERROR 1u /* failed; for al_plugin_init, the plugin could not start and
+                       set_status says why */
 
 /* Moments in the game's life a plugin can subscribe to. `data` is NULL for
  * PRE_MAIN and points to the struct named below for the others; it is valid
@@ -97,12 +123,23 @@ typedef uint32_t al_phase_t;
 #define AL_PHASE_FIRST_PRESENT 4u     /* 1.3: the game's first Present, before it reaches the
                                            swap chain and before PRE_PRESENT callbacks; the
                                            game's present thread; al_d3d12_present_t */
-#define AL_PHASE_GAME_READY 5u        /* reserved: does not fire yet */
+#define AL_PHASE_GAME_READY 5u        /* 1.7: the game finished booting and its title
+                                           screen started; game data and the game's own
+                                           systems are set up. Once, on the game's frame
+                                           thread at the end of that frame, after al.frame
+                                           END; al_phase_game_ready_t. Not on executables
+                                           AL does not know, nor if the game quits first. */
 #define AL_PHASE_SHUTDOWN 6u          /* 1.2: WinMain returned, before CRT teardown;
                                            save your own data now; main thread;
                                            al_phase_shutdown_t. Does not fire if the game
                                            ends the process another way. */
-#define AL_PHASE_COUNT 7u
+#define AL_PHASE_EXITING 7u          /* 1.5: the game started its own quit (Exit Game, or a
+                                           window close through WM_QUIT), before it tears
+                                           anything down; stop your own threads now. Usually
+                                           the WinMain thread; no payload (NULL). Does not
+                                           fire when the process is ended from outside
+                                           (Task Manager) or by a crash. */
+#define AL_PHASE_COUNT 8u
 #define AL_PHASE_BIT(phase) (1u << (phase))
 
 typedef uint32_t al_log_level_t;
@@ -147,6 +184,14 @@ typedef struct al_phase_shutdown_t {
     uint32_t size;
     int32_t exit_code; /* what WinMain returned */
 } al_phase_shutdown_t;
+
+/* 1.7: GAME_READY's payload. */
+#define AL_GAME_READY_TITLE 1u /* the title screen started */
+typedef struct al_phase_game_ready_t {
+    uint32_t size;
+    uint32_t source; /* what AL saw: AL_GAME_READY_TITLE */
+    uint64_t frame;  /* the al.frame index of the frame it fired at the end of */
+} al_phase_game_ready_t;
 
 /* 1.1: a plugin this one needs. */
 typedef struct al_dependency_t {
@@ -319,7 +364,7 @@ typedef struct al_d3d12_swapchain_t {
     void* swapchain; /* the IDXGISwapChain the game holds */
     void* queue;     /* the ID3D12CommandQueue the game created it with */
     void* device;    /* the ID3D12Device the game uses (as at DEVICE_CREATED) */
-    void* window;    /* HWND */
+    void* window;    /* HWND: the window the game created the swap chain for */
     uint32_t width;
     uint32_t height;
     uint32_t format; /* DXGI_FORMAT */
@@ -484,8 +529,10 @@ typedef struct al_hooks_t {
     uint32_t version; /* AL_HOOKS_VERSION */
     /* Registers one detour and returns its handle, or 0 with the reason in
      * the plugin's log: a pattern that does not match exactly once, a target
-     * outside the game's code, bytes that differ, no detour or next, or the
-     * same plugin hooking the same function twice. */
+     * outside the game's code, bytes that differ, no detour or next, the
+     * same plugin hooking the same function twice, or (1.8) entry bytes a
+     * plugin has changed through al.patch. Patterns are checked against the
+     * game's original bytes where al.patch changed some (1.8). */
     uint32_t(AL_CALL* hook)(al_plugin_t* self, const al_hook_t* hook);
     /* Takes the detour out of its chain, or puts it back in its place.
      * Calls already inside it finish normally. */
@@ -493,6 +540,282 @@ typedef struct al_hooks_t {
     /* The hook's state; AL_HOOK_FAILED for an unknown handle. */
     al_hook_state_t(AL_CALL* state)(al_plugin_t* self, uint32_t handle);
 } al_hooks_t;
+
+/* "al.frame" 1.0 (API 1.5): the game's frames and its game thread.
+ *
+ * Callbacks run on the game's frame thread (not the WinMain thread), once
+ * per frame, before (BEGIN) and after (END) the game's frame update. Game
+ * state is consistent there, so work that reads or changes game objects
+ * belongs here or in a posted task, not on a plugin's own thread.
+ *
+ * At BEGIN, posted tasks run first, in posting order across plugins; then
+ * BEGIN callbacks in load order. END callbacks run in load order. Callbacks
+ * and tasks run under AL's fault guard: a fault disables the plugin, the
+ * frame goes on. With nothing subscribed or queued, AL costs a few atomic
+ * reads per frame and allocates nothing.
+ *
+ * When AL sees the game leave its frame loop, it runs the tasks still queued
+ * on the game thread and the state becomes STOPPED. In rare cases (about 0.6%
+ * of exits) it only learns that at SHUTDOWN; tasks still queued then are
+ * dropped, and the plugin's log says how many.
+ *
+ * Only for game versions AL knows; elsewhere the state is UNAVAILABLE with
+ * the reason, post fails, and subscribe still succeeds. */
+#define AL_FRAME_INTERFACE "al.frame"
+#define AL_FRAME_VERSION AL_MAKE_VERSION(1, 0)
+
+typedef uint32_t al_frame_event_t;
+#define AL_FRAME_BEGIN 0u /* before the game's frame update */
+#define AL_FRAME_END 1u   /* after it */
+
+typedef struct al_frame_info_t {
+    uint32_t size; /* sizeof(al_frame_info_t) as AL was built */
+    uint32_t reserved;
+    uint64_t index; /* frames since the first one AL saw, from 0 */
+    int64_t qpc;    /* QueryPerformanceCounter when this event began */
+} al_frame_info_t;
+
+/* `frame` is valid during the call only. */
+typedef void(AL_CALL* al_frame_fn)(al_plugin_t* self, al_frame_event_t event, const al_frame_info_t* frame,
+                                   void* user);
+typedef void(AL_CALL* al_task_fn)(al_plugin_t* self, void* user);
+
+typedef uint32_t al_frame_state_t;
+#define AL_FRAME_WAITING 0u     /* no frame yet */
+#define AL_FRAME_RUNNING 1u
+#define AL_FRAME_STOPPED 2u     /* the game left its frame loop; no more frames */
+#define AL_FRAME_UNAVAILABLE 3u /* AL cannot follow this game's frames; see reason */
+
+typedef struct al_frame_status_t {
+    uint32_t size; /* the caller sets sizeof(al_frame_status_t) */
+    al_frame_state_t state;
+    uint64_t frames;      /* frames begun so far */
+    uint32_t game_thread; /* the frame thread's id; 0 before the first frame */
+    uint32_t reserved;
+    const char* reason; /* why UNAVAILABLE, else ""; valid until the process exits */
+} al_frame_status_t;
+
+typedef struct al_frame_t {
+    uint32_t size;
+    uint32_t version; /* AL_FRAME_VERSION */
+    /* Calls `callback` at every `event` from the next frame on. Returns a
+     * handle, or 0 with the reason in the plugin's log. Any thread, also
+     * inside a callback. */
+    uint32_t(AL_CALL* subscribe)(al_plugin_t* self, al_frame_event_t event, al_frame_fn callback, void* user);
+    al_result_t(AL_CALL* unsubscribe)(al_plugin_t* self, uint32_t handle);
+    /* Runs `task` once on the game thread at the next BEGIN. Any thread;
+     * from the game thread it runs next frame. AL_ERROR once frames have
+     * stopped or are unavailable. */
+    al_result_t(AL_CALL* post)(al_plugin_t* self, al_task_fn task, void* user);
+    /* Fills *status up to status->size. Any thread. */
+    void(AL_CALL* status)(al_plugin_t* self, al_frame_status_t* status);
+} al_frame_t;
+
+/* "al.input" 1.0 (API 1.6): hotkeys, key and pad state, the game window's
+ * messages, and input capture for menus.
+ *
+ * MHW updates its keyboard, mouse and pad state once per frame on its frame
+ * thread (from DirectInput and XInput). AL hooks those game functions and
+ * keeps a copy of what each produced, before capture changes it; hotkeys,
+ * key_down and pad_state use those copies. AL never polls input itself,
+ * and writes no input values or typed text to its logs. While the game
+ * window is not in the foreground, queries return nothing held and hotkeys
+ * do not fire.
+ *
+ * Request the interface from al_plugin_init or PRE_MAIN, so AL watches for
+ * the game window and installs its input layer.
+ *
+ * Threads: hotkey callbacks run on the game's frame thread, at the end of
+ * the frame, just before al.frame END callbacks. Message callbacks run on
+ * the window's thread (the WinMain thread). Everything else may be called
+ * from any thread. A callback that faults disables its plugin and releases
+ * its capture; the game goes on.
+ *
+ * Capture: while any plugin holds capture of a device, the game receives
+ * that device as idle (nothing held, mouse still, pad neutral); plugins
+ * still see the real state. Mouse capture includes the mouse buttons the
+ * game also keeps among its keys. Input still held when capture ends stays
+ * hidden from the game until released, so it never arrives as a new press.
+ * AL_INPUT_PAD covers XInput pads. Capture is counted per plugin: each
+ * capture call is undone by one release, the latest first. Another
+ * plugin's capture suppresses this plugin's hotkeys; its own do not. A
+ * disabled plugin, focus loss and EXITING never leave the game captured. */
+#define AL_INPUT_INTERFACE "al.input"
+#define AL_INPUT_VERSION AL_MAKE_VERSION(1, 0)
+#define AL_MOD_CTRL 1u
+#define AL_MOD_SHIFT 2u
+#define AL_MOD_ALT 4u
+#define AL_INPUT_KEYBOARD 1u
+#define AL_INPUT_MOUSE 2u
+#define AL_INPUT_PAD 4u
+#define AL_INPUT_ALL 7u
+
+typedef struct al_hotkey_t {
+    uint32_t size, key, modifiers, reserved; /* key is a Windows VK, including mouse buttons */
+    const char* name;
+} al_hotkey_t;
+/* XInput button masks; all specified buttons must be held. */
+#define AL_PAD_UP 0x0001u
+#define AL_PAD_DOWN 0x0002u
+#define AL_PAD_LEFT 0x0004u
+#define AL_PAD_RIGHT 0x0008u
+#define AL_PAD_START 0x0010u
+#define AL_PAD_BACK 0x0020u
+#define AL_PAD_LEFT_THUMB 0x0040u
+#define AL_PAD_RIGHT_THUMB 0x0080u
+#define AL_PAD_LEFT_SHOULDER 0x0100u
+#define AL_PAD_RIGHT_SHOULDER 0x0200u
+#define AL_PAD_A 0x1000u
+#define AL_PAD_B 0x2000u
+#define AL_PAD_X 0x4000u
+#define AL_PAD_Y 0x8000u
+typedef struct al_pad_hotkey_t {
+    uint32_t size, user_index, buttons, modifiers; /* slot 0..3; modifiers are keyboard modifiers */
+    const char* name;
+} al_pad_hotkey_t;
+typedef struct al_pad_state_t {
+    uint32_t size, connected, packet;
+    uint16_t buttons;
+    uint8_t left_trigger, right_trigger;
+    int16_t left_x, left_y, right_x, right_y;
+} al_pad_state_t;
+typedef void(AL_CALL* al_hotkey_fn)(al_plugin_t* self, uint32_t handle, void* user);
+/* Non-zero consumes this message before later callbacks and the game. */
+typedef uint32_t(AL_CALL* al_message_fn)(al_plugin_t* self, void* hwnd, uint32_t message,
+                                      uintptr_t wparam, intptr_t lparam, void* user);
+#define AL_INPUT_WAITING 0u     /* the input layer is not installed yet */
+#define AL_INPUT_RUNNING 1u
+#define AL_INPUT_UNAVAILABLE 2u /* AL could not install it; reason says why */
+#define AL_INPUT_STOPPED 3u     /* the game is exiting (EXITING) */
+typedef struct al_input_status_t {
+    uint32_t size, state, devices, captured; /* devices: AL_INPUT_* bits AL can capture;
+                                                captured: the bits captured now */
+    void* window;       /* the game window (HWND), or NULL before it exists */
+    const char* reason; /* why UNAVAILABLE, else ""; valid until the process exits */
+} al_input_status_t;
+typedef struct al_input_t {
+    uint32_t size, version;
+    /* Calls `callback` in the frame the combination becomes held: the key
+     * plus every modifier given (others may be held too). Returns a handle,
+     * or 0 with the reason in the plugin's log; reserved must be 0. A
+     * combination another plugin uses too is allowed, and both plugins' logs
+     * say so. */
+    uint32_t(AL_CALL* add_hotkey)(al_plugin_t*, const al_hotkey_t*, al_hotkey_fn, void* user);
+    al_result_t(AL_CALL* remove_hotkey)(al_plugin_t*, uint32_t handle);
+    /* Non-zero if the key (a VK code, 0..255) was held in the game's latest
+     * read. */
+    uint32_t(AL_CALL* key_down)(al_plugin_t*, uint32_t key);
+    /* Window messages, before the game sees them; lower `order` first. A
+     * callback returning non-zero keeps the message from later callbacks and
+     * the game; messages that destroy the window always reach it. One
+     * callback per plugin; subscribing again replaces it. */
+    al_result_t(AL_CALL* subscribe_messages)(al_plugin_t*, int32_t order, al_message_fn, void* user);
+    /* Captures the AL_INPUT_* devices given (see above). AL_ERROR, with the
+     * reason in the plugin's log, unless status.devices has every one. */
+    al_result_t(AL_CALL* capture)(al_plugin_t*, uint32_t devices);
+    /* Undoes this plugin's latest capture. */
+    al_result_t(AL_CALL* release)(al_plugin_t*);
+    /* The game window (HWND), or NULL before it exists. */
+    void*(AL_CALL* window)(al_plugin_t*);
+    /* The pad in slot 0..3 as the game's latest read returned it, before
+     * capture. Fills *out up to out->size; AL_ERROR for another slot. */
+    al_result_t(AL_CALL* pad_state)(al_plugin_t*, uint32_t user_index, al_pad_state_t* out);
+    /* As add_hotkey, for pad buttons: every button in `buttons` held, plus
+     * the keyboard modifiers given. */
+    uint32_t(AL_CALL* add_pad_hotkey)(al_plugin_t*, const al_pad_hotkey_t*, al_hotkey_fn, void* user);
+    al_result_t(AL_CALL* unsubscribe_messages)(al_plugin_t*);
+    /* Fills *out up to out->size. */
+    void(AL_CALL* status)(al_plugin_t*, al_input_status_t* out);
+} al_input_t;
+
+/* "al.patch" 1.0 (API 1.8): byte changes in the game, checked and owned.
+ *
+ * For changes that are not a hook at a function's entry: NOPs, a flipped
+ * jump, a constant, a pointer in a table, a call sent elsewhere. AL checks
+ * the bytes before it changes them, records which plugin owns them, and
+ * refuses a change that overlaps another plugin's change or a hook (and
+ * al.hooks refuses a hook over a change). Logs and crash reports list the
+ * changes and their owners.
+ *
+ * Only the game exe: CODE and CALL in its executable sections, DATA in its
+ * other sections (read-only or writable). Never its headers, its data
+ * directories (imports, exports, exception data, relocations, resources,
+ * TLS, load config, debug), the DRM stub's section, or another module.
+ *
+ * The bytes: `address`, or `pattern` searched as in al.hooks (exactly one
+ * match, in the code for CODE and CALL, in the data sections for DATA;
+ * target = match + offset). With both, the pattern must match at
+ * address - offset. Either way the `length` bytes at the target must equal
+ * `expected`, the final check. A plugin that gives only an address should
+ * name its game exes in exe_sha256. Patterns are checked against the
+ * game's original bytes where a hook or another change covers some.
+ *
+ * Changes made before PRE_MAIN ends are checked and claimed at once and
+ * written when it ends, before the game's own code starts; later ones are
+ * written before apply returns. Naturally aligned DATA of 1, 2, 4 or 8
+ * bytes is written in one atomic step; everything else with the game's
+ * other threads paused, never while one is inside the changed code. Change
+ * whole instructions, and keep an instruction boundary where a call inside
+ * the range returns: a thread inside the called function comes back there.
+ * AL copies what it needs during apply; only *original is written to.
+ *
+ * AL_PATCH_CALL: the target holds E8 (call) or E9 (jmp) and a rel32, and
+ * `expected` is those 5 bytes. AL points it at a stub within reach that
+ * jumps to `function`; *original gets the old target first, so the plugin
+ * can call through.
+ *
+ * When a plugin is disabled after a fault, its changes stay. At SHUTDOWN,
+ * after the plugins' own SHUTDOWN, AL puts back DATA changes that are still
+ * active; code and call changes stay, as hooks do. The game checks parts
+ * of its own code; AL does nothing about that, and a change there is
+ * visible to it, as with any mod. */
+#define AL_PATCH_INTERFACE "al.patch"
+#define AL_PATCH_VERSION AL_MAKE_VERSION(1, 0)
+
+#define AL_PATCH_CODE 0u /* bytes in the game's code: NOPs, a flipped jump, any same-length change */
+#define AL_PATCH_DATA 1u /* bytes in the game's data: a pointer, a constant, a table entry */
+#define AL_PATCH_CALL 2u /* a call or jmp rel32 in the game's code, sent to `function` */
+
+#define AL_PATCH_MAX_LENGTH 64u
+
+typedef struct al_patch_t {
+    uint32_t size;           /* sizeof(al_patch_t) */
+    uint32_t kind;           /* AL_PATCH_CODE, AL_PATCH_DATA or AL_PATCH_CALL */
+    const char* name;        /* for logs and reports, e.g. "Start menu: System tab items"; may be NULL */
+    const char* pattern;     /* in al.scanner's syntax, or NULL with an address */
+    int32_t offset;          /* target = where the pattern matches + offset */
+    uint32_t length;         /* bytes changed: 1 to AL_PATCH_MAX_LENGTH; 5 for AL_PATCH_CALL */
+    void* address;           /* the target, or NULL to search for pattern */
+    const void* expected;    /* the `length` bytes that must be there now */
+    const void* replacement; /* the `length` bytes to write; NULL for AL_PATCH_CALL */
+    void* function;          /* AL_PATCH_CALL: where the call should go; else NULL */
+    void** original;         /* AL_PATCH_CALL: where AL stores the old target; may be NULL */
+} al_patch_t;
+
+typedef uint32_t al_patch_state_t;
+#define AL_PATCH_PENDING 0u  /* made before PRE_MAIN ended; written when it ends */
+#define AL_PATCH_ACTIVE 1u   /* the replacement is in place */
+#define AL_PATCH_DISABLED 2u /* switched off with set_enabled: the expected bytes are back */
+#define AL_PATCH_FAILED 3u   /* AL will not touch it again; the plugin's log says why */
+
+typedef struct al_patches_t {
+    uint32_t size;
+    uint32_t version; /* AL_PATCH_VERSION */
+    /* Checks and claims one change and returns its handle, or 0 with the
+     * reason in the plugin's log: a pattern that does not match once, bytes
+     * that differ from `expected`, a place AL does not change, a length out
+     * of range, a CALL target without E8/E9, or bytes another plugin's
+     * change or hook holds (the log names it). Any thread, from
+     * al_plugin_init on. */
+    uint32_t(AL_CALL* apply)(al_plugin_t* self, const al_patch_t* patch);
+    /* 0 puts the expected bytes back if the replacement is still there; 1
+     * writes the replacement again if the expected bytes are still there. If
+     * something outside AL changed the bytes since, AL leaves them and the
+     * state becomes FAILED. Only the plugin that made the change. */
+    al_result_t(AL_CALL* set_enabled)(al_plugin_t* self, uint32_t handle, uint32_t enabled);
+    /* The change's state; AL_PATCH_FAILED for an unknown handle. */
+    al_patch_state_t(AL_CALL* state)(al_plugin_t* self, uint32_t handle);
+} al_patches_t;
 
 typedef const al_plugin_info_t*(AL_CALL* al_plugin_info_fn)(void);
 typedef al_result_t(AL_CALL* al_plugin_init_fn)(const al_api_t* api, const al_init_t* init);
