@@ -126,7 +126,7 @@ the NVIDIA App.
 Sharpness (sharpness): NVIDIA's NVSharpen on the game's image while DLSS
 runs, after its colour grading and before the HUD, from 0 (off, the default)
 to 100. It works in SDR and HDR10 and follows the menu live.
-Frame generation (frame_generation):Off, a fixed multiplier (2x to 6x), or
+Frame generation (frame_generation): Off, a fixed multiplier (2x to 6x), or
 Dynamic, which picks the count itself to reach a target frame rate
 (dynamic_target: the display's refresh rate by default).
 frame_generation_auto = on lets NVIDIA's Auto mode pause a fixed multiplier
@@ -140,7 +140,8 @@ gets that one), with the game's own sharper texture filters. It follows the
 DLSS mode live. Off: the game's own, as without the mod.
 Reflex (reflex): On, Boost, or Off. Off works only while DLSS Frame Generation
 is not loaded (frame_generation_plugin = off, or a GPU without it): with it
-loaded, Reflex keeps the frame pacing smooth.
+loaded, Reflex keeps the frame pacing smooth. With Reflex on, the NVIDIA
+overlay's PC Latency reading works.
 Edits to the file apply from the next start; the menu (below) applies its
 changes at once.
 With CMFM installed (an optional Astera Loader plugin, 0.1.0 or newer:
