@@ -24,21 +24,20 @@ void pure_tests() {
     check(gm::texture_bytes(1, 1, 4) == 65536 && gm::texture_bytes(128, 128, 4) == 65536 &&
               gm::texture_bytes(129, 128, 4) == 131072,
           "textures round up to 64 KiB");
-    // 4K DLAA: copies 12, converted 28, output 16, handoff 4, spatial 4 bytes a pixel.
+    // 4K DLAA: copies 12, converted depth and motion 8, spatial 4 bytes a
+    // pixel (0.32.0: DLSS writes the game's output).
     const std::uint64_t k4 = 3840ULL * 2160;
     const auto dlaa = gm::dlss_bytes(3840, 2160, 3840, 2160);
-    check(dlaa >= 64 * k4 && dlaa < 64 * k4 + 9 * 65536, "4K DLAA images");
+    check(dlaa >= 24 * k4 && dlaa < 24 * k4 + 6 * 65536, "4K DLAA images");
     check(gm::dlss_bytes(3840, 2160, 3840, 2160, false) == dlaa - 3 * gm::texture_bytes(3840, 2160, 4),
           "a preset change keeps the copies");
     // Quality at 4K renders 2560x1440: the converted inputs shrink.
-    const auto inputs = [](unsigned w, unsigned h) {
-        return gm::texture_bytes(w, h, 16) + gm::texture_bytes(w, h, 4) + gm::texture_bytes(w, h, 8);
-    };
+    const auto inputs = [](unsigned w, unsigned h) { return 2 * gm::texture_bytes(w, h, 4); };
     check(gm::dlss_bytes(3840, 2160, 2560, 1440) == dlaa - inputs(3840, 2160) + inputs(2560, 1440),
           "render-size inputs");
-    // The largest side D3D12 allows does not overflow (about 17 GiB at DLAA).
+    // The largest side D3D12 allows does not overflow (about 6 GiB at DLAA).
     const auto largest = gm::dlss_bytes(16384, 16384, 16384, 16384);
-    check(largest >= 64ULL * 16384 * 16384 && largest < 65ULL * 16384 * 16384, "16384x16384 without overflow");
+    check(largest >= 24ULL * 16384 * 16384 && largest < 25ULL * 16384 * 16384, "16384x16384 without overflow");
 }
 
 // The game's adapter: pinned once; the budget is read through it.

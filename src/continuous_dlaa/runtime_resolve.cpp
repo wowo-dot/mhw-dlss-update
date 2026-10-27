@@ -355,7 +355,7 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list) {
         const auto images = pass->private_images();
         const bool outer = injected;
         injected = true; // our staging copy is not native work
-        frame_generation::game::stage(list, consumer.source.frame, consumer.source.epoch, images[1], images[2], camera);
+        frame_generation::game::stage(list, consumer.source.frame, consumer.source.epoch, images[0], images[1], camera);
         injected = outer;
     }
     history_telemetry.record(previous, consumer.projection.history, decision);

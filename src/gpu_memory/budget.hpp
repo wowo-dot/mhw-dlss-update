@@ -4,7 +4,7 @@
 #include <cstdint>
 
 // The mod's video memory check (v0.24.0, docs/research/large-resolutions.md).
-// Its images grow with the screen (about 1.2 GB at 4K DLAA with frame
+// Its images grow with the screen (hundreds of MB at 4K DLAA with frame
 // generation). Allocations past the OS budget still succeed, but Windows then
 // pages the game's own resources to system memory; the mod fails closed
 // instead: DLSS (or frame generation) stays off and the game renders as it
@@ -30,15 +30,14 @@ constexpr std::uint64_t texture_bytes(std::uint64_t width, std::uint64_t height,
 }
 // The continuous runtime's images (continuous_dlaa/runtime.cpp): the copies
 // of the game's colour, depth and motion at the scene size (R11G11B10, R32F,
-// R32_UINT); the DLSS inputs converted at the render size (RGBA32F, R32F,
-// RG32F); the RGBA32F output and its R11G11B10 handoff at the scene size;
-// and the spatial fallback's R11G11B10 image. A live preset change keeps the
-// copies (copies=false).
+// R32_UINT); the converted depth and motion at the render size (R32F,
+// RG16F); and the spatial fallback's R11G11B10 image. DLSS writes the game's
+// own output (0.32.0). A live preset change keeps the copies (copies=false).
 constexpr std::uint64_t dlss_bytes(unsigned scene_width, unsigned scene_height, unsigned render_width,
                                    unsigned render_height, bool copies = true) noexcept {
     const auto scene = [&](unsigned b) { return texture_bytes(scene_width, scene_height, b); };
     const auto render = [&](unsigned b) { return texture_bytes(render_width, render_height, b); };
-    return (copies ? 3 * scene(4) : 0) + render(16) + render(4) + render(8) + scene(16) + scene(4) + scene(4);
+    return (copies ? 3 * scene(4) : 0) + render(4) + render(4) + scene(4);
 }
 
 // The game's adapter, pinned once for the process (the reference is kept

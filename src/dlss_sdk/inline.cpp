@@ -1,8 +1,6 @@
 #include "inline.hpp"
 #include "../common/require.hpp"
-#include "../temporal_present/output.hpp"
 #include "../temporal_gpu_inputs/shader.hpp"
-#include "../perf/toggles.hpp"
 #include "../perf/gpu_timing.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "options.hpp"
@@ -60,10 +58,9 @@ struct InlineFrame::Impl {
     ComPtr<ID3D12Fence> create_fence;
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline;
-    ComPtr<ID3D12DescriptorHeap> heap, clear_heap;
-    std::array<ComPtr<ID3D12Resource>, 3> raw, converted;
-    ComPtr<ID3D12Resource> output;
-    std::unique_ptr<temporal_present::Output> handoff;
+    ComPtr<ID3D12DescriptorHeap> heap;
+    std::array<ComPtr<ID3D12Resource>, 3> raw;
+    std::array<ComPtr<ID3D12Resource>, 2> converted; // depth, motion
     NVSDK_NGX_Parameter *parameters{};
     NVSDK_NGX_Handle *feature{};
     unsigned width{}, height{}, create_result{}, evaluate_result{}, release_result{}, destroy_result{};
@@ -96,9 +93,11 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
         p.device = device;
         p.width = w;
         p.height = h;
+        // 0.32.0: DLSS reads the colour copy (R11G11B10) and writes the game's
+        // own TAA output (R11G11B10, the format and typed store the game's TAA
+        // writes); the converter writes only depth and motion (shader.hpp).
         constexpr DXGI_FORMAT inputs[]{DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_UINT};
-        constexpr DXGI_FORMAT outputs[]{DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32_FLOAT,
-                                        DXGI_FORMAT_R32G32_FLOAT};
+        constexpr DXGI_FORMAT outputs[]{DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT};
         for (auto format : inputs) {
             D3D12_FEATURE_DATA_FORMAT_SUPPORT support{format};
             hr(device->CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support)),
@@ -125,14 +124,10 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
                     "inline input layout");
             for (unsigned j = 0; j < i; ++j) require(raw[i] != raw[j], "inline input alias");
             p.raw[i] = raw[i];
-            auto desc = texture(w, h, outputs[i]);
-            p.converted[i] = resource(device, desc, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
-        auto out = texture(ow, oh, DXGI_FORMAT_R32G32B32A32_FLOAT);
-        p.output = resource(device, out, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        // The packed handoff to the game's output: continuous, the caller
-        // pinning its native outputs and lists.
-        p.handoff = std::make_unique<temporal_present::Output>(device, ow, oh, true, true);
+        for (unsigned i = 0; i < 2; ++i)
+            p.converted[i] = resource(device, texture(w, h, outputs[i]), D3D12_HEAP_TYPE_DEFAULT,
+                                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const auto account = [&](ID3D12Resource *r) {
             const auto desc = r->GetDesc();
             const auto bytes = device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
@@ -141,36 +136,26 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
             p.allocation_bytes += bytes;
         };
         for (const auto &r : p.converted) account(r.Get());
-        account(p.output.Get());
-        account(p.handoff->packed());
-        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 7,
+        // Depth and motion in, depth and motion out (shader.hpp's registers).
+        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4,
                                       D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
         hr(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&p.heap)), "inline heap");
         const auto step = device->GetDescriptorHandleIncrementSize(hd.Type);
         const auto start = p.heap->GetCPUDescriptorHandleForHeapStart().ptr;
-        for (unsigned i = 0; i < 3; ++i) {
+        for (unsigned i = 0; i < 2; ++i) {
             D3D12_SHADER_RESOURCE_VIEW_DESC s{};
-            s.Format = inputs[i];
+            s.Format = inputs[i + 1];
             s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             s.Texture2D.MipLevels = 1;
-            device->CreateShaderResourceView(p.raw[i].Get(), &s, {start + SIZE_T(i) * step});
+            device->CreateShaderResourceView(p.raw[i + 1].Get(), &s, {start + SIZE_T(i) * step});
             D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
             u.Format = outputs[i];
             u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            device->CreateUnorderedAccessView(p.converted[i].Get(), nullptr, &u, {start + SIZE_T(i + 3) * step});
+            device->CreateUnorderedAccessView(p.converted[i].Get(), nullptr, &u, {start + SIZE_T(i + 2) * step});
         }
-        hd.NumDescriptors = 1;
-        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        hr(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&p.clear_heap)), "inline clear heap");
-        D3D12_UNORDERED_ACCESS_VIEW_DESC clear{};
-        clear.Format = out.Format;
-        clear.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        device->CreateUnorderedAccessView(p.output.Get(), nullptr, &clear, {start + SIZE_T(6) * step});
-        device->CreateUnorderedAccessView(p.output.Get(), nullptr, &clear,
-                                          p.clear_heap->GetCPUDescriptorHandleForHeapStart());
-        D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, 0},
-                                        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 3, 0, 0, 3}};
+        D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0},
+                                        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 2, 0, 0, 2}};
         D3D12_ROOT_PARAMETER args[2]{};
         args[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         args[0].Constants = {0, 0, 2};
@@ -291,7 +276,15 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
         require(!p.evaluations || history.frame > p.history.frame, "inline monotonic history");
         same_device(list, p.device.Get());
         require(list->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT, "inline DIRECT list");
-        p.handoff->bind(p.output.Get(), native);
+        // The game's TAA output, in UNORDERED_ACCESS as the TAA dispatch takes
+        // it (the caller pins it through GPU completion): DLSS writes it.
+        same_device(native, p.device.Get());
+        const auto n = native->GetDesc();
+        require(n.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && n.Width == p.geometry.output.width &&
+                    n.Height == p.geometry.output.height && n.DepthOrArraySize == 1 && n.MipLevels == 1 &&
+                    n.SampleDesc.Count == 1 && n.SampleDesc.Quality == 0 && n.Format == DXGI_FORMAT_R11G11B10_FLOAT &&
+                    (n.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) && native != p.raw[0].Get(),
+                "inline native output layout");
         temporal_present::RestoreBindings restore(list, state);
         p.native_identity = reinterpret_cast<std::uintptr_t>(native);
         p.list_identity = reinterpret_cast<std::uintptr_t>(list);
@@ -299,19 +292,26 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
         p.generation = state.generation;
         p.reset = reset;
         p.frame_ms = frame_ms;
+        bool reading = false; // the copies in NON_PIXEL_SHADER_RESOURCE
         try {
+            // One barrier batch each way: the copies and the converted images
+            // to shader reads (the converted ones written first), and back.
+            std::array<D3D12_RESOURCE_BARRIER, 5> b{};
+            const auto set = [&](unsigned i, ID3D12Resource *r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+                b[i].Transition = {r, UINT_MAX, from, to};
+            };
             if (p.evaluations) {
-                for (auto &r : p.converted)
-                    transition(list, r.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                transition(list, p.output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                for (unsigned i = 0; i < 2; ++i)
+                    set(i, p.converted[i].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                list->ResourceBarrier(2, b.data());
             }
             p.issued = true;
             p.last.commands = true;
-            for (auto &r : p.raw)
-                transition(list, r.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            for (unsigned i = 0; i < 3; ++i)
+                set(i, p.raw[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            list->ResourceBarrier(3, b.data());
+            reading = true;
             list->SetComputeRootSignature(p.root.Get());
             list->SetPipelineState(p.pipeline.Get());
             ID3D12DescriptorHeap *heaps[]{p.heap.Get()};
@@ -320,19 +320,15 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
             list->SetComputeRoot32BitConstants(0, 2, dims, 0);
             list->SetComputeRootDescriptorTable(1, p.heap->GetGPUDescriptorHandleForHeapStart());
             list->Dispatch((p.width + 15) / 16, (p.height + 15) / 16, 1);
-            for (unsigned i = 0; i < 3; ++i) {
-                transition(list, p.raw[i].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                           D3D12_RESOURCE_STATE_COPY_DEST);
-                transition(list, p.converted[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                           D3D12_RESOURCE_STATE_COPY_SOURCE);
-                transition(list, p.converted[i].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-                           D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            }
+            for (unsigned i = 0; i < 2; ++i)
+                set(i, p.converted[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            list->ResourceBarrier(2, b.data());
             NVSDK_NGX_D3D12_DLSS_Eval_Params eval{};
-            eval.Feature.pInColor = p.converted[0].Get();
-            eval.Feature.pInOutput = p.output.Get();
-            eval.pInDepth = p.converted[1].Get();
-            eval.pInMotionVectors = p.converted[2].Get();
+            eval.Feature.pInColor = p.raw[0].Get();
+            eval.Feature.pInOutput = native;
+            eval.pInDepth = p.converted[0].Get();
+            eval.pInMotionVectors = p.converted[1].Get();
             eval.InReset = reset;
             eval.InMVScaleX = eval.InMVScaleY = 1;
             eval.InPreExposure = eval.InExposureScale = 1;
@@ -340,28 +336,23 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
             eval.InFrameTimeDeltaInMsec = frame_ms;
             eval.InJitterOffsetX = history.jitter_x;
             eval.InJitterOffsetY = history.jitter_y;
-            // Diagnostic sentinel: output texels the SDK leaves unwritten show
-            // at full brightness.
-            if (!perf::on(perf::no_output_sentinel)) {
-                const float sentinel[]{65504, 65504, 65504, 65504};
-                const auto stride = p.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-                list->ClearUnorderedAccessViewFloat(
-                    {p.heap->GetGPUDescriptorHandleForHeapStart().ptr + UINT64(6) * stride},
-                    p.clear_heap->GetCPUDescriptorHandleForHeapStart(), p.output.Get(), sentinel, 0, nullptr);
-                D3D12_RESOURCE_BARRIER order{};
-                order.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-                order.UAV.pResource = p.output.Get();
-                list->ResourceBarrier(1, &order);
-            }
             perf::gpu_timing::mark(list, perf::gpu_timing::converted);
             p.evaluate_result = NGX_D3D12_EVALUATE_DLSS_EXT(list, p.feature, p.parameters, &eval);
             require(p.evaluate_result == 1, "inline EvaluateFeature");
             perf::gpu_timing::mark(list, perf::gpu_timing::evaluated);
-            transition(list, p.output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            p.handoff->record(list);
+            // The copies back to COPY_DEST, which the next frame's copies (and
+            // the caller's recovery after a failure, below) expect.
+            for (unsigned i = 0; i < 3; ++i)
+                set(i, p.raw[i].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+            list->ResourceBarrier(3, b.data());
+            reading = false;
             p.copied = true;
             p.last.native_output_written = true;
         } catch (...) {
+            if (reading)
+                for (auto &r : p.raw)
+                    transition(list, r.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_COPY_DEST);
             restore.apply();
             p.restored = true;
             p.last.bindings_restored = true;
@@ -386,11 +377,6 @@ void InlineFrame::retire(ID3D12Fence *fence, std::uint64_t value) {
     const auto completed = fence->GetCompletedValue();
     require(completed != UINT64_MAX && completed >= value, "inline retire incomplete fence");
     hr(p.device->GetDeviceRemovedReason(), "inline retire device");
-    // The handoff was recorded only into submissions the fence covers.
-    if (p.handoff->recorded() && !p.handoff->retired()) {
-        require(value != 0, "inline retire handoff fence");
-        p.handoff->retire(fence, value, true);
-    }
     p.completion_fence = reinterpret_cast<std::uintptr_t>(fence);
     p.completion_value = value;
     p.release_result = NVSDK_NGX_D3D12_ReleaseFeature(p.feature);
@@ -416,9 +402,9 @@ unsigned InlineFrame::preset() const noexcept {
 ID3D12Resource *InlineFrame::raw_color() const noexcept {
     return impl_->raw[0].Get();
 }
-std::array<ID3D12Resource *, 5> InlineFrame::private_images() const noexcept {
+std::array<ID3D12Resource *, 2> InlineFrame::private_images() const noexcept {
     const auto &p = *impl_;
-    return {p.converted[0].Get(), p.converted[1].Get(), p.converted[2].Get(), p.output.Get(), p.handoff->packed()};
+    return {p.converted[0].Get(), p.converted[1].Get()};
 }
 void InlineFrame::write(std::ostream &o) const {
     const auto &p = *impl_;
@@ -436,7 +422,7 @@ void InlineFrame::write(std::ostream &o) const {
       << ",\"native_output_written\":" << p.last.native_output_written << ",\"success\":" << p.last.success << '}'
       << ",\"device\":" << reinterpret_cast<std::uintptr_t>(p.device.Get())
       << ",\"create_flags\":75,\"mode\":" << p.quality << ",\"preset\":" << p.preset
-      << ",\"input_formats\":[26,41,42],\"converted_formats\":[2,41,16],\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
+      << ",\"input_formats\":[26,41,42],\"converted_formats\":[41,34],\"output_format\":26,\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
       << reinterpret_cast<std::uintptr_t>(p.raw[0].Get()) << ',' << reinterpret_cast<std::uintptr_t>(p.raw[1].Get())
       << ',' << reinterpret_cast<std::uintptr_t>(p.raw[2].Get()) << ']' << ",\"command\":" << p.list_identity
       << ",\"native_output\":" << p.native_identity << ",\"width\":" << p.width << ",\"height\":" << p.height

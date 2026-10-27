@@ -15,12 +15,12 @@ struct RecordAttempt {
 // one geometry, recorded into the game's list once a frame. Prepare on the
 // worker before native hooks open. Raw inputs are private
 // R11G11B10/R32_FLOAT/R32_UINT COPY_DEST textures; record() follows their
-// copies in the same DIRECT-list generation.
-// Failure restores native bindings; partial work touches private resources only
-// until handoff, which completes its native-output UAV transitions without a
-// throwing operation. The caller recovers the full output after a failure
-// (scaled_temporal::record_resolve); this class never chooses or invokes
-// native TAA/FXAA.
+// copies in the same DIRECT-list generation. DLSS reads the colour copy and
+// the converted depth and motion, and writes the game's TAA output itself
+// (0.32.0: no private output, packing or copy back).
+// Failure restores native bindings and the copies' states. The caller
+// recovers the full output after a failure (scaled_temporal::record_resolve);
+// this class never chooses or invokes native TAA/FXAA.
 class InlineFrame {
 public:
     // byte_limit: the most its images may take, measured exactly as they are
@@ -42,10 +42,11 @@ public:
     // The NGX render preset it was created with (options.hpp's render_preset).
     unsigned preset() const noexcept;
     ID3D12Resource *raw_color() const noexcept;
-    // Borrowed private images after a successful record: converted inputs in
-    // NON_PIXEL_SHADER_RESOURCE, SDK/packed output in COPY_SOURCE. Caller must
-    // serialize GPU use and restore these states after its copies.
-    std::array<ID3D12Resource *, 5> private_images() const noexcept;
+    // Borrowed private images after a successful record: the converted depth
+    // (R32_FLOAT) and motion (R16G16_FLOAT) at the render size, in
+    // NON_PIXEL_SHADER_RESOURCE. Caller must serialize GPU use and restore
+    // that state after its copies.
+    std::array<ID3D12Resource *, 2> private_images() const noexcept;
     // Live rebuild (continuous_dlaa::change_mode): releases the SDK feature
     // and parameters, with or without a successful evaluation, once the
     // caller proved every recording that used this frame complete: `fence`

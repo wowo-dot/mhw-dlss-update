@@ -14,7 +14,7 @@ enum Toggle : unsigned {
     packet_filter = 8U,       // scaled route: lock only for packets and resources of a built plan
     quiet_status = 16U,       // no 5-second status dumps under the render locks
     no_viewport_trace = 32U,  // no per-RSSetViewports telemetry
-    no_output_sentinel = 64U, // no diagnostic clear of the DLSS output before evaluation
+    no_output_sentinel = 64U, // retired (0.32.0: DLSS writes the game's output, no private one to clear)
     sample_profile = 128U,    // profile = on: the stack sampler (sampler.hpp); not a lean path
     pooled_selectors = 256U,  // scaled route: a plan slot keeps its GPU selector buffer
     keyed_staging = 512U,     // FG: per-frame copies of the DLSS inputs, matched by frame (v0.12.5)
