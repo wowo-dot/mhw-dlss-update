@@ -133,3 +133,29 @@ it. At Performance CNN the base rate (285 fps) is the unloaded one. The code
 was removed again (an unaudited path for no gain); what is left to trim is
 the mod's own GPU work (its copies), which helps DLSS and frame generation
 alike.
+
+## Frame pacing while generating (2026-10-27)
+
+The 0.31.0/0.40.0 comparison (dlss-own-work.md) showed the same frame rate
+with frame generation 2x but a lower 1 % low in 0.40.0 (260 against 280).
+Checked with `fg_wait = ab` (free and chain every 10 s, one launch), each
+PresentMon frame sorted into its phase by the frame heartbeat's QPC/tick
+clock pair, 600 ms around each flip left out (sessions `20261027-fgwait-ab`
+and `20261027-031-repeat`; hub, standing still, DLAA, Transformer K, 5090 at
+1440p, 0.40.0-rc.2):
+
+| Run | 1 % low, mean of 10 s blocks | Display latency | PC Latency |
+|---|---|---|---|
+| 0.40, DLSS-G 310.9.16, chain | ~259 (8 blocks, 249-266) | 6.1-6.4 ms | 14.3-16.0 ms |
+| 0.40, DLSS-G 310.9.16, free | ~263 (7 blocks, 260-267) | 6.1-6.3 ms | 14.4-15.6 ms |
+| 0.40, DLSS-G 310.7, chain and free | ~268 (35 blocks, 260-276) | 5.3-6.3 ms | 12.5-15.4 ms |
+| 0.31.0 (310.7), first run | ~280 (6 slices, 279-281) | 6.7-6.9 ms | not reported |
+| 0.31.0 (310.7), repeat | ~273 (15 slices, 268-279) | 6.7-7.0 ms | not reported |
+
+- The free wait doesn't change pacing while DLSS-G generates (chain and free
+  equal in both A/B runs), so `fg_wait = free` stays the default.
+- DLSS-G 310.7 against 310.9.16 (one run each): 268 against 261, inside the
+  run-to-run spread of the same 0.31.0 build (280 and 273). 0.40.0 keeps
+  310.9.16.
+- The remaining gap to 0.31.0 (2-4 %, about 0.1 ms at the 99th percentile of
+  ~2.6 ms display intervals) is within that spread; not followed further.

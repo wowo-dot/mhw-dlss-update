@@ -40,8 +40,17 @@ if ($Session -notmatch '^[A-Za-z0-9._-]+$') { throw "Session names use letters, 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 if (-not $PresentMon) {
+    # A git worktree has no local\ of its own: the main checkout's as well.
+    $roots = @($repo)
+    $common = git -C $repo rev-parse --path-format=absolute --git-common-dir 2>$null
+    if ($LASTEXITCODE -eq 0 -and $common) {
+        $main = (Split-Path $common -Parent) -replace '/', '\'
+        if ($main -ne $repo) { $roots += $main }
+    }
     $found = @()
-    $found += @(Get-ChildItem (Join-Path $repo 'local\tools') -Recurse -Filter 'PresentMon-*-x64.exe' -ErrorAction SilentlyContinue)
+    foreach ($root in $roots) {
+        $found += @(Get-ChildItem (Join-Path $root 'local\tools') -Recurse -Filter 'PresentMon-*-x64.exe' -ErrorAction SilentlyContinue)
+    }
     $found += @(Get-ChildItem (Join-Path $env:ProgramFiles 'Intel\PresentMon\PresentMonConsoleApplication') -Filter 'PresentMon-*-x64.exe' -ErrorAction SilentlyContinue)
     $newest = $found | Where-Object { $_.Name -match '^PresentMon-(\d+(\.\d+)+)-x64\.exe$' } |
         Sort-Object { [version]($_.Name -replace '^PresentMon-([\d.]+)-x64\.exe$', '$1') } -Descending | Select-Object -First 1

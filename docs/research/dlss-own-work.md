@@ -95,3 +95,24 @@ section 4).
   DLSS could read the game's colour and depth in place and the converter its
   motion through per-frame descriptors, but the copies feed the edge fill and
   the spatial recovery too.
+
+## 0.31.0 against 0.40.0 (PresentMon, 2026-10-27)
+
+PresentMon 2.6.0, RTX 5090, 2560x1440 window, driver 617.42 (clean
+install), hub, standing still at the spawn point, Transformer K, sharpness 0,
+Reflex On, texture bias on. One launch per build, 40-60 s settled windows
+(session `20261027-040-vs-031`; 0.40 is 0.40.0-rc.2, DLL 05806515; 0.31.0
+the released DLL 25737c95 with its own DLSS 310.7 files).
+
+| Mode | 0.31.0 | 0.40.0 | Change |
+|---|---|---|---|
+| DLAA | 270.3 fps, GPU busy 3.66 ms | 284.8 fps, GPU busy 3.49 ms | +5.4 %, -0.17 ms |
+| Performance | 335.2 fps, GPU busy 2.60 ms | 345.3 fps, GPU busy 2.53 ms | +3.0 % (CPU busy above GPU busy: CPU-bound here) |
+| DLAA, frame generation 2x | 392.5 fps, 1 % low 280.5 | 394.7 fps, 1 % low 259.6 | same rate; see below |
+
+The DLAA gain matches dev.20 and dev.21's measured cut (the mod's own work
+and the evaluation). Frame generation's lower 1 % low was followed up
+(fg-game-wait.md, "Frame pacing while generating"): it is neither the free
+wait nor clearly the DLSS-G version, and a second 0.31.0 run gave 273 (run
+to run about ±7). 0.40.0 shows about 0.7 ms less display latency with frame
+generation in every run (6.1 against 6.8-6.9 ms).
