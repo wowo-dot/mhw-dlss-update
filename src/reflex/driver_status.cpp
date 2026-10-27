@@ -28,7 +28,15 @@ DriverSleepStatus driver_sleep_status(IUnknown *device) noexcept {
     const auto result = get(device, &status);
     if (result != 0) return {result, false};
     if (status.low_latency > 1) return {-10002, false};
-    return {0, status.low_latency != 0};
+    DriverSleepStatus out{0, status.low_latency != 0};
+    out.sleep_interval_us = status.sleep_interval_us;
+    out.dfg_frame_time_target_us = status.dfg_frame_time_target_us;
+    out.fg_multiplier = status.fg_multiplier;
+    out.dfg_control = status.dfg_control;
+    out.fullscreen_vrr = status.fullscreen_vrr != 0;
+    out.control_panel_vsync = status.control_panel_vsync != 0;
+    out.use_game_sleep = status.use_game_sleep != 0;
+    return out;
 }
 DriverOffWait wait_driver_off(IUnknown *device) noexcept {
     DriverOffWait result;

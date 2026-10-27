@@ -30,7 +30,10 @@ param(
     [string]$PresentMon = '',
     # QPC start times instead of wall-clock ones, to line frames up with the
     # mod's log (its frame heartbeats carry a QPC/tick clock pair; 0.32.0).
-    [switch]$QpcTime
+    [switch]$QpcTime,
+    # PresentMon's 1.x metrics: with --track_pc_latency only they write
+    # MsPCLatency and MsBetweenSimulationStart (2.6.0, probe 2026-10-27).
+    [switch]$Legacy
 )
 $ErrorActionPreference = 'Stop'
 if ($Session -notmatch '^[A-Za-z0-9._-]+$') { throw "Session names use letters, digits, '.', '_' and '-' only." }
@@ -54,6 +57,7 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
     $relaunch = @('-NoProfile', '-NoExit', '-File', "`"$PSCommandPath`"", '-Session', $Session,
         '-PresentMon', "`"$PresentMon`"")
     if ($QpcTime) { $relaunch += '-QpcTime' }
+    if ($Legacy) { $relaunch += '-Legacy' }
     Start-Process -FilePath $shell -Verb RunAs -ArgumentList $relaunch
     Write-Host "Continuing in an elevated window (session $Session)."
     return
@@ -79,5 +83,6 @@ Write-Host 'Press Ctrl+C in this window when you are done.'
 # (mhw_dlss.log); -QpcTime: --qpc_time instead. --track_pc_latency: Reflex's
 # PC Latency events.
 $time = if ($QpcTime) { '--qpc_time' } else { '--date_time' }
+$metrics = if ($Legacy) { @() } else { @('--v2_metrics') }
 & $PresentMon --process_name MonsterHunterWorld.exe --output_file (Join-Path $out 'capture.csv') --multi_csv `
-    $time --v2_metrics --track_pc_latency --session_name MHWPerf --stop_existing_session
+    $time @metrics --track_pc_latency --session_name MHWPerf --stop_existing_session

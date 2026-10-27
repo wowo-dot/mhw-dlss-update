@@ -576,6 +576,9 @@ void run_session() {
                 if (!driver_mode("running_on", reflex_applied.load() != 0)) reflex_unconfirmed("running_on");
                 reflex_confirmed = true;
             }
+            // 0.32.0 (fg pacing study): the driver's own frame limit and frame
+            // generation state each heartbeat; read only, nothing enforced.
+            driver_mode("heartbeat", false, false);
             LARGE_INTEGER clock_qpc{}, clock_frequency{};
             QueryPerformanceCounter(&clock_qpc);
             QueryPerformanceFrequency(&clock_frequency);

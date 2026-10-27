@@ -12,7 +12,11 @@ bool driver_mode(const char *phase, bool expected, bool enforce) {
     log << "{\"event\":\"driver_sleep_status\",\"phase\":" << quoted(phase)
         << ",\"device\":" << reinterpret_cast<std::uintptr_t>(device_pin.Get()) << ",\"result\":" << state.result
         << ",\"low_latency\":" << state.low_latency << ",\"query_id\":" << 0xaef96ca1U
-        << ",\"structure_version\":" << (136U | (1U << 16)) << "}\n"
+        << ",\"structure_version\":" << (136U | (1U << 16)) << ",\"sleep_interval_us\":" << state.sleep_interval_us
+        << ",\"fg_multiplier\":" << unsigned(state.fg_multiplier) << ",\"dfg_control\":" << unsigned(state.dfg_control)
+        << ",\"dfg_frame_time_target_us\":" << state.dfg_frame_time_target_us
+        << ",\"fullscreen_vrr\":" << state.fullscreen_vrr << ",\"control_panel_vsync\":" << state.control_panel_vsync
+        << ",\"use_game_sleep\":" << state.use_game_sleep << "}\n"
         << std::flush;
     return state.result == 0 && (!enforce || state.low_latency == expected);
 }
