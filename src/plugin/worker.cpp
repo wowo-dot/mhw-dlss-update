@@ -11,6 +11,7 @@
 #include "../common/log_path.hpp"
 #include "../continuous_dlaa/texture_bias.hpp"
 #include "../game_memory/readable_region.hpp"
+#include "../ngx_startup/startup.hpp"
 #include "../frame_generation/crash_log.hpp"
 #include "../frame_generation/display_refresh.hpp"
 #include "../perf/frame_stats.hpp"
@@ -333,6 +334,12 @@ void arm_dlss() {
                                                                  : mhw::settings::status::Stage::running);
     // NGX startup and the DLSS install succeeded (capabilities.hpp).
     mhw::settings::status::dlss_available(true);
+    { // 0.32.0: the DLSS file NGX runs (the shipped one, or NVIDIA's under the NVIDIA App's override).
+        const auto provider = mhw::ngx_startup::active_provider();
+        log << "{\"event\":\"dlss_file\",\"version\":" << quoted(provider.version)
+            << ",\"source\":" << quoted(std::string(provider.source)) << "}\n"
+            << std::flush;
+    }
 }
 
 // Reflex in the player's mode (Off only without DLSS-G), then the frame

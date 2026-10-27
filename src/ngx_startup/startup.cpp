@@ -4,6 +4,7 @@
 #include "../common/require.hpp"
 #include "../common/log_path.hpp"
 #include "../common/platform.hpp"
+#include "../common/dlss_file_identity.hpp"
 #include "../astera/astera_hooks.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../perf/chaos.hpp"
@@ -34,6 +35,10 @@ bool installed{}, initialized{};
 HMODULE pinned_provider{};
 ComPtr<ID3D12Device> device; // retained by the pinned diagnostic until process exit
 constexpr char provider_sha[] = "be6e434a94ca32499515eb62ca0e6c274526055d568d0426e4c652dcdfb6ee6e";
+// 0.32.0: the DLSS Super Resolution file NGX runs (dlss_files.hpp), set with
+// pinned_provider: its path and identity, for the log and Status.
+std::wstring provider_path;
+DlssFile provider_file;
 // The game's own DLSS 1 (decline_game_dlss()). 0x23842a0 calls the game's NGX
 // init (hook() below), checks SuperSampling and ImageSignalProcessing and
 // builds a 72-byte wrapper (0x2383760: NGX parameters, a critical section at
@@ -194,17 +199,27 @@ void graphics(ID3D12Device *expected) {
          << "}\n"
          << std::flush;
 }
-// Streamline may have loaded the provider from this exact runtime folder
-// first. Accept only that path with the pinned hash.
-bool shared_provider_verified() noexcept {
-    const auto provider = cfg.runtime / L"nvngx_dlss.dll";
-    const auto module = GetModuleHandleW(provider.c_str());
-    if (!module) return false;
-    wchar_t loaded[32768]{};
-    const auto length = GetModuleFileNameW(module, loaded, 32768);
+// Whether `path` is this mod's own nvngx_dlss.dll with the pinned hash.
+bool shipped_provider(const wchar_t *path) {
     std::error_code error;
-    return length && length < 32768 && std::filesystem::equivalent(loaded, provider, error) && !error &&
-           projection_binding::file_sha256(loaded) == provider_sha;
+    return std::filesystem::equivalent(path, cfg.runtime / L"nvngx_dlss.dll", error) && !error &&
+           projection_binding::file_sha256(path) == provider_sha;
+}
+// Streamline may have loaded the provider from this exact runtime folder
+// first. Accept only that path, when it is DLSS this mod runs (dlss_files.hpp).
+bool shared_provider_verified() noexcept {
+    try {
+        const auto provider = cfg.runtime / L"nvngx_dlss.dll";
+        const auto module = GetModuleHandleW(provider.c_str());
+        if (!module) return false;
+        wchar_t loaded[32768]{};
+        const auto length = GetModuleFileNameW(module, loaded, 32768);
+        std::error_code error;
+        return length && length < 32768 && std::filesystem::equivalent(loaded, provider, error) && !error &&
+               dlss_accepted(identify_dlss(loaded, shipped_provider(loaded)), dlss_super_resolution);
+    } catch (...) {
+        return false;
+    }
 }
 // v0.30.1 (jgb2003-1): when NGX did not load this mod's provider, every
 // loaded DLSS candidate (providers.hpp) with its path and file version, once.
@@ -256,6 +271,59 @@ void log_providers(const char *phase) {
     foreign = static_cast<unsigned>(strongest);
     *out << "],\"enumerated\":" << modules.size() << ",\"foreign\":" << unsigned(strongest) << "}\n" << std::flush;
 }
+// 0.32.0: the DLSS Super Resolution files NGX has loaded, from wherever (this
+// mod's folder; NVIDIA's store under the NVIDIA App's override; another file),
+// found among the modules that could be one (providers.hpp) by their version
+// resource. Each must be DLSS this mod runs (dlss_files.hpp) and is pinned;
+// the newest is the provider the log and Status name. Logged once per phase.
+bool loaded_providers_accepted(const char *phase) {
+    std::vector<HMODULE> modules(512);
+    DWORD needed{};
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        const auto bytes = static_cast<DWORD>(modules.size() * sizeof(HMODULE));
+        if (!K32EnumProcessModules(GetCurrentProcess(), modules.data(), bytes, &needed)) needed = 0;
+        if (needed <= bytes) break;
+        modules.resize(needed / sizeof(HMODULE) + 64);
+    }
+    modules.resize(std::min<std::size_t>(needed / sizeof(HMODULE), modules.size()));
+    bool any{}, all{true};
+    HMODULE chosen{};
+    std::wstring chosen_path;
+    DlssFile chosen_file;
+    *out << "{\"event\":\"dlss_provider\",\"phase\":\"" << phase << "\",\"files\":[";
+    for (const auto module : modules) {
+        wchar_t path[32768]{};
+        const auto length = GetModuleFileNameW(module, path, 32768);
+        if (!length || length >= 32768 || provider_kind(path) == Provider::none) continue;
+        DlssFile version;
+        if (!read_dlss_version(path, version) || version.internal != dlss_super_resolution) continue;
+        const auto file = identify_dlss(path, shipped_provider(path));
+        const bool accepted = dlss_accepted(file, dlss_super_resolution);
+        HMODULE pinned{};
+        if (accepted)
+            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                               reinterpret_cast<LPCWSTR>(module), &pinned);
+        *out << (any ? "," : "") << "{\"path\":" << std::quoted(mhw::log_path(path))
+             << ",\"kind\":" << unsigned(provider_kind(path)) << ",\"version\":\"" << version_text(file.version)
+             << "\",\"shipped\":" << file.shipped << ",\"nvidia_signed\":" << file.nvidia_signed
+             << ",\"signer\":" << std::quoted(file.signer) << ",\"accepted\":" << accepted << '}';
+        any = true;
+        all = all && accepted && pinned;
+        if (accepted && pinned && (!chosen || file.version > chosen_file.version)) {
+            chosen = pinned;
+            chosen_path = path;
+            chosen_file = file;
+        }
+    }
+    const bool ok = any && all && chosen;
+    *out << "],\"accepted\":" << ok << "}\n" << std::flush;
+    if (ok) {
+        pinned_provider = chosen;
+        provider_path = chosen_path;
+        provider_file = chosen_file;
+    }
+    return ok;
+}
 bool capabilities(const char *phase) {
     NVSDK_NGX_Parameter *p{};
     const auto get = NVSDK_NGX_D3D12_GetCapabilityParameters(&p);
@@ -267,18 +335,11 @@ bool capabilities(const char *phase) {
     if (get == NVSDK_NGX_Result_Success && p)
         for (unsigned i = 0; i < 3; ++i) results[i] = p->Get(keys[i], &values[i]);
     const auto destroy = p ? NVSDK_NGX_D3D12_DestroyParameters(p) : NVSDK_NGX_Result_Fail;
-    const auto provider = cfg.runtime / L"nvngx_dlss.dll";
-    HMODULE loaded{};
-    const bool found = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, provider.c_str(), &loaded) != 0;
-    wchar_t path[32768]{};
-    const auto length = found ? GetModuleFileNameW(loaded, path, 32768) : 0;
-    std::error_code error;
-    const bool identity = length && length < 32768 && std::filesystem::equivalent(path, provider, error) && !error &&
-                          projection_binding::file_sha256(path) == provider_sha;
-    if (identity)
-        pinned_provider = loaded;
-    else
-        log_providers(phase);
+    // This mod's own file, if NGX loaded it (the NVIDIA App's override loads
+    // NVIDIA's copy instead); the provider is whichever DLSS NGX runs.
+    const bool found = GetModuleHandleW((cfg.runtime / L"nvngx_dlss.dll").c_str()) != nullptr;
+    const bool identity = loaded_providers_accepted(phase);
+    if (!identity) log_providers(phase);
     // Finish all queries before emitting a complete record, including failures.
     *out << "{\"event\":\"capabilities\",\"phase\":\"" << phase << "\",\"get_result\":" << unsigned(get)
          << ",\"get_values\":[" << unsigned(results[0]) << ',' << unsigned(results[1]) << ',' << unsigned(results[2])
@@ -287,7 +348,7 @@ bool capabilities(const char *phase) {
          << ",\"provider_identity_verified\":" << identity << ",\"log_messages\":" << messages.load() << "}\n"
          << std::flush;
     return get == NVSDK_NGX_Result_Success && results[0] == 1 && results[1] == 1 && results[2] == 1 && values[0] == 1 &&
-           values[1] == 0 && values[2] == 1 && destroy == 1 && found && identity;
+           values[1] == 0 && values[2] == 1 && destroy == 1 && identity;
 }
 void before(std::uint64_t app, const wchar_t *path, ID3D12Device *d, unsigned api, std::uintptr_t caller) noexcept {
     try {
@@ -408,13 +469,20 @@ bool install(const Config &config, std::ostream &log) {
     {
         // v0.28.5: the provider's path and why its hash is missing, if it is
         // (0.28.4 under MO2 looked in overwrite's copy of the folder; worker.cpp).
+        // 0.32.0: a file a player swapped in runs too, when it is DLSS this mod
+        // runs (dlss_files.hpp); the shipped one passes by its hash alone.
         const auto path = cfg.runtime / L"nvngx_dlss.dll";
         const auto digest = projection_binding::file_digest(path.wstring());
+        const bool shipped = digest.sha == provider_sha;
+        const auto file = digest.read ? identify_dlss(path.c_str(), shipped) : DlssFile{};
+        const bool accepted = dlss_accepted(file, dlss_super_resolution);
         log << "{\"event\":\"provider_check\",\"path\":" << std::quoted(mhw::log_path(path)) << ",\"stage\":\""
             << digest.stage << "\",\"error\":" << digest.error << ",\"size\":" << digest.size
-            << ",\"read\":" << digest.read << ",\"matches\":" << (digest.sha == provider_sha) << "}\n"
+            << ",\"read\":" << digest.read << ",\"matches\":" << shipped << ",\"version\":\""
+            << version_text(file.version) << "\",\"internal\":" << std::quoted(file.internal)
+            << ",\"nvidia_signed\":" << file.nvidia_signed << ",\"accepted\":" << accepted << "}\n"
             << std::flush;
-        require(digest.sha == provider_sha, "startup-provider-sha256");
+        require(accepted, "startup-provider-sha256");
     }
     require(zero_slots(), "native-init-already-observed");
     require(!GetModuleHandleW((cfg.runtime / L"nvngx_dlss.dll").c_str()) || shared_provider_verified(),
@@ -469,6 +537,12 @@ bool supported() noexcept {
 Provider foreign_provider() noexcept {
     return static_cast<Provider>(foreign.load());
 }
+ActiveProvider active_provider() {
+    if (!finished.load() || !pinned_provider) return {};
+    return {version_text(provider_file.version), provider_file.shipped                                    ? "mod"
+                                                 : provider_kind(provider_path) == Provider::nvidia_store ? "nvidia_app"
+                                                                                                          : "replaced"};
+}
 unsigned calls() noexcept {
     return count.load();
 }
@@ -488,10 +562,14 @@ bool reusable() noexcept {
 HMODULE validate_initialization(ID3D12Device *expected, const std::filesystem::path &runtime) noexcept {
     try {
         if (!reusable() || !expected || expected != device.Get()) return nullptr;
-        const auto provider = runtime / L"nvngx_dlss.dll";
-        if (!std::filesystem::equivalent(provider, cfg.runtime / L"nvngx_dlss.dll") ||
-            GetModuleHandleW(provider.c_str()) != pinned_provider ||
-            projection_binding::file_sha256(provider.wstring()) != provider_sha)
+        // The same runtime folder, and the provider still the pinned module at
+        // its path (a loaded image can't be rewritten, so the file it was
+        // accepted as is the one running; 0.32.0: no re-hash on every rebuild).
+        if (!std::filesystem::equivalent(runtime / L"nvngx_dlss.dll", cfg.runtime / L"nvngx_dlss.dll")) return nullptr;
+        wchar_t path[32768]{};
+        const auto length = GetModuleFileNameW(pinned_provider, path, 32768);
+        std::error_code error;
+        if (!length || length >= 32768 || !std::filesystem::equivalent(path, provider_path, error) || error)
             return nullptr;
         return pinned_provider;
     } catch (...) {

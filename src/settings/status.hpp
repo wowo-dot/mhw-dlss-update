@@ -91,8 +91,10 @@ inline std::string reason_text(std::string_view raw) {
         {"reflex unconfirmed", "the graphics driver did not confirm Reflex"},
         // v0.30.1: start-up refusals the player can fix (jgb2003-1 and -2).
         {"fidelityfx-cas", "turn FidelityFX CAS off in the game's display settings"},
-        {"dlss-override", "NVIDIA's DLSS override is on (NVIDIA App); turn it off for this game"},
-        {"dlss-provider-foreign", "another DLSS file was loaded instead of the mod's; see the mod's log"},
+        // 0.32.0: NVIDIA's own DLSS from 310 on runs (common/dlss_files.hpp);
+        // these are the ones left, older or not signed by NVIDIA.
+        {"dlss-override", "the NVIDIA App's DLSS override picked a DLSS older than 310; set it to Latest"},
+        {"dlss-provider-foreign", "a DLSS file older than 310 or not NVIDIA's was loaded; see the mod's log"},
     };
     for (const auto &k : known)
         if (raw == k.key || (raw.size() > k.key.size() && raw.starts_with(k.key) && raw[k.key.size()] == ':'))

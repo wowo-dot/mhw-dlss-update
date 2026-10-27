@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iosfwd>
+#include <string>
 #include "../dlss_sdk/initialization.hpp"
 #include "providers.hpp"
 
@@ -40,13 +41,22 @@ bool supported() noexcept;
 // v0.30.1: when NGX did not load this mod's provider, what it loaded instead
 // (logged as "dlss_providers"); none until then.
 Provider foreign_provider() noexcept;
+// 0.32.0: the DLSS Super Resolution file NGX runs, once start-up accepted it
+// (common/dlss_files.hpp): its version, and where it is from: "mod" (the
+// shipped file), "nvidia_app" (NVIDIA's store, the NVIDIA App's override) or
+// "replaced" (another NVIDIA DLSS in its place). Empty before.
+struct ActiveProvider {
+    std::string version;
+    const char *source = "";
+};
+ActiveProvider active_provider();
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 // The start-up worker: logs to `output` and takes the NGX runtime from
 // `runtime` (mhw_dlss.ini's log_dir and runtime_dir), both existing absolute
 // folders. Streamline's own NGX initialization may have loaded the provider
-// first; it is accepted only from `runtime` with the pinned hash.
+// first; it is accepted only from `runtime`, as DLSS this mod runs.
 bool run(HMODULE, const char *version, const std::filesystem::path &output,
          const std::filesystem::path &runtime) noexcept;
 // The plugin declines the game's own DLSS 1 (docs/research/game-dlss1.md):

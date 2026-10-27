@@ -316,9 +316,9 @@ void status_lines() {
     // v0.30.1: what the player can fix at start (jgb2003-1 and -2).
     check(s::reason_text("fidelityfx-cas") == "turn FidelityFX CAS off in the game's display settings",
           "CAS the mod could not take");
-    check(s::reason_text("dlss-override").starts_with("NVIDIA's DLSS override is on") &&
-              s::reason_text("dlss-provider-foreign").starts_with("another DLSS file was loaded"),
-          "another DLSS loaded");
+    check(s::reason_text("dlss-override").starts_with("the NVIDIA App's DLSS override picked a DLSS older") &&
+              s::reason_text("dlss-provider-foreign").starts_with("a DLSS file older than 310"),
+          "a DLSS the mod can't run (0.32.0: NVIDIA's own from 310 on runs)");
     {
         namespace ngx = mhw::ngx_startup;
         check(s::reason_text(ngx::provider_reason(ngx::Provider::nvidia_store)) == s::reason_text("dlss-override") &&

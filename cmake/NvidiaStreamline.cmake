@@ -31,5 +31,5 @@ add_library(mhw_streamline_reflex STATIC src/reflex/streamline.cpp src/reflex/fr
 target_compile_features(mhw_streamline_reflex PUBLIC cxx_std_20)
 target_compile_definitions(mhw_streamline_reflex PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 target_include_directories(mhw_streamline_reflex SYSTEM PUBLIC "${MHW_STREAMLINE_SDK_ROOT}/include")
-target_link_libraries(mhw_streamline_reflex PUBLIC bcrypt wintrust crypt32)
+target_link_libraries(mhw_streamline_reflex PUBLIC bcrypt wintrust crypt32 version)
 target_compile_options(mhw_streamline_reflex PRIVATE /W4 /WX /permissive- /EHsc /utf-8 /external:W0 /guard:cf)

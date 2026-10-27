@@ -1,5 +1,6 @@
 #include "streamline.hpp"
 #include "frame_generation_policy.hpp"
+#include "../common/dlss_file_identity.hpp"
 #include <bcrypt.h>
 #include <wintrust.h>
 #include <softpub.h>
@@ -66,6 +67,14 @@ void verify(const std::filesystem::path &path, std::string_view expected) {
     WinVerifyTrust(nullptr, &action, &data);
     if (result != ERROR_SUCCESS) throw std::runtime_error("Streamline signature verification failed");
 }
+// 0.32.0: frame generation's own model file may be another NVIDIA DLSS-G, as a
+// game with its own DLSS runs one a player swapped in (common/dlss_files.hpp).
+// Streamline's plugins stay pinned.
+void verify_frame_generation(const std::filesystem::path &path, std::string_view expected) {
+    if (digest(path) == expected) return verify(path, expected);
+    if (!dlss_accepted(identify_dlss(path.c_str(), false), dlss_frame_generation))
+        throw std::runtime_error("Streamline pinned dependency mismatch");
+}
 template <class T> void core(HMODULE module, const char *name, T *&fn) {
     // GetProcAddress returns a function pointer; MSVC diagnoses the ABI cast.
 #pragma warning(push)
@@ -100,7 +109,8 @@ void Streamline::initialize(const std::filesystem::path &runtime, const std::fil
     verify(root / L"sl.reflex.dll", "7e6e4ccc4b561bd449fb0da90709d9b96b08c3f6f4697362caaa359e72a58a67");
     if (frame_generation_) {
         verify(root / L"sl.dlss_g.dll", "1fec3f8fdfc59d78c4445c276c1a0fb798bf251985f348597dc2b44d0c995e52");
-        verify(root / L"nvngx_dlssg.dll", "135eaf0733c1e37381a8c28abcf7a862404a54132b81787c04e35d09efc5e36f");
+        verify_frame_generation(root / L"nvngx_dlssg.dll",
+                                "135eaf0733c1e37381a8c28abcf7a862404a54132b81787c04e35d09efc5e36f");
         for (const auto name : {L"sl.dlss_g.dll", L"nvngx_dlssg.dll"})
             if (GetModuleHandleW(name))
                 throw std::runtime_error("Frame generation already loaded by another integration");

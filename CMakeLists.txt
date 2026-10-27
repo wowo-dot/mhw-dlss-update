@@ -98,7 +98,7 @@ target_compile_features(mhw_ngx_startup PUBLIC cxx_std_20)
 target_include_directories(mhw_ngx_startup PRIVATE src/game_memory)
 target_include_directories(mhw_ngx_startup SYSTEM PRIVATE "${MHW_NGX_SDK_ROOT}/include")
 target_compile_definitions(mhw_ngx_startup PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
-target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid version "${MHW_NGX_LIBRARY}")
+target_link_libraries(mhw_ngx_startup PUBLIC mhw_astera_hooks bcrypt d3d12 dxgi dxguid version wintrust crypt32 "${MHW_NGX_LIBRARY}")
 
 # Presentation through Streamline: the identity chain, the live FG switch.
 add_library(mhw_fg_reflex_presentation STATIC src/reflex/presentation.cpp)
