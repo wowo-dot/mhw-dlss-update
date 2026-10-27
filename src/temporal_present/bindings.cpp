@@ -102,9 +102,11 @@ struct RestoreBindings::Impl {
     ComPtr<ID3D12RootSignature> compute, graphics;
     std::array<ComPtr<ID3D12DescriptorHeap>, 2> heaps;
 };
-RestoreBindings::RestoreBindings(ID3D12GraphicsCommandList *list, const Bindings &state, bool compute_optional)
+RestoreBindings::RestoreBindings(ID3D12GraphicsCommandList *list, const Bindings &state, bool compute_optional,
+                                 bool unset_optional)
     : impl_(std::make_unique<Impl>()) {
-    const bool complete = state.ready() || (compute_optional && !state.compute.signature && state.ready_graphics());
+    const bool complete = state.ready() || (compute_optional && !state.compute.signature && state.ready_graphics()) ||
+                          (unset_optional && state.known && state.valid && state.generation);
     if (!list || !complete || list->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
         throw std::runtime_error("presentation binding snapshot incomplete");
     auto &p = *impl_;
@@ -127,7 +129,8 @@ void RestoreBindings::apply() noexcept {
     // signature before any compute work, as it must after Reset.
     list->SetComputeRootSignature(p.compute.Get());
     list->SetGraphicsRootSignature(p.graphics.Get());
-    list->SetPipelineState(p.pipeline.Get());
+    // A pipeline state the recording never set stays the pass's (unset_optional).
+    if (p.pipeline) list->SetPipelineState(p.pipeline.Get());
     for (unsigned i = 0; i < p.state.compute.arguments.size(); ++i) {
         const auto &a = p.state.compute.arguments[i];
         switch (a.kind) {

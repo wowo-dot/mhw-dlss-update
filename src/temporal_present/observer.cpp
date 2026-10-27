@@ -531,6 +531,14 @@ bool matches_current(ID3D12GraphicsCommandList *list, const Bindings &state) noe
     const auto *e = lock.get();
     return healthy() && e && e->state == state;
 }
+bool unset_injected_pipeline(ID3D12GraphicsCommandList *list, const Bindings &before) noexcept {
+    if (before.pipeline || !before.known || !before.valid) return false;
+    Locked lock(list);
+    auto *e = lock.get();
+    if (!e || !e->state.known || !e->state.valid || e->state.generation != before.generation) return false;
+    e->state.pipeline = 0;
+    return true;
+}
 bool current(ID3D12GraphicsCommandList *list, Bindings &state) noexcept {
     Locked lock(list);
     const auto *e = lock.get();

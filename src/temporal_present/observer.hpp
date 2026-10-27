@@ -47,6 +47,12 @@ void reset(ID3D12GraphicsCommandList *, std::uint64_t, ID3D12PipelineState *) no
 // the pin, so a new list at the same address starts clean.
 void forget(ID3D12GraphicsCommandList *) noexcept;
 bool matches_current(ID3D12GraphicsCommandList *, const Bindings &) noexcept;
+// 0.32.0: after an injected pass restored `before` (RestoreBindings with
+// unset_optional) on a list whose recording had set no pipeline state, the
+// pass's own stays bound; marks the mirror's unset again, as the game left it
+// (it must set its own before any draw or dispatch). False, changing nothing,
+// unless `before` had none and the list is the same generation.
+bool unset_injected_pipeline(ID3D12GraphicsCommandList *, const Bindings &before) noexcept;
 bool current(ID3D12GraphicsCommandList *, Bindings &) noexcept;
 // Diagnostic copy including an incomplete binding set. Never authorizes work;
 // current()/Bindings::ready() remain the admission check.

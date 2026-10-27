@@ -143,8 +143,10 @@ struct Session {
     std::array<std::uint64_t, static_cast<unsigned>(HudSkip::count)> hud_skips{};
     // Why a HUD-less record found no restorable binding snapshot (no_restore):
     // not known, invalid, no generation, no pipeline, no graphics signature,
-    // and graphics-only snapshots restored by unbinding compute (v0.13.7).
-    std::array<std::uint64_t, 6> restore_reasons{};
+    // and graphics-only snapshots restored by unbinding compute (v0.13.7);
+    // fresh: a list that had set no pipeline state, restored with it left
+    // unset (0.32.0; before, no_pipeline skipped its HUD-less image).
+    std::array<std::uint64_t, 7> restore_reasons{};
     HudlessPass::Probe last_probe{};
     std::array<SlotCamera, slot_count> cameras;
     D3D12_RESOURCE_DESC depth_desc{}, motion_desc{};

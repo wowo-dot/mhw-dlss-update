@@ -85,6 +85,30 @@ Frame generation then copies the sharpened T, so its HUD-less image matches
 the frame. Sharpness 0 records nothing. With DLSS off the mod steps aside and
 the game's own CAS is available again.
 
+## dev.11 in game (run 46456, 2026-10-27)
+
+The user: "looks CLEAN!" at 30 %, SDR. 76,247 frames sharpened, fault 0, but
+661 (about 1 %, in bursts of up to 186 a summary) skipped as `no_restore`: the
+final copy sat at the start of a worker list that had set no root signature
+or pipeline state yet, which RestoreBindings refused. Frame generation's
+HUD-less record has skipped the same lists since v0.12 (`no_pipeline` 12 in
+run 22132, 98 in run 38112).
+
+D3D12 lets a root signature be unbound and the heaps be set to none, but has
+no null pipeline state (`SetPipelineState` is `_In_`; `ClearState` would also
+reset the game's targets and viewports, and the observer invalidates on it).
+A list without a pipeline state cannot draw or dispatch, so the game sets its
+own before its next one, as it does natively. dev.12:
+
+- RestoreBindings' `unset_optional`: any known, valid generation; what it set
+  is restored, root signatures it never set are unbound, and a pipeline state
+  it never set stays the pass's;
+- `observer::unset_injected_pipeline` then marks the mirror's pipeline unset
+  again, only if it was unset before and the generation is the same, so the
+  route's strict check after the observer holds;
+- the sharpen pass and frame generation's HUD-less record both use it
+  (counted as `fresh`); `restore_bindings_gpu` covers the fresh list on WARP.
+
 ## Not checked yet (hypotheses)
 
 - That no post effect runs on T between the observer and the UI (grain,

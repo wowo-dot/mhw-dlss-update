@@ -35,8 +35,8 @@ void write(std::ostream &o) {
     for (unsigned i = 0; i < s.hud_skips.size(); ++i)
         o << (i ? "," : "") << '"' << hud_skip_names[i] << "\":" << s.hud_skips[i];
     o << "},\"restore_reasons\":{";
-    constexpr const char *restore_names[]{"unknown",     "invalid",     "no_generation",
-                                          "no_pipeline", "no_graphics", "graphics_only"};
+    constexpr const char *restore_names[]{"unknown",     "invalid",       "no_generation", "no_pipeline",
+                                          "no_graphics", "graphics_only", "fresh"};
     for (unsigned i = 0; i < s.restore_reasons.size(); ++i)
         o << (i ? "," : "") << '"' << restore_names[i] << "\":" << s.restore_reasons[i];
     o << "},\"probe_ok\":" << s.probe_ok << ",\"probe_fallback\":" << s.probe_fallback

@@ -296,9 +296,12 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             std::unique_ptr<temporal_present::RestoreBindings> restore;
             try {
                 // A worker's final-scene list may never set a compute root
-                // signature (game-44..46: no_restore rising since v0.12.6).
-                restore = std::make_unique<temporal_present::RestoreBindings>(list, roots, true);
+                // signature (game-44..46: no_restore rising since v0.12.6),
+                // nor any root signature or pipeline state (0.32.0: what it
+                // never set stays unset).
+                restore = std::make_unique<temporal_present::RestoreBindings>(list, roots, true, true);
                 if (!roots.compute.signature) ++s.restore_reasons[5];
+                if (!roots.pipeline) ++s.restore_reasons[6];
             } catch (...) {
                 ++s.hud_skips[static_cast<unsigned>(HudSkip::no_restore)];
                 const bool reasons[]{!roots.known, !roots.valid, !roots.generation, !roots.pipeline,
@@ -343,6 +346,9 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                     ++s.hud_skips[static_cast<unsigned>(HudSkip::failed)];
                 }
                 restore->apply();
+                // The pass's pipeline state stays on a fresh list; its mirror
+                // is unset again, as the game left it.
+                if (!roots.pipeline) temporal_present::observer::unset_injected_pipeline(list, roots);
             }
         }
         if (confirmed) s.cameras[slot] = staged.camera;

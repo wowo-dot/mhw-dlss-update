@@ -2,7 +2,8 @@
 // HUD-less pass runs compute on a list that never set a compute root signature
 // (a worker's final-scene list), then restores it by unbinding the compute
 // signature. The game's next draw must validate and the CPU mirror (fed the
-// same calls, as the observer is) must equal the snapshot again.
+// same calls, as the observer is) must equal the snapshot again. Then a fresh
+// list that set nothing (0.32.0, unset_optional).
 #include "../src/temporal_present/bindings.hpp"
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -192,6 +193,64 @@ int main() {
     WaitForSingleObject(event, 10000);
     CloseHandle(event);
     check(fence->GetCompletedValue() == 1 && device->GetDeviceRemovedReason() == S_OK, "GPU completion");
+
+    // 0.32.0: a fresh list (Reset without a pipeline state) whose recording set
+    // nothing before the final scene, as a worker's list may. Only
+    // unset_optional accepts it: the root signatures are unbound, the heaps set
+    // to none, and the pass's pipeline state stays (D3D12 has no null one);
+    // the mirror's pipeline is then marked unset again
+    // (observer::unset_injected_pipeline). The game sets its own state and
+    // draws.
+    check(SUCCEEDED(allocator->Reset()) && SUCCEEDED(list->Reset(allocator.Get(), nullptr)), "fresh list");
+    tp::Bindings fresh;
+    fresh.reset(2, 0);
+    check(!fresh.ready() && !fresh.ready_graphics(), "fresh snapshot");
+    unsigned refusals = 0;
+    for (const bool compute_optional : {false, true}) try {
+            tp::RestoreBindings refused_restore(list.Get(), fresh, compute_optional);
+        } catch (const std::runtime_error &) {
+            ++refusals;
+        }
+    check(refusals == 2, "without unset_optional a fresh list is refused");
+    {
+        auto fresh_mirror = fresh;
+        tp::RestoreBindings restore(list.Get(), fresh, true, true);
+        ID3D12DescriptorHeap *ours[]{our_heap.Get()};
+        list->SetDescriptorHeaps(1, ours);
+        list->SetComputeRootSignature(our_root.Get());
+        list->SetPipelineState(our_pso.Get());
+        list->SetComputeRoot32BitConstant(0, 1, 0);
+        list->Dispatch(1, 1, 1);
+        const std::uintptr_t our_heap_ids[]{id(our_heap.Get())};
+        fresh_mirror.descriptor_heaps(our_heap_ids);
+        fresh_mirror.root(false, id(our_root.Get()));
+        fresh_mirror.pipeline = id(our_pso.Get());
+        restore.apply();
+        fresh_mirror.descriptor_heaps({});
+        fresh_mirror.root(false, 0);
+        fresh_mirror.root(true, 0);
+        check(fresh_mirror.pipeline == id(our_pso.Get()) && !(fresh_mirror == fresh),
+              "the pass's pipeline state stays");
+        fresh_mirror.pipeline = 0; // unset_injected_pipeline
+        check(fresh_mirror == fresh, "the fresh_mirror matches the fresh snapshot");
+    }
+    list->SetDescriptorHeaps(1, game_heaps);
+    list->SetGraphicsRootSignature(game_root.Get());
+    list->SetPipelineState(game_pso.Get());
+    list->SetGraphicsRoot32BitConstant(0, 7, 0);
+    list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    list->RSSetViewports(1, &viewport);
+    list->RSSetScissorRects(1, &scissor);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list->DrawInstanced(3, 1, 0, 0);
+    check(SUCCEEDED(list->Close()), "close fresh");
+    queue->ExecuteCommandLists(1, lists);
+    check(SUCCEEDED(queue->Signal(fence.Get(), 2)), "signal fresh");
+    const auto fresh_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    check(fresh_event && SUCCEEDED(fence->SetEventOnCompletion(2, fresh_event)), "fresh fence event");
+    WaitForSingleObject(fresh_event, 10000);
+    CloseHandle(fresh_event);
+    check(fence->GetCompletedValue() == 2 && device->GetDeviceRemovedReason() == S_OK, "fresh GPU completion");
     const auto after = info->GetNumStoredMessages();
     unsigned problems = 0;
     for (auto i = before; i < after; ++i) {
@@ -205,5 +264,5 @@ int main() {
         std::free(m);
     }
     check(problems == 0, "no debug-layer warnings or errors");
-    std::cout << "PASS graphics-only restore: compute signature unbound, mirror equal, game draw valid on WARP\n";
+    std::cout << "PASS graphics-only and fresh-list restores: mirror equal, game draws valid on WARP\n";
 }

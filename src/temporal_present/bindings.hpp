@@ -70,9 +70,16 @@ struct Bindings {
 // This is NOT a blanket guarantee about arbitrary vendor SDK state changes.
 // With compute_optional, a state that never set a compute root signature is
 // accepted (ready_graphics) and restored by unbinding the compute signature.
+// With unset_optional (0.32.0), any known, valid generation is accepted: what
+// it set is restored, a root signature it never set is unbound, and a pipeline
+// state it never set (a fresh worker list) stays the pass's own. D3D12 has no
+// null pipeline state, and the game must set one before its next draw or
+// dispatch; the caller then marks the mirror's pipeline unset again
+// (observer::unset_injected_pipeline).
 class RestoreBindings {
 public:
-    RestoreBindings(ID3D12GraphicsCommandList *, const Bindings &, bool compute_optional = false);
+    RestoreBindings(ID3D12GraphicsCommandList *, const Bindings &, bool compute_optional = false,
+                    bool unset_optional = false);
     ~RestoreBindings();
     RestoreBindings(const RestoreBindings &) = delete;
     RestoreBindings &operator=(const RestoreBindings &) = delete;

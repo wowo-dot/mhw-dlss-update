@@ -2,6 +2,7 @@
 #include "sharpen_pass.hpp"
 #include "../common/json.hpp"
 #include "../temporal_present/bindings.hpp"
+#include "../temporal_present/observer.hpp"
 #include <atomic>
 #include <cstdint>
 #include <exception>
@@ -22,6 +23,9 @@ std::uint64_t recorded{}, recorded_hdr{};
 // scene NIS refuses, a scratch image of another size, no descriptor slot, an
 // implausible white level, a failure while recording.
 std::uint64_t unprepared{}, unknown{}, no_restore{}, layout{}, scratch{}, cache_full{}, white{}, failed{};
+// Recordings on a list that had set no pipeline state (its mirror marked unset
+// again), and those where that failed (the route then refuses the frame).
+std::uint64_t fresh_lists{}, unset_failed{};
 float last_white{};
 } // namespace
 
@@ -90,29 +94,35 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
             ++layout;
             return;
         }
-        // A worker's final-scene list may never set a compute root signature
-        // (as frame generation's HUD-less record).
+        // A worker's final-scene list may have set no root signature or
+        // pipeline state yet (dev.11: about 1 % of frames, in bursts): what it
+        // never set stays unset (RestoreBindings' unset_optional).
         std::unique_ptr<temporal_present::RestoreBindings> restore;
         try {
-            restore = std::make_unique<temporal_present::RestoreBindings>(list, roots, true);
+            restore = std::make_unique<temporal_present::RestoreBindings>(list, roots, true, true);
         } catch (...) {
             ++no_restore;
             return;
         }
+        const auto restore_all = [&] {
+            restore->apply();
+            if (!roots.pipeline && !temporal_present::observer::unset_injected_pipeline(list, roots)) ++unset_failed;
+        };
         SharpenPass::Result result{};
         try {
             result = pass->record(list, scene, scene_state, constants, hdr.on);
         } catch (const std::exception &e) {
             error = e.what();
             ++failed;
-            restore->apply();
+            restore_all();
             return;
         }
-        restore->apply();
+        restore_all();
         switch (result) {
         case SharpenPass::Result::recorded:
             ++(hdr.on ? recorded_hdr : recorded);
             if (hdr.on) last_white = hdr.white;
+            if (!roots.pipeline) ++fresh_lists;
             break;
         case SharpenPass::Result::layout: ++layout; break;
         case SharpenPass::Result::scratch: ++scratch; break;
@@ -127,7 +137,8 @@ void write(std::ostream &out) {
     std::lock_guard lock(mutex);
     out << "{\"percent\":" << wanted.load() << ",\"prepared\":" << (pass != nullptr)
         << ",\"refusal\":" << quoted(refusal) << ",\"recorded\":" << recorded << ",\"recorded_hdr\":" << recorded_hdr
-        << ",\"white\":" << last_white << ",\"skipped\":{\"unprepared\":" << unprepared << ",\"unknown\":" << unknown
+        << ",\"white\":" << last_white << ",\"fresh\":" << fresh_lists << ",\"unset_failed\":" << unset_failed
+        << ",\"skipped\":{\"unprepared\":" << unprepared << ",\"unknown\":" << unknown
         << ",\"no_restore\":" << no_restore << ",\"layout\":" << layout << ",\"scratch\":" << scratch
         << ",\"cache_full\":" << cache_full << ",\"white\":" << white << ",\"failed\":" << failed
         << "},\"error\":" << quoted(error) << '}';
