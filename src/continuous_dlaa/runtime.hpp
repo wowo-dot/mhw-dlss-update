@@ -13,6 +13,10 @@ namespace mhw::continuous_dlaa {
 // which also sets the render scale asked of the game. Performance by default.
 void reconstruction_mode(dlss_sdk::ReconstructionMode) noexcept;
 dlss_sdk::ReconstructionMode reconstruction_mode() noexcept;
+// Before install() (device attach): whether frame generation can run. The
+// converter then keeps three frames of depth and motion, which frame
+// generation reads without copying (0.32.0); taken at install and rebuilds.
+void frame_generation_inputs(bool) noexcept;
 // Any thread (the CMFM menu): ask for a live preset change, or for DLSS off;
 // the worker takes it with requested_mode() and runs change_mode() or
 // turn_off(). The scaled build only.

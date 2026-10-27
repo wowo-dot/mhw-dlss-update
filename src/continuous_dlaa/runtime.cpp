@@ -102,8 +102,10 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         // The images must fit the video memory budget (gpu_memory/budget.hpp).
         if (!pin_adapter(device, runtime.swapchain)) throw std::runtime_error("video memory: the game's adapter");
         gpu_memory::Check memory;
+        const unsigned sets = frame_sets.load();
         if (std::string why; !memory_fits(
-                gpu_memory::dlss_bytes(runtime.width, runtime.height, planned_width, planned_height), memory, why))
+                gpu_memory::dlss_bytes(runtime.width, runtime.height, planned_width, planned_height, true, sets),
+                memory, why))
             throw std::runtime_error(why);
         const auto byte_limit = gpu_memory::room({memory.budget, memory.usage});
         constexpr DXGI_FORMAT formats[]{DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_UINT};
@@ -136,7 +138,7 @@ bool install(std::uintptr_t image, const std::filesystem::path &sdk, std::string
         jitter_phases = dlss_sdk::jitter_phases(scaled_geometry);
         pass = std::make_unique<dlss_sdk::InlineFrame>(
             device, scaled_geometry, std::array<ID3D12Resource *, 3>{raw[0].Get(), raw[1].Get(), raw[2].Get()}, sdk,
-            *initialization, byte_limit);
+            *initialization, byte_limit, sets);
         spatial = std::make_unique<temporal_present::Output>(
             device, temporal_present::SpatialSource{runtime.width, runtime.height, render_width(), render_height()},
             runtime.width, runtime.height, true, true);

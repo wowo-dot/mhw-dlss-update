@@ -43,11 +43,35 @@ Per pixel that removes 32 (colour) + 8 (motion) at r and 40 at O, 24 more
 at r with frame generation; at 1440p DLAA about 300 MB a frame. The images
 shrink from 64 to 24 bytes a pixel at DLAA (4K DLAA: about 530 to 200 MB).
 
-## Left (measure dev.20 first)
+Run 5516 (dev.20, hub, 2x, `gpu_timing`, 5090 at 1440p; dev.19's run 56996
+the same way):
 
-- The three input copies (24 bytes a pixel at A): DLSS could read the game's
-  colour and depth in place, and the converter its motion through a per-frame
-  descriptor. The copies also feed the right-edge fill (fill_edge) and the
-  spatial recovery, so this needs its own design.
-- Frame generation's two copies of depth and motion: the tagged slot could be
-  filled once.
+| Segment, us a frame | DLAA dev.19 | DLAA dev.20 | Performance CNN dev.19 | dev.20 |
+|---|---|---|---|---|
+| inputs | 26 | 30 | 33 | 33 |
+| conversion | 70 | 14 | 12 | 6 |
+| dlss | 570 | 485 | 257 | 206 |
+| output (and frame generation's staging) | 60-80 | 27 | 48 | 10 |
+
+DLSS itself got faster too: it reads and writes a quarter of the bytes.
+The image looked the same to the user; frame generation ran throughout.
+
+## dev.21
+
+- The private copies take only the rendered rectangle (CopyTextureRegion of
+  render width x height): at Quality 44 % of the scene, at Performance 25 %.
+  Their barriers go in one batch per step, the edge fill included.
+- While frame generation can run (DLSS-G usable at device attach), the
+  converter keeps three frame sets of depth and motion, frame f writing set
+  f % 3, left in NON_PIXEL_SHADER_RESOURCE | COPY_SOURCE until that set's next
+  record. They are frame generation's keyed staging copies (the same key and
+  reuse), so stage() copies nothing; with one set (no frame generation) it
+  makes its own copies as before. Frame generation copies from both without a
+  transition.
+
+## Left
+
+- The input copies themselves (24 bytes a pixel of the rendered rectangle):
+  DLSS could read the game's colour and depth in place and the converter its
+  motion through per-frame descriptors, but the copies feed the edge fill and
+  the spatial recovery too.

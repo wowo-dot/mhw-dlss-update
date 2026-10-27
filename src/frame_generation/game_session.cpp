@@ -53,7 +53,7 @@ bool release_inputs(bool scene) noexcept {
         s.ring.release_all();
         for (auto &i : s.images) i.depth.Reset(), i.motion.Reset();
         for (auto &c : s.staging) c = {};
-        s.staging_failed = false;
+        s.staging_failed = s.shared_staging = false;
         s.queue.clear();
         s.staged = {};
         s.slot_hudless = {};

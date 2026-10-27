@@ -64,7 +64,7 @@ bool create(Session &s, ID3D12Resource *depth, ID3D12Resource *motion, ID3D12Res
         };
         const std::uint64_t depth_bytes = bytes(d), motion_bytes = bytes(m), hudless_bytes = bytes(h);
         if (depth_bytes == UINT64_MAX || motion_bytes == UINT64_MAX || hudless_bytes == UINT64_MAX) return false;
-        const unsigned copies = slot_count + (perf::on(perf::keyed_staging) ? staging_count : 0);
+        const unsigned copies = slot_count + (perf::on(perf::keyed_staging) && !s.shared_staging ? staging_count : 0);
         s.memory = gpu_memory::check(copies * (depth_bytes + motion_bytes) +
                                      (!s.hudless && !s.hudless_failed ? slot_count * hudless_bytes : 0));
         if (!s.memory.passed) return false;
@@ -145,16 +145,21 @@ bool staging_ready(Session &s, ID3D12Resource *depth, ID3D12Resource *motion) {
 }
 } // namespace
 
-void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
-           ID3D12Resource *motion, const SlotCamera &camera) noexcept {
+void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch,
+           std::span<ID3D12Resource *const> depth_sets, std::span<ID3D12Resource *const> motion_sets,
+           const SlotCamera &camera) noexcept {
     auto &s = session;
     if (!active(s)) return;
     try {
         std::lock_guard lock(s.mutex);
-        if (!depth || !motion) {
+        const auto sets = depth_sets.size();
+        bool complete = sets && motion_sets.size() == sets;
+        for (std::size_t i = 0; complete && i < sets; ++i) complete = depth_sets[i] && motion_sets[i];
+        if (!complete) {
             ++s.record_failed;
             return;
         }
+        auto *depth = depth_sets[frame % sets], *motion = motion_sets[frame % sets];
         if (!perf::on(perf::keyed_staging)) {
             s.queue.clear();
             if (s.staged.valid) ++s.staged_dropped; // previous frame's final draw never qualified
@@ -163,7 +168,20 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
             return;
         }
         s.staged = {};
-        if (!list || !staging_ready(s, depth, motion)) {
+        // 0.32.0: the converter's three sets are the staging copies (the same
+        // key, frame % 3, and the same reuse three frames later). A change
+        // between shared and own copies comes only with release_inputs().
+        const bool shared = sets == staging_count;
+        if (shared != s.shared_staging && s.staging[0].depth) {
+            ++s.record_failed;
+            return;
+        }
+        if (shared) {
+            s.shared_staging = true;
+            for (unsigned i = 0; i < staging_count; ++i)
+                if (s.staging[i].depth.Get() != depth_sets[i] || s.staging[i].motion.Get() != motion_sets[i])
+                    s.staging[i] = {depth_sets[i], motion_sets[i]};
+        } else if (!list || !staging_ready(s, depth, motion)) {
             ++s.record_failed;
             return;
         }
@@ -171,17 +189,17 @@ void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t e
         // the frame (its copy runs after this one on the GPU): confirm it.
         // Otherwise queue the frame for its final draw.
         auto &copy = s.staging[s.queue.push(frame, epoch, camera)];
-        std::array<D3D12_RESOURCE_BARRIER, 4> b{
-            transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-            transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
-            transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-            transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
-        list->ResourceBarrier(4, b.data());
-        list->CopyResource(copy.depth.Get(), depth);
-        list->CopyResource(copy.motion.Get(), motion);
-        for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
-        list->ResourceBarrier(4, b.data());
-        ++s.staging_copies;
+        if (!shared) {
+            std::array<D3D12_RESOURCE_BARRIER, 2> b{
+                transition(copy.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST),
+                transition(copy.motion.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST)};
+            list->ResourceBarrier(2, b.data());
+            list->CopyResource(copy.depth.Get(), depth);
+            list->CopyResource(copy.motion.Get(), motion);
+            for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
+            list->ResourceBarrier(2, b.data());
+            ++s.staging_copies;
+        }
         ++s.staged_count;
         if (const auto slot = s.ring.confirm(frame, epoch); slot != none) {
             s.cameras[slot] = camera;
@@ -237,8 +255,8 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
                 return;
             }
         }
-        // Staging copies stay in COPY_SOURCE; DLSS's own images are in tag_state.
-        const auto source_state = keyed ? D3D12_RESOURCE_STATE_COPY_SOURCE : tag_state;
+        // The sources are copied from as they are: own staging copies stay in
+        // COPY_SOURCE, the converter's images are in staged_state.
         const auto generation = roots.generation;
         auto *depth = staged.depth.Get(), *motion = staged.motion.Get();
         if (!list || !scene || !generation) {
@@ -276,17 +294,14 @@ void record(ID3D12GraphicsCommandList *list, const temporal_present::Bindings &r
         }
         s.slot_hudless[slot] = false;
         auto &image = s.images[slot];
-        std::array<D3D12_RESOURCE_BARRIER, 4> b{
+        std::array<D3D12_RESOURCE_BARRIER, 2> b{
             transition(image.depth.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
-            transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST),
-            transition(depth, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE),
-            transition(motion, tag_state, D3D12_RESOURCE_STATE_COPY_SOURCE)};
-        const UINT barriers = source_state == tag_state ? 4U : 2U; // staging copies are already sources
-        list->ResourceBarrier(barriers, b.data());
+            transition(image.motion.Get(), tag_state, D3D12_RESOURCE_STATE_COPY_DEST)};
+        list->ResourceBarrier(2, b.data());
         list->CopyResource(image.depth.Get(), depth);
         list->CopyResource(image.motion.Get(), motion);
         for (auto &v : b) std::swap(v.Transition.StateBefore, v.Transition.StateAfter);
-        list->ResourceBarrier(barriers, b.data());
+        list->ResourceBarrier(2, b.data());
 
         // HUD-less colour from the HUD-free final scene; the brightness comes
         // from the last screen write's CBSystem (closing()).

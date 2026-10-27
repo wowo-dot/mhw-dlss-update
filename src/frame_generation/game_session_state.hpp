@@ -33,7 +33,7 @@
 namespace mhw::frame_generation::game::detail {
 using Microsoft::WRL::ComPtr;
 constexpr unsigned slot_count = 3, none = InputRing<slot_count>::none;
-constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; // DLSS converter output state
+constexpr auto tag_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; // the tagged slot images' state
 inline const sl::ViewportHandle viewport{0};
 
 enum class Off : unsigned {
@@ -80,8 +80,13 @@ struct Staged {
     ComPtr<ID3D12Resource> depth, motion;
     SlotCamera camera;
 };
-// perf::keyed_staging: staging copies of the DLSS inputs (staging_queue.hpp).
+// perf::keyed_staging: staging copies of the DLSS inputs (staging_queue.hpp):
+// the converter's own frame sets when it keeps three (shared_staging), else
+// copies made by stage().
 constexpr unsigned staging_count = 3;
+// The converter's images' state (dlss_sdk::InlineFrame::read_state): copied
+// from without a transition.
+constexpr auto staged_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE;
 struct StagingCopy {
     ComPtr<ID3D12Resource> depth, motion;
 };
@@ -123,7 +128,7 @@ struct Session {
     Staged staged;
     StagingQueue<staging_count, SlotCamera> queue; // perf::keyed_staging
     std::array<StagingCopy, staging_count> staging{};
-    bool staging_failed{};
+    bool staging_failed{}, shared_staging{};
     // final frame - newest staged frame at a mismatch: -2, -1, +1, +2, other.
     std::array<std::uint64_t, 5> mismatch_delta{};
     std::uint64_t keyed_hits{}, staging_copies{}, keyed_early{}, keyed_confirms{};

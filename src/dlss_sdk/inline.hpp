@@ -23,11 +23,19 @@ struct RecordAttempt {
 // this class never chooses or invokes native TAA/FXAA.
 class InlineFrame {
 public:
+    // Frame sets of converted depth and motion: 1, or max_sets while frame
+    // generation can run, so it reads frame f's set (f % max_sets, the
+    // staging key) without copying it first (0.32.0, dlss-own-work.md).
+    static constexpr unsigned max_sets = 3;
+    // The converted images' state after a record, until their set's next one:
+    // DLSS reads them, frame generation copies them.
+    static constexpr auto read_state =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE;
     // byte_limit: the most its images may take, measured exactly as they are
     // created (the runtime passes the room left in the video memory budget,
     // gpu_memory).
     InlineFrame(ID3D12Device *, Geometry, const std::array<ID3D12Resource *, 3> &, const std::filesystem::path &,
-                const BorrowedInitialization &, std::uint64_t byte_limit);
+                const BorrowedInitialization &, std::uint64_t byte_limit, unsigned frame_sets = 1);
     ~InlineFrame();
     InlineFrame(const InlineFrame &) = delete;
     InlineFrame &operator=(const InlineFrame &) = delete;
@@ -42,11 +50,12 @@ public:
     // The NGX render preset it was created with (options.hpp's render_preset).
     unsigned preset() const noexcept;
     ID3D12Resource *raw_color() const noexcept;
-    // Borrowed private images after a successful record: the converted depth
-    // (R32_FLOAT) and motion (R16G16_FLOAT) at the render size, in
-    // NON_PIXEL_SHADER_RESOURCE. Caller must serialize GPU use and restore
-    // that state after its copies.
-    std::array<ID3D12Resource *, 2> private_images() const noexcept;
+    // Borrowed private images of a frame set: the converted depth (R32_FLOAT)
+    // and motion (R16G16_FLOAT) at the render size, in read_state once written
+    // (frame f writes set f % sets()). Null past sets(). Caller must
+    // serialize GPU use and never change their state.
+    unsigned sets() const noexcept;
+    std::array<ID3D12Resource *, 2> private_images(unsigned set) const noexcept;
     // Live rebuild (continuous_dlaa::change_mode): releases the SDK feature
     // and parameters, with or without a successful evaluation, once the
     // caller proved every recording that used this frame complete: `fence`

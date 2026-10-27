@@ -131,10 +131,9 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
                 fail(46);
                 return locked_skip(11);
             }
-            copy_input(list, reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
-                       D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            fill_edge(list, reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
-                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            const InputCopy color{reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
+                                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+            copy_inputs(list, std::span(&color, 1));
             last_skip = why;
             ++skips;
             ++dispatch_reasons[why];
@@ -209,8 +208,7 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
         find(list)->injected_generation = l->generation;
         if (!record_consumer_depth(list, depth_resource, raw[1].Get(), runtime.width, runtime.height,
                                    static_cast<D3D12_RESOURCE_STATES>(depth_state),
-                                   reinterpret_cast<DepthBarrierFn>(originals[8]),
-                                   reinterpret_cast<DepthCopyFn>(originals[10]))) {
+                                   reinterpret_cast<DepthBarrierFn>(originals[8]), copy_rendered)) {
             fail(44);
             return locked_skip(11);
         }
@@ -268,14 +266,12 @@ bool dispatch_before(ID3D12GraphicsCommandList *list, UINT x, UINT y, UINT z, st
         return unfiltered(7, false);
     }
     prepared_resolve = {state, decision, true, prepared_output};
-    copy_input(list, reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
-               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    copy_input(list, reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource), 2,
-               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    fill_edge(list, reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
-              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    fill_edge(list, reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource), 2,
-              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    const std::array<InputCopy, 2> inputs{
+        InputCopy{reinterpret_cast<ID3D12Resource *>(s.inputs[0].resource), 0,
+                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE},
+        InputCopy{reinterpret_cast<ID3D12Resource *>(s.inputs[5].resource), 2,
+                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE}};
+    copy_inputs(list, inputs);
     return true;
 }
 ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list) {
@@ -352,10 +348,17 @@ ResolveResult dispatch_replace(ID3D12GraphicsCommandList *list) {
         camera.jitter_x = frame.jitter_x;
         camera.jitter_y = frame.jitter_y;
         camera.reset = decision.reset;
-        const auto images = pass->private_images();
+        std::array<ID3D12Resource *, dlss_sdk::InlineFrame::max_sets> depth{}, motion{};
+        const unsigned sets = pass->sets();
+        for (unsigned i = 0; i < sets; ++i) {
+            const auto images = pass->private_images(i);
+            depth[i] = images[0];
+            motion[i] = images[1];
+        }
         const bool outer = injected;
         injected = true; // our staging copy is not native work
-        frame_generation::game::stage(list, consumer.source.frame, consumer.source.epoch, images[0], images[1], camera);
+        frame_generation::game::stage(list, consumer.source.frame, consumer.source.epoch, std::span(depth).first(sets),
+                                      std::span(motion).first(sets), camera);
         injected = outer;
     }
     history_telemetry.record(previous, consumer.projection.history, decision);

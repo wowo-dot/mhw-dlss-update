@@ -60,7 +60,11 @@ struct InlineFrame::Impl {
     ComPtr<ID3D12PipelineState> pipeline;
     ComPtr<ID3D12DescriptorHeap> heap;
     std::array<ComPtr<ID3D12Resource>, 3> raw;
-    std::array<ComPtr<ID3D12Resource>, 2> converted; // depth, motion
+    // Per frame set: depth, motion; whether it was written (then it is in
+    // InlineFrame::read_state, else in UNORDERED_ACCESS as created).
+    std::array<std::array<ComPtr<ID3D12Resource>, 2>, InlineFrame::max_sets> converted;
+    std::array<bool, InlineFrame::max_sets> written{};
+    unsigned sets{1};
     NVSDK_NGX_Parameter *parameters{};
     NVSDK_NGX_Handle *feature{};
     unsigned width{}, height{}, create_result{}, evaluate_result{}, release_result{}, destroy_result{};
@@ -81,11 +85,13 @@ struct InlineFrame::Impl {
 static_assert(max_side == D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
 InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::array<ID3D12Resource *, 3> &raw,
                          const std::filesystem::path &runtime, const BorrowedInitialization &initialization,
-                         std::uint64_t byte_limit)
+                         std::uint64_t byte_limit, unsigned frame_sets)
     : impl_(std::make_unique<Impl>()) {
     auto &p = *impl_;
     try {
         require(device && device->GetNodeCount() == 1 && valid_geometry(geometry), "inline extent/device");
+        require(frame_sets == 1 || frame_sets == max_sets, "inline frame sets");
+        p.sets = frame_sets;
         const auto w = geometry.render.width, h = geometry.render.height, ow = geometry.output.width,
                    oh = geometry.output.height;
         p.geometry = geometry;
@@ -125,9 +131,10 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
             for (unsigned j = 0; j < i; ++j) require(raw[i] != raw[j], "inline input alias");
             p.raw[i] = raw[i];
         }
-        for (unsigned i = 0; i < 2; ++i)
-            p.converted[i] = resource(device, texture(w, h, outputs[i]), D3D12_HEAP_TYPE_DEFAULT,
-                                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        for (unsigned k = 0; k < p.sets; ++k)
+            for (unsigned i = 0; i < 2; ++i)
+                p.converted[k][i] = resource(device, texture(w, h, outputs[i]), D3D12_HEAP_TYPE_DEFAULT,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         const auto account = [&](ID3D12Resource *r) {
             const auto desc = r->GetDesc();
             const auto bytes = device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
@@ -135,25 +142,29 @@ InlineFrame::InlineFrame(ID3D12Device *device, Geometry geometry, const std::arr
                     "inline image allocation budget");
             p.allocation_bytes += bytes;
         };
-        for (const auto &r : p.converted) account(r.Get());
-        // Depth and motion in, depth and motion out (shader.hpp's registers).
-        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4,
+        for (unsigned k = 0; k < p.sets; ++k)
+            for (const auto &r : p.converted[k]) account(r.Get());
+        // Per set, depth and motion in, then that set's depth and motion out
+        // (shader.hpp's registers).
+        D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4 * p.sets,
                                       D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
         hr(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&p.heap)), "inline heap");
         const auto step = device->GetDescriptorHandleIncrementSize(hd.Type);
         const auto start = p.heap->GetCPUDescriptorHandleForHeapStart().ptr;
-        for (unsigned i = 0; i < 2; ++i) {
-            D3D12_SHADER_RESOURCE_VIEW_DESC s{};
-            s.Format = inputs[i + 1];
-            s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            s.Texture2D.MipLevels = 1;
-            device->CreateShaderResourceView(p.raw[i + 1].Get(), &s, {start + SIZE_T(i) * step});
-            D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
-            u.Format = outputs[i];
-            u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            device->CreateUnorderedAccessView(p.converted[i].Get(), nullptr, &u, {start + SIZE_T(i + 2) * step});
-        }
+        for (unsigned k = 0; k < p.sets; ++k)
+            for (unsigned i = 0; i < 2; ++i) {
+                D3D12_SHADER_RESOURCE_VIEW_DESC s{};
+                s.Format = inputs[i + 1];
+                s.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                s.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                s.Texture2D.MipLevels = 1;
+                device->CreateShaderResourceView(p.raw[i + 1].Get(), &s, {start + SIZE_T(4 * k + i) * step});
+                D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+                u.Format = outputs[i];
+                u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                device->CreateUnorderedAccessView(p.converted[k][i].Get(), nullptr, &u,
+                                                  {start + SIZE_T(4 * k + 2 + i) * step});
+            }
         D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0},
                                         {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 2, 0, 0, 2}};
         D3D12_ROOT_PARAMETER args[2]{};
@@ -300,10 +311,13 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
             const auto set = [&](unsigned i, ID3D12Resource *r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
                 b[i].Transition = {r, UINT_MAX, from, to};
             };
-            if (p.evaluations) {
+            // This frame's set (frame generation reads frame f's from set
+            // f % sets until the set's next record, three frames later).
+            const auto k = static_cast<unsigned>(history.frame % p.sets);
+            auto &converted = p.converted[k];
+            if (p.written[k]) {
                 for (unsigned i = 0; i < 2; ++i)
-                    set(i, p.converted[i].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                    set(i, converted[i].Get(), read_state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 list->ResourceBarrier(2, b.data());
             }
             p.issued = true;
@@ -318,17 +332,19 @@ bool InlineFrame::record(ID3D12GraphicsCommandList *list, ID3D12Resource *native
             list->SetDescriptorHeaps(1, heaps);
             const unsigned dims[]{p.width, p.height};
             list->SetComputeRoot32BitConstants(0, 2, dims, 0);
-            list->SetComputeRootDescriptorTable(1, p.heap->GetGPUDescriptorHandleForHeapStart());
+            const auto step = p.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            list->SetComputeRootDescriptorTable(
+                1, {p.heap->GetGPUDescriptorHandleForHeapStart().ptr + UINT64(4) * k * step});
             list->Dispatch((p.width + 15) / 16, (p.height + 15) / 16, 1);
             for (unsigned i = 0; i < 2; ++i)
-                set(i, p.converted[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                set(i, converted[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, read_state);
             list->ResourceBarrier(2, b.data());
+            p.written[k] = true;
             NVSDK_NGX_D3D12_DLSS_Eval_Params eval{};
             eval.Feature.pInColor = p.raw[0].Get();
             eval.Feature.pInOutput = native;
-            eval.pInDepth = p.converted[0].Get();
-            eval.pInMotionVectors = p.converted[1].Get();
+            eval.pInDepth = converted[0].Get();
+            eval.pInMotionVectors = converted[1].Get();
             eval.InReset = reset;
             eval.InMVScaleX = eval.InMVScaleY = 1;
             eval.InPreExposure = eval.InExposureScale = 1;
@@ -402,9 +418,13 @@ unsigned InlineFrame::preset() const noexcept {
 ID3D12Resource *InlineFrame::raw_color() const noexcept {
     return impl_->raw[0].Get();
 }
-std::array<ID3D12Resource *, 2> InlineFrame::private_images() const noexcept {
+unsigned InlineFrame::sets() const noexcept {
+    return impl_->sets;
+}
+std::array<ID3D12Resource *, 2> InlineFrame::private_images(unsigned set) const noexcept {
     const auto &p = *impl_;
-    return {p.converted[0].Get(), p.converted[1].Get()};
+    if (set >= p.sets) return {};
+    return {p.converted[set][0].Get(), p.converted[set][1].Get()};
 }
 void InlineFrame::write(std::ostream &o) const {
     const auto &p = *impl_;
@@ -422,7 +442,8 @@ void InlineFrame::write(std::ostream &o) const {
       << ",\"native_output_written\":" << p.last.native_output_written << ",\"success\":" << p.last.success << '}'
       << ",\"device\":" << reinterpret_cast<std::uintptr_t>(p.device.Get())
       << ",\"create_flags\":75,\"mode\":" << p.quality << ",\"preset\":" << p.preset
-      << ",\"input_formats\":[26,41,42],\"converted_formats\":[41,34],\"output_format\":26,\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
+      << ",\"input_formats\":[26,41,42],\"converted_formats\":[41,34],\"output_format\":26,\"frame_sets\":" << p.sets
+      << ",\"mv_scale\":[1,1],\"mv_jittered\":false,\"pre_exposure\":1,\"raw\":["
       << reinterpret_cast<std::uintptr_t>(p.raw[0].Get()) << ',' << reinterpret_cast<std::uintptr_t>(p.raw[1].Get())
       << ',' << reinterpret_cast<std::uintptr_t>(p.raw[2].Get()) << ']' << ",\"command\":" << p.list_identity
       << ",\"native_output\":" << p.native_identity << ",\"width\":" << p.width << ",\"height\":" << p.height

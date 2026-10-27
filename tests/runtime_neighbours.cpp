@@ -181,8 +181,8 @@ void write(std::ostream &) {}
 } // namespace mhw::continuous_dlaa::texture_bias
 
 namespace mhw::frame_generation::game {
-void stage(ID3D12GraphicsCommandList *, std::uint64_t, std::uint64_t, ID3D12Resource *, ID3D12Resource *,
-           const SlotCamera &) noexcept {}
+void stage(ID3D12GraphicsCommandList *, std::uint64_t, std::uint64_t, std::span<ID3D12Resource *const>,
+           std::span<ID3D12Resource *const>, const SlotCamera &) noexcept {}
 void record(ID3D12GraphicsCommandList *, const temporal_present::Bindings &, ID3D12Resource *, std::uint64_t,
             std::uint64_t, D3D12_RESOURCE_STATES) noexcept {}
 void closing(ID3D12GraphicsCommandList *, const temporal_present::Bindings &) noexcept {}

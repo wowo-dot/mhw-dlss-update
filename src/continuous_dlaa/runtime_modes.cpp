@@ -143,9 +143,10 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
         // A preset the budget refuses leaves the current one running; a scene
         // change stops DLSS (the game's new scene needs them).
         const bool new_copies = found.width != runtime.width || found.height != runtime.height;
+        const unsigned sets = frame_sets.load();
         gpu_memory::Check memory;
         if (std::string why; !memory_fits(gpu_memory::dlss_bytes(found.width, found.height, planned.render.width,
-                                                                 planned.render.height, new_copies),
+                                                                 planned.render.height, new_copies, sets),
                                           memory, why)) {
             if (scene) throw std::runtime_error(why);
             r.reason = why;
@@ -260,7 +261,7 @@ ModeChange rebuild(dlss_sdk::ReconstructionMode requested, bool scene) noexcept 
                                           mode};
         auto fresh = std::make_unique<dlss_sdk::InlineFrame>(
             device, geometry, std::array<ID3D12Resource *, 3>{copies[0].Get(), copies[1].Get(), copies[2].Get()},
-            sdk_runtime, *initialization, gpu_memory::room({memory.budget, memory.usage}));
+            sdk_runtime, *initialization, gpu_memory::room({memory.budget, memory.usage}), sets);
         auto fresh_spatial = std::make_unique<temporal_present::Output>(
             device,
             temporal_present::SpatialSource{found.width, found.height, planned.render.width, planned.render.height},
@@ -441,6 +442,9 @@ bool diagnostic_pause(bool pause) noexcept {
 }
 void reconstruction_mode(dlss_sdk::ReconstructionMode m) noexcept {
     if (!pass) configured_mode = m;
+}
+void frame_generation_inputs(bool on) noexcept {
+    frame_sets.store(on ? dlss_sdk::InlineFrame::max_sets : 1U);
 }
 // Worker: the mode DLSS runs (after install; it may differ from the configured
 // one, see install) or will run.

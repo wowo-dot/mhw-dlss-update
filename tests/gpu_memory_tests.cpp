@@ -35,6 +35,8 @@ void pure_tests() {
     const auto inputs = [](unsigned w, unsigned h) { return 2 * gm::texture_bytes(w, h, 4); };
     check(gm::dlss_bytes(3840, 2160, 2560, 1440) == dlaa - inputs(3840, 2160) + inputs(2560, 1440),
           "render-size inputs");
+    check(gm::dlss_bytes(3840, 2160, 3840, 2160, true, 3) == dlaa + 2 * inputs(3840, 2160),
+          "three frame sets for frame generation");
     // The largest side D3D12 allows does not overflow (about 6 GiB at DLAA).
     const auto largest = gm::dlss_bytes(16384, 16384, 16384, 16384);
     check(largest >= 24ULL * 16384 * 16384 && largest < 25ULL * 16384 * 16384, "16384x16384 without overflow");

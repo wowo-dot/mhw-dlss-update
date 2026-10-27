@@ -259,6 +259,9 @@ void attach_device(IUnknown *adapter, D3D_FEATURE_LEVEL level, IUnknown *created
     // swap chain. Usable: requested and supported (loaded now or later).
     fg_loaded = sdk.frame_generation();
     fg_plugin = fg_plugin && sdk.frame_generation_requested();
+    // 0.32.0: before DLSS installs (arm_dlss), so its converter keeps the
+    // frame sets frame generation reads without copying them.
+    mhw::continuous_dlaa::frame_generation_inputs(fg_plugin);
     fg_loaded_state.store(fg_loaded);
     log << "{\"event\":\"fg_loaded\",\"loaded\":" << fg_loaded << ",\"usable\":" << fg_plugin << "}\n" << std::flush;
     if (fg_loaded) api(sdk.frame_generation_off(sl::ViewportHandle{0}, true), "DLSS-G-initially-Off");

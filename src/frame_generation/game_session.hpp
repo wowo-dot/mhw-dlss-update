@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <iosfwd>
+#include <span>
 #include "scene_rect.hpp"
 
 namespace sl {
@@ -94,14 +95,18 @@ struct Status {
 };
 Status status() noexcept;
 
-// DLSS replacement thread, after a successful evaluation. Without
-// perf::keyed_staging no GPU work: the final draw copies `depth`/`motion`
-// (DLSS's converted inputs, rewritten every frame). With it, they are copied
-// on `list` (the DLSS list, in the converter output state) into one of three
+// DLSS replacement thread, after a successful evaluation. `depth`/`motion`:
+// DLSS's converted inputs per frame set, frame f's in set f % size, in the
+// converter's read state (dlss_sdk::InlineFrame::read_state). Without
+// perf::keyed_staging no GPU work: the final draw copies this frame's. With
+// it, each final draw takes its own frame's inputs from one of three
 // per-frame staging copies, so a final draw recorded after the next frame's
-// DLSS (heavy scenes pipeline them) still reads its own frame's inputs.
-void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch, ID3D12Resource *depth,
-           ID3D12Resource *motion, const SlotCamera &camera) noexcept;
+// DLSS (heavy scenes pipeline them) still reads its own frame's: the
+// converter's three sets themselves (0.32.0), or else copies made here on
+// `list` (the DLSS list).
+void stage(ID3D12GraphicsCommandList *list, std::uint64_t frame, std::uint64_t epoch,
+           std::span<ID3D12Resource *const> depth, std::span<ID3D12Resource *const> motion,
+           const SlotCamera &camera) noexcept;
 // Final-scene observer (stream_route::FinalSceneObserver contract): `scene` is
 // the HUD-free final target in `scene_state` (RENDER_TARGET after the final
 // draw; COPY_DEST after the native final copy at render scale 1.0); state must

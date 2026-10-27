@@ -31,13 +31,14 @@ constexpr std::uint64_t texture_bytes(std::uint64_t width, std::uint64_t height,
 // The continuous runtime's images (continuous_dlaa/runtime.cpp): the copies
 // of the game's colour, depth and motion at the scene size (R11G11B10, R32F,
 // R32_UINT); the converted depth and motion at the render size (R32F,
-// RG16F); and the spatial fallback's R11G11B10 image. DLSS writes the game's
-// own output (0.32.0). A live preset change keeps the copies (copies=false).
+// RG16F), one set or three for frame generation; and the spatial fallback's
+// R11G11B10 image. DLSS writes the game's own output (0.32.0). A live preset
+// change keeps the copies (copies=false).
 constexpr std::uint64_t dlss_bytes(unsigned scene_width, unsigned scene_height, unsigned render_width,
-                                   unsigned render_height, bool copies = true) noexcept {
+                                   unsigned render_height, bool copies = true, unsigned sets = 1) noexcept {
     const auto scene = [&](unsigned b) { return texture_bytes(scene_width, scene_height, b); };
     const auto render = [&](unsigned b) { return texture_bytes(render_width, render_height, b); };
-    return (copies ? 3 * scene(4) : 0) + render(4) + render(4) + scene(4);
+    return (copies ? 3 * scene(4) : 0) + sets * (render(4) + render(4)) + scene(4);
 }
 
 // The game's adapter, pinned once for the process (the reference is kept

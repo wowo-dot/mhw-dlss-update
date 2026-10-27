@@ -61,6 +61,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <span>
 #include <sstream>
 #include <intrin.h>
 #include <stdexcept>
@@ -224,6 +225,8 @@ inline ComPtr<ID3D12CommandQueue> last_queue;
 inline ComPtr<ID3D12Fence> fence;
 inline std::array<ComPtr<ID3D12Resource>, 3> raw;
 inline std::unique_ptr<dlss_sdk::InlineFrame> pass;
+// The converter's frame sets for the next InlineFrame (frame_generation_inputs()).
+inline std::atomic<unsigned> frame_sets{1};
 inline std::filesystem::path sdk_runtime; // install()'s NGX runtime folder
 struct Lease {
     ID3D12GraphicsCommandList *list{};
@@ -358,11 +361,19 @@ inline void transition(ID3D12GraphicsCommandList *list, ID3D12Resource *r, D3D12
     v.Transition = {r, UINT_MAX, a, b};
     reinterpret_cast<BarrierFn>(originals[8])(list, 1, &v);
 }
-inline void copy_input(ID3D12GraphicsCommandList *list, ID3D12Resource *source, unsigned role,
-                       D3D12_RESOURCE_STATES state) {
-    transition(list, source, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    reinterpret_cast<CopyFn>(originals[10])(list, raw[role].Get(), source);
-    transition(list, source, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+// 0.32.0 (dlss-own-work.md): a private copy takes only the rendered
+// rectangle. Nothing reads one outside it: the converter and DLSS's colour
+// sub-rectangle, the spatial recovery's active region, and the edge fill's
+// last column and row are all inside. The whole texture if the scaled route's
+// region copy is missing.
+inline void WINAPI copy_rendered(ID3D12GraphicsCommandList *list, ID3D12Resource *destination, ID3D12Resource *source) {
+    D3D12_TEXTURE_COPY_LOCATION d{}, s{};
+    d.pResource = destination;
+    s.pResource = source;
+    d.Type = s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    const D3D12_BOX box{0, 0, 0, render_width(), render_height(), 1};
+    if (!box.right || !box.bottom || !sr::copy_region(list, &d, 0, 0, 0, &s, &box))
+        reinterpret_cast<CopyFn>(originals[10])(list, destination, source);
 }
 // An odd scene's effects sample up to scene x scale (1706.5 of 3413 columns),
 // half a column past the 1706 the game renders. That column keeps what the
@@ -372,29 +383,58 @@ inline void copy_input(ID3D12GraphicsCommandList *list, ID3D12Resource *source, 
 // for a fractional height) into the one just outside, from the private copy.
 inline bool edge_column{}, edge_row{};
 inline std::uint64_t edge_fills{};
-inline void fill_edge(ID3D12GraphicsCommandList *list, ID3D12Resource *native, unsigned role,
-                      D3D12_RESOURCE_STATES state) {
-    if (!edge_column && !edge_row) return;
-    auto *copy = raw[role].Get();
+// A native input (in `state`) copied into the private copy for `role`.
+struct InputCopy {
+    ID3D12Resource *native{};
+    unsigned role{};
+    D3D12_RESOURCE_STATES state{};
+};
+// The copies, then the edge fills, with one barrier batch per step: the
+// natives to COPY_SOURCE; with an edge to fill, the copies to COPY_SOURCE and
+// the natives to COPY_DEST; then everything back.
+inline void copy_inputs(ID3D12GraphicsCommandList *list, std::span<const InputCopy> inputs) {
+    constexpr unsigned most = 2;
+    const auto n = static_cast<unsigned>(std::min<std::size_t>(inputs.size(), most));
+    std::array<D3D12_RESOURCE_BARRIER, 2 * most> b{};
+    const auto barrier = reinterpret_cast<BarrierFn>(originals[8]);
+    for (unsigned i = 0; i < n; ++i)
+        b[i].Transition = {inputs[i].native, UINT_MAX, inputs[i].state, D3D12_RESOURCE_STATE_COPY_SOURCE};
+    barrier(list, n, b.data());
+    for (unsigned i = 0; i < n; ++i) copy_rendered(list, raw[inputs[i].role].Get(), inputs[i].native);
+    if (!edge_column && !edge_row) {
+        for (unsigned i = 0; i < n; ++i) std::swap(b[i].Transition.StateBefore, b[i].Transition.StateAfter);
+        barrier(list, n, b.data());
+        return;
+    }
+    for (unsigned i = 0; i < n; ++i) {
+        b[i].Transition = {inputs[i].native, UINT_MAX, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                           D3D12_RESOURCE_STATE_COPY_DEST};
+        b[n + i].Transition = {raw[inputs[i].role].Get(), UINT_MAX, D3D12_RESOURCE_STATE_COPY_DEST,
+                               D3D12_RESOURCE_STATE_COPY_SOURCE};
+    }
+    barrier(list, 2 * n, b.data());
     const unsigned rw = render_width(), rh = render_height();
-    transition(list, copy, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
-    transition(list, native, state, D3D12_RESOURCE_STATE_COPY_DEST);
-    D3D12_TEXTURE_COPY_LOCATION d{}, s{};
-    d.pResource = native;
-    s.pResource = copy;
-    d.Type = s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    bool copied = true;
-    if (edge_column) {
-        const D3D12_BOX b{rw - 1, 0, 0, rw, rh, 1};
-        copied = sr::copy_region(list, &d, rw, 0, 0, &s, &b) && copied;
+    for (unsigned i = 0; i < n; ++i) {
+        D3D12_TEXTURE_COPY_LOCATION d{}, s{};
+        d.pResource = inputs[i].native;
+        s.pResource = raw[inputs[i].role].Get();
+        d.Type = s.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        bool copied = true;
+        if (edge_column) {
+            const D3D12_BOX e{rw - 1, 0, 0, rw, rh, 1};
+            copied = sr::copy_region(list, &d, rw, 0, 0, &s, &e) && copied;
+        }
+        if (edge_row) {
+            const D3D12_BOX e{0, rh - 1, 0, rw, rh, 1};
+            copied = sr::copy_region(list, &d, 0, rh, 0, &s, &e) && copied;
+        }
+        if (copied) ++edge_fills;
     }
-    if (edge_row) {
-        const D3D12_BOX b{0, rh - 1, 0, rw, rh, 1};
-        copied = sr::copy_region(list, &d, 0, rh, 0, &s, &b) && copied;
+    for (unsigned i = 0; i < n; ++i) {
+        b[i].Transition = {inputs[i].native, UINT_MAX, D3D12_RESOURCE_STATE_COPY_DEST, inputs[i].state};
+        std::swap(b[n + i].Transition.StateBefore, b[n + i].Transition.StateAfter);
     }
-    transition(list, native, D3D12_RESOURCE_STATE_COPY_DEST, state);
-    transition(list, copy, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-    if (copied) ++edge_fills;
+    barrier(list, 2 * n, b.data());
 }
 inline bool state_of(std::uintptr_t resource, D3D12_RESOURCE_STATES expected) {
     bool known = false;
