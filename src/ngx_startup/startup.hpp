@@ -52,6 +52,9 @@ struct ActiveProvider {
 ActiveProvider active_provider();
 unsigned calls() noexcept;
 bool write_graphics_snapshot() noexcept;
+// The last failed snapshot's reason ("startup-swap-method": a wrapped swap
+// chain, such as ReShade's); empty before one failed.
+std::string graphics_failure();
 const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 // The start-up worker: logs to `output` and takes the NGX runtime from
 // `runtime` (mhw_dlss.ini's log_dir and runtime_dir), both existing absolute
@@ -59,6 +62,10 @@ const dlss_sdk::BorrowedInitialization *borrowed_initialization() noexcept;
 // first; it is accepted only from `runtime`, as DLSS this mod runs.
 bool run(HMODULE, const char *version, const std::filesystem::path &output,
          const std::filesystem::path &runtime) noexcept;
+// 0.40.0: why run() returned false, as logged ("failed", or the graphics
+// check that never passed), for the Status page; empty if it did not. Read
+// on run()'s thread after it returns.
+const std::string &stop_reason() noexcept;
 // The plugin declines the game's own DLSS 1 (docs/research/game-dlss1.md):
 // right after the game's NGX init, which this transaction observes, the game
 // builds its DLSS 1 context (0x23842a0); it is freed and the game gets none,

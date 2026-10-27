@@ -483,6 +483,8 @@ bool install(const Config &config, std::ostream &log) {
             << version_text(file.version) << "\",\"internal\":" << std::quoted(file.internal)
             << ",\"nvidia_signed\":" << file.nvidia_signed << ",\"accepted\":" << accepted << "}\n"
             << std::flush;
+        // 0.40.0: a file that can't be read (missing) has its own reason (status.hpp).
+        require(digest.read != 0, "dlss-file-missing");
         require(accepted, "startup-provider-sha256");
     }
     require(zero_slots(), "native-init-already-observed");
@@ -547,13 +549,24 @@ ActiveProvider active_provider() {
 unsigned calls() noexcept {
     return count.load();
 }
+namespace {
+std::string graphics_failed;
+} // namespace
 bool write_graphics_snapshot() noexcept {
     try {
         graphics(device.Get());
         return true;
+    } catch (const std::exception &e) {
+        try {
+            graphics_failed = e.what();
+        } catch (...) {}
+        return false;
     } catch (...) {
         return false;
     }
+}
+std::string graphics_failure() {
+    return graphics_failed;
 }
 namespace {
 bool reusable() noexcept {

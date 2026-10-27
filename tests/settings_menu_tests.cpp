@@ -367,6 +367,12 @@ void status_lines() {
                   s::reason_text(ngx::provider_reason(ngx::Provider::none)).starts_with("see the mod's log"),
               "the provider reasons have words");
     }
+    // 0.40.0: the mod's own DLSS file, and a wrapped swap chain.
+    check(s::reason_text("dlss-file-missing") == "nvngx_dlss.dll is missing; reinstall the mod" &&
+              s::reason_text("startup-provider-sha256") == "nvngx_dlss.dll is not usable; reinstall the mod" &&
+              s::reason_text("startup-swap-method").starts_with("ReShade") &&
+              s::known_reason("coexistence-NGX-startup").empty(),
+          "start-up refusals have words");
     check(s::count_text(0) == "0" && s::count_text(999) == "999" && s::count_text(1234567) == "1,234,567", "counts");
 
     s::View v;
@@ -507,6 +513,20 @@ void status_lines() {
     v.loader_reason = "swap-chain hooks unavailable; DLSS and frame generation stay off";
     check(s::mod_line(v) == "Degraded: swap-chain hooks unavailable; DLSS and frame generation stay off",
           "loader reason first");
+    {
+        // 0.40.0 (refusal test): start-up stopped before the game's device.
+        s::View refused;
+        refused.loader = s::Loader::degraded;
+        refused.loader_reason = "the game's device was not attached";
+        refused.dlss = s::Stage::off;
+        refused.dlss_reason = "dlss-file-missing";
+        check(s::mod_line(refused) == "Degraded: nvngx_dlss.dll is missing; reinstall the mod" &&
+                  s::dlss_line(refused) == "Off: nvngx_dlss.dll is missing; reinstall the mod",
+              "a refused start-up says why");
+        refused.dlss_reason = "startup-al-hooks";
+        check(s::mod_line(refused) == "Degraded: the game's device was not attached",
+              "an unknown start-up reason keeps the loader's");
+    }
 
     s::View failed;
     failed.dlss = s::Stage::off;

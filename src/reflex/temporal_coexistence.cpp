@@ -58,7 +58,13 @@ void prepare(HMODULE module, const std::filesystem::path &output, std::uintptr_t
     mhw::ngx_startup::decline_game_dlss(); // its own DLSS 1: never with this mod
     const bool started = mhw::ngx_startup::run(module, temporal_version, directory, runtime);
     // NGX loaded another DLSS than the mod's (jgb2003-1): its own reason.
-    require(started, mhw::ngx_startup::provider_reason(mhw::ngx_startup::foreign_provider()));
+    // Otherwise (0.40.0) the reason start-up stopped on, such as a missing
+    // nvngx_dlss.dll, so the Status page can say it.
+    const auto foreign = mhw::ngx_startup::foreign_provider();
+    const auto &stopped = mhw::ngx_startup::stop_reason();
+    require(started, foreign != mhw::ngx_startup::Provider::none || stopped.empty()
+                         ? mhw::ngx_startup::provider_reason(foreign)
+                         : stopped.c_str());
     events << "{\"event\":\"ready\",\"hooks_installed\":false}\n" << std::flush;
     prepared = true;
 }

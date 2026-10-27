@@ -73,9 +73,9 @@ void worker_failed(std::string_view reason) noexcept;
 // Menu thread.
 View snapshot();
 
-// A reason from the log, for players: known ones get words, the rest point at
-// the log. Matches the whole reason or its "reason:code" form.
-inline std::string reason_text(std::string_view raw) {
+// A reason from the log, in players' words; empty when it has none. Matches
+// the whole reason or its "reason:code" form.
+inline std::string_view known_reason(std::string_view raw) {
     struct Known {
         std::string_view key, text;
     };
@@ -101,10 +101,20 @@ inline std::string reason_text(std::string_view raw) {
         // these are the ones left, older or not signed by NVIDIA.
         {"dlss-override", "the NVIDIA App's DLSS override picked a DLSS older than 310; set it to Latest"},
         {"dlss-provider-foreign", "a DLSS file older than 310 or not NVIDIA's was loaded; see the mod's log"},
+        // 0.40.0: start-up refusals over the mod's own DLSS file, and a
+        // wrapped swap chain (docs/research/reshade-compatibility.md).
+        {"dlss-file-missing", "nvngx_dlss.dll is missing; reinstall the mod"},
+        {"startup-provider-sha256", "nvngx_dlss.dll is not usable; reinstall the mod"},
+        {"startup-swap-method", "ReShade or a similar overlay is loaded; remove it"},
     };
     for (const auto &k : known)
         if (raw == k.key || (raw.size() > k.key.size() && raw.starts_with(k.key) && raw[k.key.size()] == ':'))
-            return std::string(k.text);
+            return k.text;
+    return {};
+}
+// Known reasons get their words, the rest point at the log.
+inline std::string reason_text(std::string_view raw) {
+    if (const auto text = known_reason(raw); !text.empty()) return std::string(text);
     if (raw.empty()) return "see the mod's log";
     return "see the mod's log (" + std::string(raw.substr(0, 60)) + ")";
 }
@@ -136,7 +146,12 @@ inline bool generation_not_offered(const View &v) {
 
 inline std::string mod_line(const View &v) {
     if (v.loader == Loader::disabled) return with_reason("Disabled", v.loader_reason);
-    if (v.loader == Loader::degraded) return with_reason("Degraded", v.loader_reason);
+    // 0.40.0: a start-up that stopped before the game's device shows why, when
+    // players can act on it, instead of the loader's "device was not attached".
+    if (v.loader == Loader::degraded) {
+        const auto stopped = v.dlss == Stage::off ? known_reason(v.dlss_reason) : std::string_view{};
+        return with_reason("Degraded", stopped.empty() ? std::string_view(v.loader_reason) : stopped);
+    }
     if (v.dlss == Stage::off || (v.dlss == Stage::running && !v.dlss_healthy)) return "Degraded: DLSS is off";
     if (v.reflex == Stage::off) return "Degraded: Reflex is off";
     if ((v.generation == Generation::unavailable || v.generation == Generation::stopped) && !generation_not_offered(v))

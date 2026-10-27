@@ -15,6 +15,7 @@ namespace fs = std::filesystem;
 namespace pb = mhw::projection_binding;
 namespace startup = mhw::ngx_startup;
 using mhw::require;
+std::string stopped_on;
 // Each startup hook's removal (startup.hpp). Up to v0.28.6 also MinHook's
 // thread lists ("thread_lists") and hook_service "minhook" without AL.
 std::ostream &removal(std::ostream &log) {
@@ -133,6 +134,7 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, const fs::path &
         if (disabled && startup::settled() && startup::done())
             while (!(graphics = startup::write_graphics_snapshot()) && GetTickCount64() - display_wait < 120000)
                 Sleep(100);
+        if (!graphics) stopped_on = startup::graphics_failure();
         log << "{\"event\":\"stopped\",\"transaction_complete\":" << startup::done()
             << ",\"capabilities_supported\":" << startup::supported() << ",\"calls\":" << startup::calls()
             << ",\"hook_disabled\":" << disabled << ',';
@@ -148,6 +150,9 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, const fs::path &
         return disabled && startup::settled() && startup::done() && graphics &&
                startup::borrowed_initialization() != nullptr;
     } catch (const std::exception &e) {
+        try {
+            stopped_on = e.what();
+        } catch (...) {}
         const bool disabled = startup::disable();
         if (log) {
             log << "{\"event\":\"failed\",\"reason\":" << std::quoted(e.what()) << ",\"hook_disabled\":" << disabled
@@ -159,4 +164,7 @@ bool mhw::ngx_startup::run(HMODULE module, const char *version, const fs::path &
         }
         return false;
     }
+}
+const std::string &mhw::ngx_startup::stop_reason() noexcept {
+    return stopped_on;
 }

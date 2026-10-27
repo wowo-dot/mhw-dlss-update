@@ -63,7 +63,7 @@ reading only: **[C]** confirmed in the code, **[I]** inferred.
 
 1. **Astera Loader.** `verify_native()` accepts a method only inside System32 dxgi.dll, d3d12.dll or D3D12Core.dll, so ReShade's device refuses at slot 8.
 2. **This mod, first stop.** It would refuse even with AL fixed. In worker order:
-   - `ngx_startup/startup.cpp` `graphics()`: the swap chain's methods must be dxgi.dll's ("startup-swap-method", reported as `coexistence-NGX-startup`);
+   - `ngx_startup/startup.cpp` `graphics()`: the swap chain's methods must be dxgi.dll's ("startup-swap-method"; up to 0.40.0-rc.1 reported as `coexistence-NGX-startup`, since 0.40.0 by its own name, which the Status page words as "ReShade or a similar overlay is loaded; remove it");
    - `plugin/device.cpp` `describe_swap`;
    - `projection_binding/discovery.cpp`: `system_target`, with "com-identity" and "resource-device".
 3. **This mod, everywhere else.** About 15 more checks assume native objects:
@@ -114,7 +114,7 @@ Paths under `src/`. The verdicts are for the game's device, queues, lists and
 swap chain being ReShade proxies.
 
 **Module checks** (a method must belong to a system module):
-- `ngx_startup/startup.cpp` `graphics()`: the swap chain's slots 0 and 12 must belong to dxgi.dll (startup-swap-method). The worker retries 120 s, then `coexistence-NGX-startup`.
+- `ngx_startup/startup.cpp` `graphics()`: the swap chain's slots 0 and 12 must belong to dxgi.dll (startup-swap-method). The worker retries 120 s, then stops on startup-swap-method (up to 0.40.0-rc.1: `coexistence-NGX-startup`).
 - `plugin/device.cpp` `describe_swap`: slots 0, 2 and 12 must be dxgi.dll's; after 60 s, "presentation".
 - `projection_binding/discovery.cpp`:
   - `system_target`, `pin()` (com-identity);
