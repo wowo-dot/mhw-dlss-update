@@ -51,6 +51,11 @@ bool scene_changed() noexcept;
 // pending, after a fault, or for an invalid plan.
 bool rebase(Extent display, unsigned basis, float scale, std::string &reason);
 bool input_stamp(std::uintptr_t view, InputStamp &) noexcept;
+// 0.40.1 (xvinnie-1): the last refused input_stamp() and how many there were:
+// the failed condition (1 not requested, 2 fault, 3 snapshot, with its check,
+// 4 another view than the renderer's, 5 applied scale, 6 view scale, 7 combined
+// scale, 8 view combined scale) and the values it compared.
+void write_stamp_refusal(std::ostream &);
 // The player's DLSS Off: from the render thread's next visit the game's own
 // scale applies (the owned request is restored, nothing is written) and the
 // game may change its scale or aspect freely. An aspect switch meanwhile is

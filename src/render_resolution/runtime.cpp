@@ -95,6 +95,14 @@ unsigned startup_waits{}; // 10 ms waits for the main view before startup (0.31.
 // counts as the planned scale; the input checks still verify the rectangle.
 std::uint64_t truncated_views{};
 Snapshot first_truncated{};
+// 0.40.1 (xvinnie-1 runs): the last refused input stamp, counted
+// (write_stamp_refusal()).
+struct StampRefusal {
+    std::uint64_t count{}, frame{};
+    unsigned why{}, check{};
+    std::uintptr_t view{}, asked{};
+    float applied{}, view_scale{}, combined{}, view_combined{}, quantized{};
+} stamp_refusal;
 float truncated_ratio(const Plan &t) noexcept {
     return static_cast<float>(t.render.width) / static_cast<float>(t.display.width);
 }
@@ -746,12 +754,41 @@ bool active_ready() noexcept {
 bool input_stamp(std::uintptr_t view, InputStamp &out) noexcept {
     Lock lock;
     Snapshot s{};
-    if (!requested.load() || fault.load() || !snapshot(s, target) || s.view != view || s.applied != target.quantized ||
-        !planned_view_scale(target, s.view_scale) || s.combined != target.quantized ||
-        s.view_combined != target.quantized)
+    const unsigned why = !requested.load()                           ? 1
+                         : fault.load()                              ? 2
+                         : !snapshot(s, target)                      ? 3
+                         : s.view != view                            ? 4
+                         : s.applied != target.quantized             ? 5
+                         : !planned_view_scale(target, s.view_scale) ? 6
+                         : s.combined != target.quantized            ? 7
+                         : s.view_combined != target.quantized       ? 8
+                                                                     : 0;
+    if (why) {
+        stamp_refusal = {.count = stamp_refusal.count + 1,
+                         .frame = s.frame,
+                         .why = why,
+                         .check = s.check,
+                         .view = s.view,
+                         .asked = view,
+                         .applied = s.applied,
+                         .view_scale = s.view_scale,
+                         .combined = s.combined,
+                         .view_combined = s.view_combined,
+                         .quantized = target.quantized};
         return false;
+    }
     out = {s.frame, s.view, s.width, s.height, target.render.width, target.render.height, s.applied, s.content};
     return true;
+}
+void write_stamp_refusal(std::ostream &out) {
+    Lock lock;
+    const auto &r = stamp_refusal;
+    const auto precision = out.precision(9);
+    out << "{\"count\":" << r.count << ",\"why\":" << r.why << ",\"check\":" << r.check << ",\"frame\":" << r.frame
+        << ",\"view\":" << r.view << ",\"asked\":" << r.asked << ",\"applied\":" << r.applied
+        << ",\"view_scale\":" << r.view_scale << ",\"combined\":" << r.combined
+        << ",\"view_combined\":" << r.view_combined << ",\"quantized\":" << r.quantized << '}';
+    out.precision(precision);
 }
 bool healthy() noexcept {
     return fault.load() == 0;

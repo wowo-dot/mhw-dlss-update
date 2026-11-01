@@ -238,6 +238,9 @@ int main() {
               stamp.render_height == 720 && stamp.active_scale == .5F && stamp.content_scale == 1.F,
           "temporal capture sees applied scale");
     check(!rr::input_stamp(view.p + 8, stamp), "temporal stamp rejects different view");
+    check(rr::stamp_refusal.why == 4 && rr::stamp_refusal.view == view.p && rr::stamp_refusal.asked == view.p + 8 &&
+              rr::stamp_refusal.count == 1,
+          "a refused stamp records why (0.40.1)");
     { // Live preset change: the next visit writes the new plan; stamps close
         // until the game shows it applied, then follow it.
         rr::basis_width = 2560;

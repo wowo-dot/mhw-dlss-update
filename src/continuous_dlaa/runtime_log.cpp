@@ -56,6 +56,9 @@ void write_summary(std::ostream &out) {
         out << "],\"producer_last\":{\"frame\":" << l.frame << ",\"reason\":" << l.reason << ",\"values\":["
             << l.values[0] << ',' << l.values[1] << ',' << l.values[2] << ',' << l.values[3] << "]}";
     }
+    // Refusal 10's cause: the render scale's input stamp (0.40.1).
+    out << ",\"stamp_refusal\":";
+    render_resolution::write_stamp_refusal(out);
     out << ",\"projection_refusal\":";
     write_projection_refusal(out);
     // The game's TAA without reprojection, run as its own frames (0.30.2).

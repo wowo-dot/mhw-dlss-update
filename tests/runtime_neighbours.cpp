@@ -49,6 +49,9 @@ bool input_stamp(std::uintptr_t view, InputStamp &out) noexcept {
     out = nb::stamp;
     return true;
 }
+void write_stamp_refusal(std::ostream &out) {
+    out << "null";
+}
 void yield() noexcept {}
 bool released() noexcept {
     return true;
