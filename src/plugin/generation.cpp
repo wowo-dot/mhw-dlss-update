@@ -7,6 +7,7 @@
 #include "../settings/status.hpp"
 #include "../projection_binding/memory.hpp"
 #include "../reflex/temporal_coexistence.hpp"
+#include "../reflex/driver_status.hpp"
 #include <intrin.h>
 
 namespace mhw::plugin {
@@ -111,15 +112,32 @@ void sync_generation(GenerationSwitch &g) {
         // An unload that did not happen, then the player's On again: armed again.
         if (switch_unreached == 0 && want && !fg::status().armed) fg::arm(true);
         switch_unreached = -1;
+        g.off_since = 0;
         return;
     }
     if (switch_unreached == static_cast<int>(want)) return;
+    unsigned multiplier{};
     if (!want) {
         // DLSS-G Off at the next Present and no input slot in use.
         if (fg::status().armed) fg::arm(false);
         if (fg::status().on || !fg::inputs_settled()) return;
+        // 0.40.1 (xvinnie-1 runs 10, 11): the driver's Reflex limiter keeps
+        // the last frame generation multiplier it saw when DLSS-G unloads.
+        // Under a VRR cap the game then ran at half of it (112 fps for 224.8)
+        // until it closed; setting Reflex again (perf13) or disabling Reflex
+        // Sync did not clear it. With DLSS-G Off but still loaded the driver
+        // comes back to 1x: unload once it has, or after 1 s.
+        if (!g.off_since) g.off_since = now;
+        const auto state = live_frames ? live_frames->driver_status(device_pin.Get())
+                                       : mhw::reflex::driver_sleep_status(device_pin.Get());
+        multiplier = state.fg_multiplier;
+        if (state.result == 0 && multiplier > 1 && now - g.off_since < 1000) return;
     }
     if (!presentation->request_switch(want)) return;
+    if (!want)
+        log << "{\"event\":\"fg_unload_wait\",\"ms\":" << now - g.off_since << ",\"fg_multiplier\":" << multiplier
+            << "}\n"
+            << std::flush;
     g = {now, 0, switch_outcomes(v), want, true};
     game_resize_request();
 }

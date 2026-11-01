@@ -156,6 +156,7 @@ struct GenerationSwitch {
     unsigned tries{};
     std::uint64_t outcomes{};
     bool want{}, active{};
+    std::uint64_t off_since{}; // before an unload: DLSS-G Off and settled since (0.40.1)
 };
 void sync_generation(GenerationSwitch &g);
 void presentation_fault(const mhw::reflex::PresentationStats &v);
