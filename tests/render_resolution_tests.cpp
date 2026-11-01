@@ -52,6 +52,19 @@ void native_setter(std::uintptr_t r, float scale) {
     check(written >= .5F && written <= 1.F, "fixture setter scale");
     put(r + 0x1f0, written);
 }
+// The game's main-view scale update (sub_14255D700): the scale clamped to
+// [0.5, 1], and its product with the content scale.
+unsigned view_calls{};
+std::uintptr_t view_called{};
+float view_scale_called{};
+void native_view_scale(std::uintptr_t view, float scale) {
+    ++view_calls;
+    view_called = view;
+    view_scale_called = scale;
+    const float clamped = scale < .5F ? .5F : scale > 1.F ? 1.F : scale;
+    put(view + 0x6b0, clamped);
+    put(view + 0x6b8, clamped * get<float>(view + 0x6b4));
+}
 void step() {
     rr::pb::Frame f{};
     f.caller = rr::expected_return;
@@ -164,6 +177,7 @@ int main() {
     rr::discovered.backend = backend.p;
     rr::target = p;
     rr::setter = native_setter;
+    rr::view_scale_update = native_view_scale;
     rr::original = reinterpret_cast<void *>(native_update);
     rr::requested = true;
     put(image.p + 0x51c4480, renderer.p);
@@ -262,6 +276,19 @@ int main() {
     for (unsigned i = 0; i < 100; ++i) step();
     check(rr::overrides == 100 && rr::pre_restores == 99 && rr::scaled_observed == 99 && rr::ownership.owned,
           "continuous override preserves native cached request");
+    check(view_calls == 0 && rr::created_views == 0, "an updated view is left alone");
+    { // 0.40.1 (xvinnie-1 runs): a view the game created after the scale was
+        // applied holds another scale (a resize); the next visit gives it the
+        // plan's scale through the game's own view update, once.
+        put(view.p + 0x6b0, .6F);
+        put(view.p + 0x6b8, .6F);
+        step();
+        check(view_calls == 1 && view_called == view.p && view_scale_called == p.quantized && rr::created_views == 1 &&
+                  rr::fault == 0,
+              "a created view gets the plan's scale");
+        step();
+        check(view_calls == 1 && rr::created_views == 1, "and only once");
+    }
     rr::InputStamp stamp{};
     check(rr::active_ready() && rr::input_stamp(view.p, stamp) && stamp.render_width == 1280 &&
               stamp.render_height == 720 && stamp.active_scale == .5F && stamp.content_scale == 1.F,

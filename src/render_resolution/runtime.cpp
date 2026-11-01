@@ -35,6 +35,10 @@ constexpr char update_head[] = "40 53 48 83 EC 20 80 B9 F4 B3 07 00 00 48 8B D9"
 static_assert(astera::valid_pattern<16>(update_head), "the renderer update's pattern is its first 16 bytes");
 astera::OwnedHook update_hook{"mhw_dlss Render:Update", update_head};
 Setter setter{};
+// 0.40.1: the game's main-view scale update (sub_14255D700: view, scale),
+// and how often a view the game created was given the plan's scale with it.
+Setter view_scale_update{};
+std::uint64_t created_views{};
 // The planned extent. The worker replaces it (install, retarget) under the
 // lock; the render thread and the input checks take one copy per use.
 Plan target;
@@ -418,9 +422,19 @@ void update(pb::Frame *f) {
         fail(6);
         return;
     }
+    // 0.40.1: a view the game created since the scale was applied (a resize, a
+    // renderer rebuild) holds the scale truncated through the scene width
+    // (sub_14255BA70), and its rectangle can lose a row: 1285x722 for the
+    // planned 1285x723 with 16:9 in a 3440 window, which DLSS refused until the
+    // game closed. The game gives its main view a scale only when the scale
+    // changes (sub_14255D700, right after this update returns; gated in
+    // sizing_code()). Give a created view the plan's scale the same way.
+    const bool created = s.applied == t.quantized && s.view_scale != t.quantized;
+    if (created) view_scale_update(s.view, t.quantized);
     {
         Lock lock;
         ++overrides;
+        if (created) ++created_views;
     }
 }
 void viewport_observation(ID3D12GraphicsCommandList *list, UINT count, const D3D12_VIEWPORT *views,
@@ -569,6 +583,7 @@ bool install(std::uintptr_t base, float scale, std::string &reason, bool yielded
     image = base;
     expected_return = base + 0x22982e7;
     setter = reinterpret_cast<Setter>(base + 0x229bd70);
+    view_scale_update = reinterpret_cast<Setter>(base + 0x255d700);
     // 0.31.1 (marie-4): while the game rebuilds the renderer (0x229b020 on
     // display changes 0x2040, as FidelityFX CAS's apply queues) it has no main
     // view, then a new one. A missing or changing view (checks 4, 19) is
@@ -791,7 +806,8 @@ void write_stamp_refusal(std::ostream &out) {
     out << "{\"count\":" << r.count << ",\"why\":" << r.why << ",\"check\":" << r.check << ",\"frame\":" << r.frame
         << ",\"view\":" << r.view << ",\"asked\":" << r.asked << ",\"applied\":" << r.applied
         << ",\"view_scale\":" << r.view_scale << ",\"combined\":" << r.combined
-        << ",\"view_combined\":" << r.view_combined << ",\"quantized\":" << r.quantized << '}';
+        << ",\"view_combined\":" << r.view_combined << ",\"quantized\":" << r.quantized
+        << ",\"created_views\":" << created_views << '}';
     out.precision(precision);
 }
 bool healthy() noexcept {
@@ -817,13 +833,13 @@ void write(std::ostream &out) {
         << ",\"pending\":" << pending.load() << ",\"hooks_disabled\":" << hooks_disabled.load()
         << ",\"restored\":" << restored.load() << ",\"owned_request\":" << ownership.owned << ",\"visits\":" << visits
         << ",\"unqualified\":" << unqualified << ",\"overrides\":" << overrides << ",\"pre_restores\":" << pre_restores
-        << ",\"foreign_requests\":" << foreign_requests << ",\"scaled_observed\":" << scaled_observed
-        << ",\"restored_observed\":" << restored_observed << ",\"truncated_views\":" << truncated_views
-        << ",\"display\":[" << target.display.width << ',' << target.display.height << "],\"render\":["
-        << target.render.width << ',' << target.render.height << "],\"requested_scale\":" << target.requested
-        << ",\"quantized_scale\":" << target.quantized << ",\"swapchain_format\":" << discovered.format
-        << ",\"adapter_luid\":[" << discovered.luid_high << ',' << discovered.luid_low
-        << "],\"render_thread\":" << render_thread
+        << ",\"foreign_requests\":" << foreign_requests << ",\"created_views\":" << created_views
+        << ",\"scaled_observed\":" << scaled_observed << ",\"restored_observed\":" << restored_observed
+        << ",\"truncated_views\":" << truncated_views << ",\"display\":[" << target.display.width << ','
+        << target.display.height << "],\"render\":[" << target.render.width << ',' << target.render.height
+        << "],\"requested_scale\":" << target.requested << ",\"quantized_scale\":" << target.quantized
+        << ",\"swapchain_format\":" << discovered.format << ",\"adapter_luid\":[" << discovered.luid_high << ','
+        << discovered.luid_low << "],\"render_thread\":" << render_thread
         << ",\"shared_viewport\":true,\"owned_hooks\":1" // the observer forwards viewports (v0.30.0: always)
         << ",\"scene_changes\":" << scene_changes << ",\"scene_pending\":" << scene_pending << ",\"viewport_counts\":["
         << viewport_counts[0] << ',' << viewport_counts[1] << ',' << viewport_counts[2]
