@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: MIT
 // Public ABI subset adapted from NVIDIA/nvapi commit
 // 70d337db9186e968eab622f7e786de7e437faf3d. See nvapi-sleep-status-LICENSE.txt.
-// nvapi.h NV_GET_SLEEP_STATUS_PARAMS_V1 and NV_SET_REFLEX_SYNC_PARAMS_V1;
-// nvapi_lite_common.h NvBool/version; nvapi_interface.h NvAPI_D3D_GetSleepStatus
-// and NvAPI_D3D_SetReflexSync. No NVAPI runtime is distributed.
+// nvapi.h NV_GET_SLEEP_STATUS_PARAMS_V1; nvapi_lite_common.h NvBool/version;
+// nvapi_interface.h NvAPI_D3D_GetSleepStatus. No NVAPI runtime is distributed.
 #pragma once
 #include <cstdint>
 #include <cstddef>
@@ -25,22 +24,4 @@ static_assert(offsetof(SleepStatus, low_latency) == 4 && offsetof(SleepStatus, s
 static_assert(offsetof(SleepStatus, reserved) == 20);
 inline constexpr std::uint32_t sleep_status_version = sizeof(SleepStatus) | (1U << 16);
 inline constexpr std::uint32_t sleep_status_id = 0xaef96ca1;
-// nvapi.h NV_SET_REFLEX_SYNC_PARAMS_V1; nvapi_interface.h NvAPI_D3D_SetReflexSync.
-#pragma pack(push, 8)
-struct ReflexSync {
-    std::uint32_t version;
-    std::uint32_t flags; // bit 0 bEnable, bit 1 bDisable
-    std::uint32_t vblank_interval_us;
-    std::int32_t time_in_queue_us;
-    std::uint32_t time_in_queue_us_target;
-    std::uint8_t fg_multiplier, dfg_max_multiplier, reserved1[2];
-    std::uint32_t dfg_target_fps;
-    std::uint8_t reserved[20];
-};
-#pragma pack(pop)
-static_assert(sizeof(ReflexSync) == 48 && alignof(ReflexSync) == 4);
-static_assert(offsetof(ReflexSync, fg_multiplier) == 20 && offsetof(ReflexSync, dfg_target_fps) == 24);
-inline constexpr std::uint32_t reflex_sync_version = sizeof(ReflexSync) | (1U << 16);
-inline constexpr std::uint32_t reflex_sync_id = 0xb9f6faff;
-inline constexpr std::uint32_t reflex_sync_disable = 1U << 1;
-} // namespace mhw::reflex::nvapi_abi
+}

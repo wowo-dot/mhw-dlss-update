@@ -106,50 +106,6 @@ void confirm_pending() {
 void confirm_cancel() noexcept {
     pending_confirm = {};
 }
-namespace {
-struct UnloadedMultiplier {
-    std::uint64_t at{}; // the next check (0: none)
-    unsigned tries{};   // Reflex Sync disables sent since the unload
-} unloaded_multiplier;
-} // namespace
-void schedule_unloaded_multiplier_check() noexcept {
-    unloaded_multiplier = {GetTickCount64() + 1000, 0};
-}
-// Each pass reads the driver's status first: its latest multiplier can follow
-// a call by a few frames.
-void check_unloaded_multiplier() {
-    auto &c = unloaded_multiplier;
-    if (!c.at || GetTickCount64() < c.at) return;
-    if (fg_loaded) { // loaded again: DLSS-G drives Reflex Sync
-        c = {};
-        return;
-    }
-    const auto state =
-        live_frames ? live_frames->driver_status(device_pin.Get()) : mhw::reflex::driver_sleep_status(device_pin.Get());
-    const bool stale = state.result == 0 && state.fg_multiplier > 1;
-    if (!stale || c.tries >= 3) {
-        if (c.tries)
-            log << "{\"event\":\"reflex_sync_reset\",\"phase\":\"outcome\",\"tries\":" << c.tries
-                << ",\"cleared\":" << !stale << ",\"result\":" << state.result
-                << ",\"fg_multiplier\":" << unsigned(state.fg_multiplier)
-                << ",\"sleep_interval_us\":" << state.sleep_interval_us << "}\n"
-                << std::flush;
-        c = {};
-        return;
-    }
-    std::int32_t result{};
-    {
-        std::lock_guard lock(sdk_mutex);
-        result = mhw::reflex::disable_reflex_sync(device_pin.Get());
-    }
-    ++c.tries;
-    log << "{\"event\":\"reflex_sync_reset\",\"phase\":\"disable\",\"try\":" << c.tries << ",\"result\":" << result
-        << ",\"fg_multiplier\":" << unsigned(state.fg_multiplier)
-        << ",\"sleep_interval_us\":" << state.sleep_interval_us << ",\"fullscreen_vrr\":" << state.fullscreen_vrr
-        << ",\"control_panel_vsync\":" << state.control_panel_vsync << "}\n"
-        << std::flush;
-    c.at = GetTickCount64() + 1000;
-}
 // The worker, while the session runs: the driver did not confirm the applied
 // mode (driver_mode logged its status). Up to 0.28.6 this ended the worker,
 // which left DLSS running but stopped the menu and the log. Now, as for a

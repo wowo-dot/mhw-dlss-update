@@ -518,7 +518,6 @@ void run_session() {
             confirm_reflex("live");
         }
         confirm_pending();
-        check_unloaded_multiplier();
         mhw::render_resolution::write_captures(log);
         if (perf_ab_next && GetTickCount64() >= perf_ab_next) {
             perf_ab_paused = !perf_ab_paused;

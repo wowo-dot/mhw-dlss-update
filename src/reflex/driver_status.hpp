@@ -18,12 +18,6 @@ struct DriverSleepStatus {
 // Streamline/NVAPI and caller serialization with options/shutdown. No driver
 // load, initialization, option mutation, or frame-path callback here.
 DriverSleepStatus driver_sleep_status(IUnknown *native_device) noexcept;
-// 0.40.1 (xvinnie-1): NvAPI_D3D_SetReflexSync with bDisable on the native
-// device; the NVAPI status (-10001 if unavailable). Reflex Sync is how the
-// driver's limiter learns frame generation's multiplier (nvapi.h fgMultiplier);
-// with DLSS-G unloaded the driver can keep the last one (cap / 2 under VRR).
-// Same caller rules as driver_sleep_status.
-std::int32_t disable_reflex_sync(IUnknown *native_device) noexcept;
 struct DriverOffWait {
     DriverSleepStatus status;
     std::uint32_t queries{};
