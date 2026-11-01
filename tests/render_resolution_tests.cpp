@@ -45,9 +45,12 @@ std::uint64_t native_update(std::uintptr_t r, std::uintptr_t b, std::uintptr_t c
 }
 void native_setter(std::uintptr_t r, float scale) {
     if (action == 3) RaiseException(0xe0424242, 0, 0, nullptr);
-    const auto p = rr::plan({get<unsigned>(r + 0x198), get<unsigned>(r + 0x19c)}, scale);
-    check(p.valid, "fixture setter plan");
-    put(r + 0x1f0, p.quantized);
+    // The game's setter aligns down and nothing more; the plan asks it for a
+    // scale that lands on a step at or above half.
+    const auto basis = get<unsigned>(r + 0x198);
+    const float written = static_cast<float>(rr::native_width(basis, scale)) / static_cast<float>(basis);
+    check(written >= .5F && written <= 1.F, "fixture setter scale");
+    put(r + 0x1f0, written);
 }
 void step() {
     rr::pb::Frame f{};
@@ -94,7 +97,7 @@ int main() {
              {mhw::dlss_sdk::ReconstructionMode::performance, mhw::dlss_sdk::ReconstructionMode::balanced,
               mhw::dlss_sdk::ReconstructionMode::quality, mhw::dlss_sdk::ReconstructionMode::dlaa}) {
             const auto planned = rr::plan(d, d.width == 3413 ? 5120U : d.width, mhw::dlss_sdk::requested_scale(m));
-            if (!planned.valid) continue; // widths the native setter cannot quantize
+            check(planned.valid, "every preset plans on common displays");
             check(mhw::dlss_sdk::single_scale(planned.render.width, planned.render.height, d.width, d.height),
                   "preset plan is one scale");
         }
@@ -108,10 +111,27 @@ int main() {
     const auto pillar = rr::plan({3413, 1440}, 5120, .5F);
     check(pillar.valid && pillar.quantized == .5F && pillar.render == rr::Extent{1706, 720},
           "pillarbox plan against the window basis");
-    check(!rr::plan({3413, 1440}, .5F).valid, "odd scene alone quantizes below half");
+    // 0.40.1 (a 3440x1440 report): where half the basis is not a 16-pixel step,
+    // 50% aligned down below half and Performance never armed. The plan asks
+    // the setter for the next step up; asked again, it keeps that scale.
+    const auto wide = rr::plan({3440, 1440}, .5F);
+    check(wide.valid && wide.render == rr::Extent{1728, 723} && wide.quantized == 1728.F / 3440.F &&
+              rr::native_width(3440, wide.requested) == 1728 &&
+              rr::plan({3440, 1440}, wide.requested).quantized == wide.quantized,
+          "21:9 Performance steps up to the next 16 pixels");
+    check(rr::plan({1366, 768}, .5F).render == rr::Extent{688, 386}, "1366 Performance steps up");
+    check(rr::plan({3413, 1440}, .5F).quantized == 1712.F / 3413.F, "an odd scene alone steps up too");
     check(rr::plan({2560, 1080}, 2560, .5F).render == rr::Extent{1280, 540}, "letterbox plan");
     check(!rr::plan({3413, 1440}, 3412, .5F).valid, "basis narrower than the scene");
-    check(!rr::plan({65, 64}, .5F).valid, "reject native clamp disagreement");
+    // Every basis width: the setter's own float arithmetic lands Performance on
+    // the 16-pixel step at or above half.
+    for (unsigned w = 64; w <= rr::max_side; ++w) {
+        const auto planned = rr::plan({w, 64}, .5F);
+        const unsigned step = ((w + 1) / 2 + 15) & ~15U;
+        check(planned.valid && planned.requested <= 1.F && rr::native_width(w, planned.requested) == step &&
+                  planned.quantized == static_cast<float>(step) / static_cast<float>(w),
+              "every width plans Performance");
+    }
     for (float scale :
          {0.F, .49F, 1.01F, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()})
         check(!rr::plan({2560, 1440}, scale).valid, "invalid scale");

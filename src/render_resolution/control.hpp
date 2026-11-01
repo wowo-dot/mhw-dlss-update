@@ -33,13 +33,26 @@ inline bool matching_basis(Extent display, unsigned override_enabled, Extent bas
 // Sides up to D3D12's largest 2D texture (D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION);
 // the float products stay exact (below 2^24).
 inline constexpr unsigned max_side = 16384;
+inline unsigned native_width(unsigned basis_width, float scale) noexcept {
+    return static_cast<unsigned>(static_cast<float>(basis_width) * scale) & ~15U;
+}
 inline Plan plan(Extent display, unsigned basis_width, float requested) noexcept {
     Plan p{display, {}, requested};
     if (display.width < 64 || display.height < 64 || display.width > max_side || display.height > max_side ||
         basis_width < display.width || basis_width > max_side || !std::isfinite(requested) || requested < .5F ||
         requested > 1.F)
         return p;
-    const auto width = static_cast<unsigned>(static_cast<float>(basis_width) * requested) & ~15U;
+    auto width = native_width(basis_width, requested);
+    // 0.40.1: where half the basis is not a 16-pixel step (3440: 1720), 50%
+    // aligns down below the view helper's 0.5 floor (1712), and Performance
+    // never armed. Ask the setter for the next step up instead (1728, 50.2%),
+    // at the middle of its 16 pixels, so the float product truncates onto it.
+    // DLSS's range for a mode reaches up to the output.
+    if (2 * width < basis_width) {
+        const unsigned step = ((basis_width + 1) / 2 + 15) & ~15U;
+        p.requested = (static_cast<float>(step) + 8.F) / static_cast<float>(basis_width);
+        width = native_width(basis_width, p.requested);
+    }
     p.quantized = static_cast<float>(width) / static_cast<float>(basis_width);
     p.render = {static_cast<unsigned>(static_cast<float>(display.width) * p.quantized),
                 static_cast<unsigned>(static_cast<float>(display.height) * p.quantized)};

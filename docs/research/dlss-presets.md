@@ -24,6 +24,18 @@ changes and fixes the live 16:9 / 21:9 stop.
   (`render_resolution::plan`). DLSS gets that extent, never a resized one.
 - A DLAA basis width that is not a multiple of 16 quantizes just below 100%.
   DLSS then runs that extent as Quality.
+- **0.40.1: Performance at widths that are not a multiple of 32.** Half the
+  basis is then not a 16-pixel step, so 50% aligned down below half (3440:
+  1720 → 1712, 49.8%), the view helper's clamp would disagree, and the plan
+  refused it. Performance never armed at 3440x1440 or 1366x768, and neither
+  did a start with DLSS Off, which plans the mode it turns on with (the
+  default, Performance). Reported by a 3440x1440 player on 0.40.0.
+  - The plan now asks the setter for the next step up instead (3440: 1728x723,
+    50.2%), at the middle of the step's 16 pixels, so the setter's float
+    product truncates onto it. `render_resolution_tests` checks every basis
+    width from 64 to 16384.
+  - DLSS accepts it: a mode's reported range reaches up to the output
+    (Performance at 2560x1440: minimum 1280x720, maximum 2560x1440).
 
 ## What changed
 
