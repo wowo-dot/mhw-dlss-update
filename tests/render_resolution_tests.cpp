@@ -224,6 +224,35 @@ int main() {
         rr::discovered.window_width = rr::discovered.window_height = 0;
         check(rr::snapshot(captured, rr::target), "16:9 snapshot restored");
     }
+    { // 0.40.1 (xvinnie-1 runs): 16:9 pillarboxed in a 3440x1440 window plans
+        // Quality at 2288/3440. After the game remakes its buffers (frame
+        // generation's chain switch) the view holds 1702/2560 in its scale and
+        // its combined scale; the stamp takes both, and nothing else.
+        const auto saved = rr::target;
+        rr::target = rr::plan({2560, 1440}, 3440, 2.F / 3.F);
+        rr::discovered.window_width = 3440;
+        rr::discovered.window_height = 1440;
+        put(config.p + 0x2cd0, 3440U);
+        const float planned = rr::target.quantized, ratio = 1702.F / 2560.F;
+        check(planned == 2288.F / 3440.F && rr::target.render == rr::Extent{1702, 957} &&
+                  rr::truncated_ratio(rr::target) == ratio,
+              "3440 pillarbox Quality plan");
+        for (auto offset : {0x1f0, 0x1f4, 0x208}) put(renderer.p + offset, planned);
+        put(view.p + 0x6b0, ratio);
+        put(view.p + 0x6b8, ratio);
+        rr::InputStamp stamp{};
+        check(rr::input_stamp(view.p, stamp) && stamp.render_width == 1702 && stamp.render_height == 957,
+              "a view holding the ratio in both scales is stamped");
+        put(view.p + 0x6b8, .66F);
+        check(!rr::input_stamp(view.p, stamp) && rr::stamp_refusal.why == 8, "another combined scale is refused");
+        for (auto offset : {0x1f0, 0x1f4, 0x208}) put(renderer.p + offset, 1.F);
+        for (auto offset : {0x6b0, 0x6b8}) put(view.p + offset, 1.F);
+        put(config.p + 0x2cd0, 2560U);
+        rr::target = saved;
+        rr::discovered.window_width = rr::discovered.window_height = 0;
+        rr::stamp_refusal = {};
+        check(rr::snapshot(captured, rr::target), "16:9 snapshot restored after 3440");
+    }
     using Call = std::uint64_t (*)(std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t);
     check(reinterpret_cast<Call>(mhw_resolution_entry)(renderer.p, 2, 3, 4) == answer,
           "production ASM forwards unmatched caller");

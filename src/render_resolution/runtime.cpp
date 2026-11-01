@@ -107,7 +107,11 @@ float truncated_ratio(const Plan &t) noexcept {
     return static_cast<float>(t.render.width) / static_cast<float>(t.display.width);
 }
 // The view scale of the planned extent: the quantized request, or its
-// truncated ratio (identical, 0.5, for 2:1 scenes).
+// truncated ratio (identical, 0.5, for 2:1 scenes). 0.40.1: the view's
+// combined scale too. After the game remakes its buffers (frame generation's
+// chain switch), a pillarboxed scene's view holds the ratio in both: 1702/2560
+// for Quality's 2288/3440 with 16:9 in a 3440 window, which refused every
+// frame from then on.
 bool planned_view_scale(const Plan &t, float value) noexcept {
     return value == t.quantized || value == truncated_ratio(t);
 }
@@ -381,7 +385,7 @@ void update(pb::Frame *f) {
         }
         // A retarget during this visit leaves its count for the next one.
         if (t.quantized == target.quantized && s.applied == t.quantized && planned_view_scale(t, s.view_scale) &&
-            s.combined == t.quantized && s.view_combined == t.quantized) {
+            s.combined == t.quantized && planned_view_scale(t, s.view_combined)) {
             ++scaled_observed;
             reduced = s;
         }
@@ -754,15 +758,15 @@ bool active_ready() noexcept {
 bool input_stamp(std::uintptr_t view, InputStamp &out) noexcept {
     Lock lock;
     Snapshot s{};
-    const unsigned why = !requested.load()                           ? 1
-                         : fault.load()                              ? 2
-                         : !snapshot(s, target)                      ? 3
-                         : s.view != view                            ? 4
-                         : s.applied != target.quantized             ? 5
-                         : !planned_view_scale(target, s.view_scale) ? 6
-                         : s.combined != target.quantized            ? 7
-                         : s.view_combined != target.quantized       ? 8
-                                                                     : 0;
+    const unsigned why = !requested.load()                              ? 1
+                         : fault.load()                                 ? 2
+                         : !snapshot(s, target)                         ? 3
+                         : s.view != view                               ? 4
+                         : s.applied != target.quantized                ? 5
+                         : !planned_view_scale(target, s.view_scale)    ? 6
+                         : s.combined != target.quantized               ? 7
+                         : !planned_view_scale(target, s.view_combined) ? 8
+                                                                        : 0;
     if (why) {
         stamp_refusal = {.count = stamp_refusal.count + 1,
                          .frame = s.frame,
