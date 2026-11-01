@@ -38,6 +38,28 @@ DriverSleepStatus driver_sleep_status(IUnknown *device) noexcept {
     out.use_game_sleep = status.use_game_sleep != 0;
     return out;
 }
+std::int32_t disable_reflex_sync(IUnknown *device) noexcept {
+    if (!device) return -10001;
+    HMODULE module{};
+    if (!GetModuleHandleExW(0, L"nvapi64.dll", &module)) return -10001;
+    struct Pin {
+        HMODULE value;
+        ~Pin() { FreeLibrary(value); }
+    } pin{module};
+    using Query = void *(__cdecl *)(std::uint32_t);
+    using Set = std::int32_t(__cdecl *)(IUnknown *, nvapi_abi::ReflexSync *);
+#pragma warning(push)
+#pragma warning(disable : 4191)
+    const auto query = reinterpret_cast<Query>(GetProcAddress(module, "nvapi_QueryInterface"));
+#pragma warning(pop)
+    if (!query) return -10001;
+    const auto set = reinterpret_cast<Set>(query(nvapi_abi::reflex_sync_id));
+    if (!set) return -10001;
+    nvapi_abi::ReflexSync params{};
+    params.version = nvapi_abi::reflex_sync_version;
+    params.flags = nvapi_abi::reflex_sync_disable;
+    return set(device, &params);
+}
 DriverOffWait wait_driver_off(IUnknown *device) noexcept {
     DriverOffWait result;
     const auto started = GetTickCount64();

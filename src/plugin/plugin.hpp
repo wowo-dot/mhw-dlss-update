@@ -144,6 +144,13 @@ void reflex_unconfirmed(const char *phase);
 void confirm_reflex(const char *phase);
 void confirm_pending();
 void confirm_cancel() noexcept;
+// 0.40.1 (xvinnie-1 run 10): after DLSS-G unloads, the driver can keep frame
+// generation's multiplier in its Reflex limiter (VRR cap / 2, until the game
+// closed). sync_generation() schedules a check 1 s after an unload; the worker
+// calls check_unloaded_multiplier() each turn, which disables Reflex Sync while
+// the driver still reports a multiplier above 1 (up to 3 tries, 1 s apart).
+void schedule_unloaded_multiplier_check() noexcept;
+void check_unloaded_multiplier();
 
 // generation.cpp
 bool game_chain_qualified() noexcept;

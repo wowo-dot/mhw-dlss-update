@@ -81,6 +81,7 @@ void sync_generation(GenerationSwitch &g) {
         }
         fg_loaded = v.frame_generation_loaded;
         fg_loaded_state.store(fg_loaded);
+        if (!fg_loaded) schedule_unloaded_multiplier_check();
         log << "{\"event\":\"fg_switch\",\"want\":" << g.want << ",\"done\":true,\"loaded\":" << fg_loaded
             << ",\"reason\":" << v.switch_reason << ",\"switches\":" << v.switches
             << ",\"failures\":" << v.switch_failures << ",\"refusals\":" << v.switch_refusals
