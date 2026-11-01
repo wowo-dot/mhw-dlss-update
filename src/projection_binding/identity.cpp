@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -171,10 +172,22 @@ std::string bytes_sha256(const void *data, unsigned size) {
     }
     return sha;
 }
+// 0.40.1: the exe file is hashed until it matches once, then not again.
+// discover() checks the host at every start-up check, and a check that kept
+// failing read the 84 MB exe twice every 410 ms (a 3440x1440 report: frame
+// spikes while the mod waited). A running image's file can't be written; the
+// mapped image is still checked every time below.
+namespace {
+bool host_file_matches(const wchar_t *path) {
+    static std::atomic<bool> matched{};
+    if (!matched.load()) matched.store(file_sha256(path) == host_sha);
+    return matched.load();
+}
+} // namespace
 bool host_identity(std::uintptr_t base, std::string &reason, bool hash_file) {
     wchar_t path[32768]{};
     const auto n = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
-    if (!n || n >= std::size(path) || (hash_file && file_sha256(path) != host_sha)) {
+    if (!n || n >= std::size(path) || (hash_file && !host_file_matches(path))) {
         reason = "host-sha256";
         return false;
     }
